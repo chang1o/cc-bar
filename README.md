@@ -41,6 +41,39 @@
 
 3. 若本机无 `~/.claude/.credentials.json`,会弹出说明后请求 Keychain 授权,请选「**始终允许**」。
 
+## 关于本项目与安全性
+
+cc-bar 是 vibe coding 出来满足个人需求的小工具,并非商业化产品。为了显示额度,它需要读取本地的登录凭据:Codex 的 `~/.codex/auth.json`、Claude Code 的 `~/.claude/.credentials.json` 以及 macOS Keychain。
+
+发布的 `CCBar.app` 未做 Apple 付费公证(详见上方「安装」)。如果你介意安全性,完全可以**自己用 AI 审阅本仓库代码**,确认无误后**按下方教程自行构建**,不依赖我发布的二进制包。
+
+## 从源码构建
+
+需要安装完整 Xcode(非仅 Command Line Tools)。
+
+**日常开发**:双击 `ccbar.xcodeproj`,选 scheme `ccbar` 与「My Mac」,按 **⌘R** 运行调试。
+
+**打包分发**:用命令行不签名构建,产物为 ad-hoc 签名,可在任意 Mac 上运行,无需付费证书或公证。
+
+1. 首次需把命令行工具指向完整 Xcode(一次性):
+
+   ```bash
+   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+   ```
+
+2. 在项目根目录执行构建脚本:
+
+   ```bash
+   ./scripts/build.sh
+   ```
+
+   脚本会以 `CODE_SIGNING_ALLOWED=NO` 做 Release 构建(工具链自动 ad-hoc 签名),
+   清理扩展属性并打包,产物输出到 `dist/CCBar.app.zip`。
+
+3. 把 `dist/CCBar.app.zip` 上传到 GitHub Release 即可。用户首次安装按上方「安装」一节手动放行一次。
+
+> 不要用 Xcode 的 Archive 导出分发:那会引入 "Apple Development" 开发证书,只能在本机运行,拷给别人会打不开。
+
 ## 反馈
 
 请到 [Issues](https://github.com/nanvon/cc-bar/issues) 留言。
