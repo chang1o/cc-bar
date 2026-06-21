@@ -3,10 +3,19 @@ import Foundation
 enum CodexQuotaClient {
     static let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
 
+    /// 取数结果。`wham/usage` 响应除配额外还自带身份字段，
+    /// 对不透明的 personal access token（解不出 JWT）尤为关键，用于回填账号身份。
+    struct Fetched: Sendable {
+        var snapshot: QuotaSnapshot
+        var accountId: String?
+        var userId: String?
+        var email: String?
+    }
+
     nonisolated static func fetch(
         accessToken: String,
         accountId: String?
-    ) async -> Result<QuotaSnapshot, QuotaError> {
+    ) async -> Result<Fetched, QuotaError> {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "GET"
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -32,10 +41,10 @@ enum CodexQuotaClient {
         return .success(parse(root: root))
     }
 
-    nonisolated private static func parse(root: [String: Any]) -> QuotaSnapshot {
+    nonisolated private static func parse(root: [String: Any]) -> Fetched {
         let planType = root["plan_type"] as? String
         let rate = root["rate_limit"] as? [String: Any] ?? [:]
-        return QuotaSnapshot(
+        let snapshot = QuotaSnapshot(
             app: .codex,
             fiveHour: parseWindow(rate["primary_window"] as? [String: Any]),
             weekly: parseWindow(rate["secondary_window"] as? [String: Any]),
@@ -44,6 +53,19 @@ enum CodexQuotaClient {
             planType: planType,
             fetchedAt: Date()
         )
+        return Fetched(
+            snapshot: snapshot,
+            accountId: nonEmpty(root["account_id"] as? String),
+            userId: nonEmpty(root["user_id"] as? String),
+            email: nonEmpty(root["email"] as? String)
+        )
+    }
+
+    nonisolated private static func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 
     nonisolated private static func parseWindow(_ dict: [String: Any]?) -> QuotaWindow? {

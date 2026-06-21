@@ -286,6 +286,67 @@ final class AppState {
         reloadImportedCodexAccounts()
     }
 
+    /// 导入 personal access token 形态的副账号。
+    /// PAT 不透明、本地拿不到 account_id，先联网发一次 usage 拿身份，再组复合 id 落库。
+    /// 失败（令牌无效 / 无网络 / 缺 account_id）时抛错，由调用方展示。
+    func importCodexPersonalAccessToken(token: String, visibleInPopover: Bool) async throws {
+        let result = await CodexQuotaClient.fetch(accessToken: token, accountId: nil)
+        let fetched: CodexQuotaClient.Fetched
+        switch result {
+        case .success(let f):
+            fetched = f
+        case .failure(let err):
+            throw ImportedCodexPATError.validation(err.description)
+        }
+        guard let accountId = nonEmpty(fetched.accountId) else {
+            throw ImportedCodexPATError.validation("usage 响应缺少 account_id")
+        }
+        let compositeId: String = {
+            if let userId = nonEmpty(fetched.userId) { return "\(accountId):\(userId)" }
+            return accountId
+        }()
+
+        try ImportedCodexStore.saveTokens(
+            ImportedCodexTokens(accessToken: token, refreshToken: nil, idToken: nil),
+            accountId: compositeId
+        )
+
+        var list = ImportedCodexStore.loadAll()
+        if let idx = list.firstIndex(where: { $0.id == compositeId }) {
+            var existing = list[idx]
+            existing.email = fetched.email ?? existing.email
+            existing.planType = fetched.snapshot.planType ?? existing.planType
+            existing.visibleInPopover = visibleInPopover
+            existing.isPersonalAccessToken = true
+            list[idx] = existing
+        } else {
+            list.append(ImportedCodexAccount(
+                id: compositeId,
+                alias: "",
+                email: fetched.email,
+                planType: fetched.snapshot.planType,
+                visibleInPopover: visibleInPopover,
+                addedAt: Date(),
+                isPersonalAccessToken: true
+            ))
+        }
+        try ImportedCodexStore.saveAll(list)
+        reloadImportedCodexAccounts()
+        // 顺手存上刚拿到的快照，导入后立即可见，省一次请求。
+        if visibleInPopover {
+            storeImportedCodex(id: compositeId, snapshot: fetched.snapshot, source: .api)
+        }
+    }
+
+    enum ImportedCodexPATError: Error, LocalizedError {
+        case validation(String)
+        var errorDescription: String? {
+            switch self {
+            case .validation(let msg): return msg
+            }
+        }
+    }
+
     /// 仅更新元数据(别名、颜色、显示开关),不动 token。
     func updateImportedCodexMetadata(id: String, mutate: (inout ImportedCodexAccount) -> Void) {
         var list = ImportedCodexStore.loadAll()
@@ -379,23 +440,32 @@ final class AppState {
             markImportedCodexFailure(id: account.id, message: "missing tokens in keychain")
             return
         }
-        let refreshed = await CodexTokenRefresher.ensureFreshAccessToken(
-            currentAccessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            writeBack: .importedAccount(id: account.id)
-        )
+        let isPAT = account.isPersonalAccessToken == true
         let activeToken: String
-        switch refreshed {
-        case .success(let t):
-            activeToken = t
-        case .failure(let err):
-            markImportedCodexFailure(id: account.id, message: err.description, error: err)
-            return
+        if isPAT {
+            // PAT 不透明、无 refresh，直接用，跳过续期。
+            activeToken = tokens.accessToken
+        } else {
+            let refreshed = await CodexTokenRefresher.ensureFreshAccessToken(
+                currentAccessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                writeBack: .importedAccount(id: account.id)
+            )
+            switch refreshed {
+            case .success(let t):
+                activeToken = t
+            case .failure(let err):
+                markImportedCodexFailure(id: account.id, message: err.description, error: err)
+                return
+            }
         }
-        let result = await CodexQuotaClient.fetch(accessToken: activeToken, accountId: account.chatgptAccountId)
+        let result = await CodexQuotaClient.fetch(
+            accessToken: activeToken,
+            accountId: isPAT ? nil : account.chatgptAccountId
+        )
         switch result {
-        case .success(let snapshot):
-            storeImportedCodex(id: account.id, snapshot: snapshot, source: .api)
+        case .success(let fetched):
+            storeImportedCodex(id: account.id, snapshot: fetched.snapshot, source: .api)
         case .failure(let err):
             markImportedCodexFailure(id: account.id, message: err.description, error: err)
         }
@@ -585,11 +655,18 @@ final class AppState {
 
     private func loadCodex() async {
         do {
-            let next = try await Task.detached(priority: .utility) {
+            var next = try await Task.detached(priority: .utility) {
                 try CodexAuth.load()
             }.value
             if codexIdentityChanged(previous: codexAccount, next: next) {
                 resetCodexQuotaState()
+            } else if next.isPersonalAccessToken, let prev = codexAccount {
+                // PAT 身份靠首次取数回填，重读 auth.json 时这些字段为空。
+                // 同一令牌未变则沿用上次回填的身份，避免 UI 抖动 / 误判账号切换。
+                next.email = next.email ?? prev.email
+                next.planType = next.planType ?? prev.planType
+                next.accountId = next.accountId ?? prev.accountId
+                next.chatgptUserId = next.chatgptUserId ?? prev.chatgptUserId
             }
             self.codexAccount = next
             self.codexError = nil
@@ -603,6 +680,11 @@ final class AppState {
     /// 时返回 true;previous 为 nil(首次加载)不算变化,避免误清启动缓存。
     private func codexIdentityChanged(previous: CodexAccount?, next: CodexAccount) -> Bool {
         guard let previous else { return false }
+        // PAT 账号 email/account_id 由取数回填，重载时为空，不能据此判定切换；
+        // 任一侧为 PAT 时以令牌本身判定身份。
+        if previous.isPersonalAccessToken || next.isPersonalAccessToken {
+            return previous.accessToken != next.accessToken
+        }
         if let a = previous.accountId, let b = next.accountId, !a.isEmpty, !b.isEmpty {
             return a != b
         }
@@ -681,30 +763,46 @@ final class AppState {
             markCodexFailure(QuotaError.missingToken.description)
             return
         }
-        let refreshed = await CodexTokenRefresher.ensureFreshTokens(
-            currentAccessToken: token,
-            refreshToken: account.refreshToken,
-            idToken: account.idToken
-        )
+
         let activeToken: String
-        switch refreshed {
-        case .success(let t):
-            activeToken = t.accessToken
-            account.accessToken = t.accessToken
-            account.refreshToken = nonEmpty(t.refreshToken)
-            account.idToken = t.idToken
-            codexAccount = account
-        case .failure(let err):
-            markCodexFailure(err.description)
-            return
+        if account.isPersonalAccessToken {
+            // personal access token 不透明、无 exp / refresh，直接用，跳过 OAuth 续期。
+            activeToken = token
+        } else {
+            let refreshed = await CodexTokenRefresher.ensureFreshTokens(
+                currentAccessToken: token,
+                refreshToken: account.refreshToken,
+                idToken: account.idToken
+            )
+            switch refreshed {
+            case .success(let t):
+                activeToken = t.accessToken
+                account.accessToken = t.accessToken
+                account.refreshToken = nonEmpty(t.refreshToken)
+                account.idToken = t.idToken
+                codexAccount = account
+            case .failure(let err):
+                markCodexFailure(err.description)
+                return
+            }
         }
+
+        // PAT 令牌已绑定账号，无需（也无法）带 JWT 解析出的 account_id header。
         let result = await CodexQuotaClient.fetch(
             accessToken: activeToken,
-            accountId: account.accountId
+            accountId: account.isPersonalAccessToken ? nil : account.accountId
         )
         switch result {
-        case .success(let snapshot):
-            storeCodex(snapshot: snapshot, source: .api)
+        case .success(let fetched):
+            if account.isPersonalAccessToken {
+                // 用 wham/usage 响应回填身份，供 UI 展示与额度历史 key 使用。
+                account.email = account.email ?? fetched.email
+                account.planType = account.planType ?? fetched.snapshot.planType
+                account.accountId = account.accountId ?? fetched.accountId
+                account.chatgptUserId = account.chatgptUserId ?? fetched.userId
+                codexAccount = account
+            }
+            storeCodex(snapshot: fetched.snapshot, source: .api)
         case .failure(let err):
             markCodexFailure(err.description, error: err)
         }
