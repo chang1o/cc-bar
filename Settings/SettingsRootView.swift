@@ -7,7 +7,8 @@ import SwiftUI
 
 struct SettingsRootView: View {
     @Environment(AppState.self) private var appState
-    @State private var launchAtLoginError: String?
+    @State private var launchAtLoginMessage: String?
+    @State private var launchAtLoginMessageIsError = false
 
     var body: some View {
         @Bindable var settings = SettingsStore.shared
@@ -24,6 +25,15 @@ struct SettingsRootView: View {
             .padding(.horizontal, 28)
             .padding(.vertical, 20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .onAppear {
+            settings.syncLaunchAtLoginStatus()
+            if settings.launchAtLoginRequiresApproval {
+                launchAtLoginMessage = launchAtLoginApprovalMessage
+                launchAtLoginMessageIsError = false
+            } else {
+                launchAtLoginMessage = nil
+            }
         }
     }
 
@@ -273,9 +283,16 @@ struct SettingsRootView: View {
                     set: { newValue in
                         do {
                             try settings.setLaunchAtLogin(newValue)
-                            launchAtLoginError = nil
+                            if settings.launchAtLoginRequiresApproval {
+                                launchAtLoginMessage = launchAtLoginApprovalMessage
+                                launchAtLoginMessageIsError = false
+                            } else {
+                                launchAtLoginMessage = nil
+                            }
                         } catch {
-                            launchAtLoginError = error.localizedDescription
+                            settings.syncLaunchAtLoginStatus()
+                            launchAtLoginMessage = launchAtLoginErrorMessage(error)
+                            launchAtLoginMessageIsError = true
                         }
                     }
                 ))
@@ -283,13 +300,17 @@ struct SettingsRootView: View {
                 .toggleStyle(.switch)
                 .tint(.green)
             }
-            if let launchAtLoginError {
-                PrefsRow(label: "Error", chinese: "错误") {
-                    Text(launchAtLoginError)
+            if let launchAtLoginMessage {
+                PrefsRow(
+                    label: launchAtLoginMessageIsError ? "Error" : "Status",
+                    chinese: launchAtLoginMessageIsError ? "错误" : "状态"
+                ) {
+                    Text(launchAtLoginMessage)
                         .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                        .frame(maxWidth: 200, alignment: .trailing)
+                        .foregroundStyle(launchAtLoginMessageIsError ? Color.red : Color.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(4)
+                        .frame(maxWidth: 360, alignment: .trailing)
                 }
             }
             PrefsRow(label: "Version", chinese: "版本") {
@@ -299,6 +320,24 @@ struct SettingsRootView: View {
                     .monospacedDigit()
             }
         }
+    }
+
+    private var launchAtLoginApprovalMessage: String {
+        tr(
+            "Approve CCBar in System Settings > General > Login Items & Extensions.",
+            "请在「系统设置 > 通用 > 登录项与扩展」中允许 CCBar。"
+        )
+    }
+
+    private func launchAtLoginErrorMessage(_ error: Error) -> String {
+        let description = (error as NSError).localizedDescription
+        if description.localizedCaseInsensitiveContains("operation not permitted") {
+            return tr(
+                "macOS rejected this change. Export a signed CCBar.app, move it to /Applications, launch it there, then try again.",
+                "macOS 拒绝了这次更改。请导出签名后的 CCBar.app，拖到 /Applications 后从那里启动，再重试。"
+            )
+        }
+        return description
     }
 
     private var footer: some View {

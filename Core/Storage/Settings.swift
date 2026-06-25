@@ -157,8 +157,7 @@ final class SettingsStore {
         // 通用：launchAtLogin 以系统当前注册状态为准
         let langRaw = defaults.string(forKey: Keys.appLanguage) ?? AppLanguage.system.rawValue
         appLanguage = AppLanguage(rawValue: langRaw) ?? .system
-        let stored = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
-        launchAtLogin = stored
+        launchAtLogin = Self.isLaunchAtLoginOn(SMAppService.mainApp.status)
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? true
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false
@@ -219,17 +218,42 @@ final class SettingsStore {
 
     /// 当前系统记录的注册状态
     var launchAtLoginRegistered: Bool {
-        SMAppService.mainApp.status == .enabled
+        Self.isLaunchAtLoginOn(SMAppService.mainApp.status)
     }
 
     /// 切换开机自启；失败时抛出原始错误
     func setLaunchAtLogin(_ enabled: Bool) throws {
+        if enabled == launchAtLoginRegistered {
+            launchAtLogin = enabled
+            return
+        }
+
         if enabled {
             try SMAppService.mainApp.register()
         } else {
             try SMAppService.mainApp.unregister()
         }
-        launchAtLogin = enabled
+        syncLaunchAtLoginStatus()
+    }
+
+    /// 重新读取系统注册状态，避免 UserDefaults 与系统 Login Item 状态错位。
+    func syncLaunchAtLoginStatus() {
+        launchAtLogin = launchAtLoginRegistered
+    }
+
+    var launchAtLoginRequiresApproval: Bool {
+        SMAppService.mainApp.status == .requiresApproval
+    }
+
+    private static func isLaunchAtLoginOn(_ status: SMAppService.Status) -> Bool {
+        switch status {
+        case .enabled, .requiresApproval:
+            return true
+        case .notRegistered, .notFound:
+            return false
+        @unknown default:
+            return false
+        }
     }
 
     private enum Keys {
