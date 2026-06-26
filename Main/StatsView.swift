@@ -756,7 +756,12 @@ struct StatsView: View {
         }
         return byModel
             .map { ModelRow(model: $0.key, totals: $0.value) }
-            .sorted { $0.totals.costUSD > $1.totals.costUSD }
+            .sorted {
+                if $0.totals.costUSD == $1.totals.costUSD {
+                    return $0.model < $1.model
+                }
+                return $0.totals.costUSD > $1.totals.costUSD
+            }
     }
 
     private func placeholderHeight(_ height: CGFloat, message: String) -> some View {
