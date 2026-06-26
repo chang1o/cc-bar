@@ -147,6 +147,7 @@ struct StatsView: View {
     @State private var range: StatsRange = .today
     @State private var serviceFilter: StatsServiceFilter = .all
     @State private var viewMode: StatsViewMode = .overview
+    @State private var selectedDay: Date?
     @State private var customFrom: Date = Calendar.current.startOfDay(
         for: Date().addingTimeInterval(-7 * 86400)
     )
@@ -394,23 +395,41 @@ struct StatsView: View {
                 if dailySamples.isEmpty {
                     placeholderHeight(160, message: tr("No data", "无数据"))
                 } else {
-                    Chart(dailySamples) { sample in
-                        BarMark(
-                            x: .value("Day", sample.day, unit: .day),
-                            y: .value("Cost", sample.codexCost.doubleValue),
-                            stacking: .standard
-                        )
-                        .foregroundStyle(Color.codexAccent)
-                        .cornerRadius(2)
+                    Chart {
+                        ForEach(dailySamples) { sample in
+                            BarMark(
+                                x: .value("Day", sample.day, unit: .day),
+                                y: .value("Cost", sample.codexCost.doubleValue),
+                                stacking: .standard
+                            )
+                            .foregroundStyle(Color.codexAccent)
+                            .opacity(barOpacity(for: sample))
+                            .cornerRadius(2)
 
-                        BarMark(
-                            x: .value("Day", sample.day, unit: .day),
-                            y: .value("Cost", sample.claudeCost.doubleValue),
-                            stacking: .standard
-                        )
-                        .foregroundStyle(Color.claudeAccent)
-                        .cornerRadius(2)
+                            BarMark(
+                                x: .value("Day", sample.day, unit: .day),
+                                y: .value("Cost", sample.claudeCost.doubleValue),
+                                stacking: .standard
+                            )
+                            .foregroundStyle(Color.claudeAccent)
+                            .opacity(barOpacity(for: sample))
+                            .cornerRadius(2)
+                        }
+
+                        if let selected = selectedSample {
+                            RuleMark(x: .value("Day", selected.day, unit: .day))
+                                .foregroundStyle(Color.secondary.opacity(0.25))
+                                .lineStyle(StrokeStyle(lineWidth: 1))
+                                .annotation(
+                                    position: .top,
+                                    spacing: 6,
+                                    overflowResolution: .init(x: .fit(to: .plot), y: .disabled)
+                                ) {
+                                    DailyTooltip(sample: selected)
+                                }
+                        }
                     }
+                    .chartXSelection(value: $selectedDay)
                     .chartXAxis {
                         AxisMarks(values: .stride(by: .day, count: max(1, dailySamples.count / 5))) { value in
                             AxisValueLabel(format: .dateTime.month(.abbreviated).day(),
@@ -421,6 +440,9 @@ struct StatsView: View {
                     }
                     .chartYAxis(.hidden)
                     .frame(height: 160)
+                    .animation(.easeOut(duration: 0.12), value: selectedDay)
+                    .onChange(of: range) { _, _ in selectedDay = nil }
+                    .onChange(of: serviceFilter) { _, _ in selectedDay = nil }
                 }
             }
         }
@@ -689,18 +711,40 @@ struct StatsView: View {
     }
 
     private var dailySamples: [DailySample] {
-        var byDay: [Date: (codex: Decimal, claude: Decimal)] = [:]
+        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals)] = [:]
         for b in filteredBuckets {
-            var pair = byDay[b.day] ?? (0, 0)
+            var pair = byDay[b.day] ?? (.zero, .zero)
             switch b.app {
-            case .codex: pair.codex += b.costUSD
-            case .claude: pair.claude += b.costUSD
+            case .codex: pair.codex.add(b)
+            case .claude: pair.claude.add(b)
             }
             byDay[b.day] = pair
         }
         return byDay
-            .map { DailySample(day: $0.key, codexCost: $0.value.codex, claudeCost: $0.value.claude) }
+            .map {
+                DailySample(
+                    day: $0.key,
+                    codexCost: $0.value.codex.costUSD,
+                    claudeCost: $0.value.claude.costUSD,
+                    codexTokens: $0.value.codex.totalTokens,
+                    claudeTokens: $0.value.claude.totalTokens
+                )
+            }
             .sorted { $0.day < $1.day }
+    }
+
+    /// 把 chartXSelection 吸附到的连续 Date 映射到最近的那一天。
+    private var selectedSample: DailySample? {
+        guard let selectedDay else { return nil }
+        return dailySamples.min {
+            abs($0.day.timeIntervalSince(selectedDay)) < abs($1.day.timeIntervalSince(selectedDay))
+        }
+    }
+
+    /// 选中某天时,非选中柱降透明以聚焦。
+    private func barOpacity(for sample: DailySample) -> Double {
+        guard let selected = selectedSample else { return 1 }
+        return selected.id == sample.id ? 1 : 0.35
     }
 
     private func modelRows(for app: UsageApp) -> [ModelRow] {
@@ -759,6 +803,58 @@ private struct LegendChip: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Daily usage tooltip
+
+/// 每日用量柱状图的悬浮浮层:展示某天各服务花费、合计花费与合计 tokens。
+private struct DailyTooltip: View {
+    let sample: DailySample
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(StatsFormatter.day(sample.day))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            serviceRow(color: .codexAccent, label: "Codex", value: StatsFormatter.cost(sample.codexCost))
+            serviceRow(color: .claudeAccent, label: "Claude", value: StatsFormatter.cost(sample.claudeCost))
+
+            Divider()
+
+            totalRow(label: tr("Total", "合计"), value: StatsFormatter.cost(sample.totalCost), emphasized: true)
+            totalRow(label: "Tokens", value: StatsFormatter.compactToken(sample.totalTokens), emphasized: false)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: 156, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .ccPanelStroke(cornerRadius: 8)
+    }
+
+    private func serviceRow(color: Color, label: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            ServiceMark(color: color)
+            Text(label)
+                .font(.system(size: 12))
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 12))
+                .monospacedDigit()
+        }
+    }
+
+    private func totalRow(label: String, value: String, emphasized: Bool) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: emphasized ? 12 : 10.5, weight: emphasized ? .semibold : .regular))
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: emphasized ? 12 : 10.5, weight: emphasized ? .semibold : .regular))
+                .monospacedDigit()
+        }
+        .foregroundStyle(emphasized ? .primary : .secondary)
     }
 }
 
@@ -1089,6 +1185,11 @@ private struct DailySample: Identifiable {
     let day: Date
     let codexCost: Decimal
     let claudeCost: Decimal
+    let codexTokens: Int
+    let claudeTokens: Int
+
+    var totalCost: Decimal { codexCost + claudeCost }
+    var totalTokens: Int { codexTokens + claudeTokens }
 }
 
 private struct ModelRow: Identifiable {
