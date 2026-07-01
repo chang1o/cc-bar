@@ -21,14 +21,27 @@ final class UsageService {
     /// 由 Scheduler / 手动触发；防重入。
     func scanNow() async {
         guard !isScanning else { return }
+        let prev = await Task.detached(priority: .utility) {
+            ScanCache.load()
+        }.value
+        await runScan(prev: prev)
+    }
+
+    /// 用户在设置页手动触发的强制重算：无视已有 watermark 和 fingerprint，
+    /// 清空内存聚合并把本地全部日志按当前 `Pricing.table` 重新解析、重新计费。
+    /// 用于「定价表改错后修复，想立刻重算」这类场景，不必等下次价格表变动或重启 App。
+    func forceRescan() async {
+        guard !isScanning else { return }
+        aggregator.load(from: [])
+        await runScan(prev: ScanState())
+    }
+
+    private func runScan(prev: ScanState) async {
+        guard !isScanning else { return }
         isScanning = true
         defer { isScanning = false }
 
         let started = Date()
-        let prev = await Task.detached(priority: .utility) {
-            ScanCache.load()
-        }.value
-
         let prevSeen = prev.claudeSeenMessageIds
         async let claudeTask = Task.detached(priority: .utility) {
             ClaudeJSONLScanner.scan(previous: prev.claude, seenMessageIds: prevSeen)

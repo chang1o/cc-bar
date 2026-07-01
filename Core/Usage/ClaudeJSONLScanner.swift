@@ -67,7 +67,8 @@ enum ClaudeJSONLScanner {
                     input: p.inputTokens,
                     output: p.outputTokens,
                     cacheRead: p.cacheReadTokens,
-                    cacheCreation: p.cacheCreationTokens
+                    cacheCreation: p.cacheCreationTokens,
+                    at: p.timestamp
                 )
                 entries.append(UsageEntry(
                     app: .claude,

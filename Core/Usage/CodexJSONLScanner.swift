@@ -90,7 +90,8 @@ enum CodexJSONLScanner {
                     input: billableInput,
                     output: output,
                     cacheRead: cachedInput,
-                    cacheCreation: 0
+                    cacheCreation: 0,
+                    at: ts
                 )
                 entries.append(UsageEntry(
                     app: .codex,

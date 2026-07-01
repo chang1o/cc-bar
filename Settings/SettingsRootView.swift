@@ -9,6 +9,7 @@ struct SettingsRootView: View {
     @Environment(AppState.self) private var appState
     @State private var launchAtLoginMessage: String?
     @State private var launchAtLoginMessageIsError = false
+    @State private var isRecalculatingUsage = false
 
     var body: some View {
         @Bindable var settings = SettingsStore.shared
@@ -245,6 +246,30 @@ struct SettingsRootView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
+            }
+            PrefsRow(
+                label: "Recalculate usage",
+                chinese: "重新计算用量",
+                desc: "Rescan local logs and recompute cost with the current pricing table.",
+                chineseDesc: "重新扫描本地日志，按当前定价表重新计算费用"
+            ) {
+                Button {
+                    isRecalculatingUsage = true
+                    Task {
+                        await appState.usageService.forceRescan()
+                        isRecalculatingUsage = false
+                    }
+                } label: {
+                    if isRecalculatingUsage {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(tr("Recalculate", "重新计算"))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isRecalculatingUsage)
             }
         }
     }

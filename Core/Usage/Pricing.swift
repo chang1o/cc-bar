@@ -9,6 +9,13 @@ struct ModelPrice: Sendable {
     var cacheCreation: Decimal
 }
 
+/// 限时覆盖价：某模型从 `from` 这天（UTC 0 点）起改用 `price`，用于极少数「同一模型中途涨价/降价」
+/// 的场景（如 Sonnet 5）。绝大多数模型价格固定，不需要出现在这张表里。
+private struct PricedPeriod: Sendable {
+    let from: Date
+    let price: ModelPrice
+}
+
 enum Pricing {
     /// 价格表与 cc-switch `seed_model_pricing` / CodexBar `CostUsagePricing` 对齐（2026 上半年价位）。
     /// 命中不到时返回 nil。键为归一化后的模型名（剥 `openai/` 前缀和末尾 `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
@@ -21,6 +28,8 @@ enum Pricing {
         "claude-opus-4-5":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-1":   .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
         "claude-opus-4":     .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
+        // Sonnet 5 是当前生效价（2026-09-01 起的新价见下方 timedOverrides）。
+        "claude-sonnet-5":   .init(input: 2,   output: 10,  cacheRead: 0.20, cacheCreation: 2.50),
         "claude-sonnet-4-7": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
         "claude-sonnet-4-6": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
         "claude-sonnet-4-5": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
@@ -47,6 +56,32 @@ enum Pricing {
         "codex-mini-latest": .init(input: 1.50, output: 6,   cacheRead: 0.375, cacheCreation: 0)
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
     ]
+
+    /// 少数模型中途涨价/降价的时间点覆盖；不在这里出现的模型永远用 `table` 里的固定价。
+    /// 键为归一化后的模型名，每条按 `from` 升序排列；只要用量记录的日期 ≥ `from` 就换成对应新价，
+    /// 取满足条件里最晚的一档（早于所有 `from` 时退回 `table` 的基准价）。
+    private static let timedOverrides: [String: [PricedPeriod]] = [
+        "claude-sonnet-5": [
+            PricedPeriod(from: utcDate(2026, 9, 1), price: .init(input: 3, output: 15, cacheRead: 0.30, cacheCreation: 3.75))
+        ]
+    ]
+
+    private static func utcDate(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    /// 取某模型在 `date` 这天应使用的价格：`table` 里的基准价，按 `timedOverrides` 就近覆盖。
+    private static func price(for key: String, at date: Date) -> ModelPrice? {
+        guard let base = table[key] else { return nil }
+        guard let overrides = timedOverrides[key] else { return base }
+        var chosen = base
+        for period in overrides where period.from <= date {
+            chosen = period.price
+        }
+        return chosen
+    }
 
     /// 归一化模型名：去 `openai/` 前缀；剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；
     /// 兼容 Vertex AI 的 `@日期` 写法。
@@ -75,16 +110,18 @@ enum Pricing {
     /// 计算单次调用花费。
     /// - Parameters:
     ///   - app: 用于隐含的 cache_read 语义；Codex 含、Claude 不含（调用方传 input 时已自处理）。
+    ///   - at: 该条用量记录实际发生的时间，仅在模型存在 `timedOverrides` 时才会影响取价（如 Sonnet 5）。
     ///   - input/output/cacheRead/cacheCreation: 直接乘价。
     static func cost(
         model: String,
         input: Int,
         output: Int,
         cacheRead: Int,
-        cacheCreation: Int
+        cacheCreation: Int,
+        at date: Date
     ) -> Decimal {
         let key = normalize(model: model)
-        guard let p = table[key] else { return 0 }
+        guard let p = price(for: key, at: date) else { return 0 }
         let i = Decimal(input)     * p.input        / perMillion
         let o = Decimal(output)    * p.output       / perMillion
         let cr = Decimal(cacheRead) * p.cacheRead   / perMillion
@@ -97,14 +134,21 @@ enum Pricing {
     }
 
     /// 价格表内容指纹（SHA-256，确定性，跨进程稳定）。
-    /// 扫描状态 / 汇总缓存持久化它；表一变（新增模型、改价、修正数值）→ 指纹变 →
+    /// 扫描状态 / 汇总缓存持久化它；表一变（新增模型、改价、修正数值、调整限时覆盖）→ 指纹变 →
     /// 缓存自动失效并全量重扫重算历史桶，无需手动 bump 版本号，避免「改了价却忘了重算」。
     static let fingerprint: String = {
-        let body = table.keys.sorted().map { key -> String in
+        let baseBody = table.keys.sorted().map { key -> String in
             let p = table[key]!
             return "\(key):\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
         }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data(body.utf8))
+        let overrideBody = timedOverrides.keys.sorted().map { key -> String in
+            let parts = timedOverrides[key]!.sorted { $0.from < $1.from }.map { period -> String in
+                let p = period.price
+                return "\(period.from.timeIntervalSince1970)=\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
+            }.joined(separator: ",")
+            return "\(key)@\(parts)"
+        }.joined(separator: ";")
+        let digest = SHA256.hash(data: Data("\(baseBody)|\(overrideBody)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }()
 }

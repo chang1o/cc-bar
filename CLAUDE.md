@@ -60,7 +60,31 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于
 按任务风险选择最小验证手段：
 
 - 小范围 UI 改动：先做静态检查和代码审阅。
-- 需要编译确认时，先说明原因，再询问是否运行 Xcode 构建。
+- 需要编译确认时，先说明原因，再询问是否运行 Xcode 构建；得到同意后用下面「编译」一节里的命令，不要临时现编，避免命令写错或选错 configuration。
 - 需要手动验收时，说明在 Xcode 中打开 `ccbar.xcodeproj` 并运行 App，按本次需求的验收点检查。
 
 不要为了验证一个小改动主动跑完整构建、完整测试或启动开发服务，除非用户明确要求。
+
+## 编译
+
+只是想确认改动能编译通过（不产出正式安装包）时，用 Debug 配置直接 build，不要用 Archive：
+
+```bash
+xcodebuild -project ccbar.xcodeproj -scheme ccbar -configuration Debug -destination 'platform=macOS' build
+```
+
+这属于「耗时命令」，按上面协作规则，运行前要先说明原因并征得同意。看到 `** BUILD SUCCEEDED **` 即代表本次改动没有语法/类型错误；不代表功能正确，功能验收仍需按「常用验证方式」走手动验收。
+
+## 打包分发
+
+打包的唯一入口是仓库自带的脚本，**不要用 Xcode 的 Archive / Export（含 Developer ID 导出）分发**，也不要手动 `codesign`/`ditto` 现拼流程：
+
+```bash
+./scripts/build.sh
+```
+
+- 首次需要把命令行工具指向完整 Xcode（一次性）：`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`。
+- 脚本用 `CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO` 做 Release 构建，工具链自动 ad-hoc 签名，可在任意 Mac 运行，不需要付费 Developer ID 证书或公证。
+- **产物固定输出到 `dist/CCBar.app.zip`**（`dist/` 已在 `.gitignore` 里，不进版本库）。脚本会先清空 `build/` 目录再重新构建。
+- 打包好的 zip 上传到 GitHub Release 即可分发；不要直接替换用户本机 `/Applications/CCBar.app`——那是覆盖用户正在使用的安装，属于有风险操作，要打包验证就在 `dist/` 里解压看，不要动 `/Applications`。
+- 完整背景说明见 [README.md](README.md#从源码构建) 和 [docs/打包发布.md](docs/打包发布.md)（该文档里的 Archive / Developer ID 流程只是给需要公证发布给别人用的场景保留的可选项，日常打包不要用）。
