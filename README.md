@@ -5,7 +5,7 @@
 <p>
   <img alt="platform" src="https://img.shields.io/badge/macOS-14+-blue.svg">
   <img alt="swift" src="https://img.shields.io/badge/Swift-5.9-orange.svg">
-  <img alt="version" src="https://img.shields.io/badge/version-0.12.0-brightgreen.svg">
+  <img alt="version" src="https://img.shields.io/badge/version-0.13.0-brightgreen.svg">
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 - **用量显示** —— Codex 与 Claude Code 的 5 小时 / 周窗口剩余额度,实时同步
 - **菜单栏 + 悬浮窗** —— 状态栏图标显示剩余百分比;可选桌面悬浮 HUD,可拖动、边缘吸附、置顶不抢焦
-- **多 Codex 账号** —— 支持导入多个 Codex 账号,主副账号在 Popover 同屏展示
+- **多 Codex 账号** —— 支持导入多个 Codex 账号,主副账号在 Popover 同屏展示;设置页可查看每个账号的额外重置次数与到期时间
 - **Token 与费用统计** —— 按今天 / 昨天 / 本周 / 本月 / 本年 / 7 天 / 30 天 / 全部 / 自定义切换;KPI、堆叠柱状图、按服务占比、按模型明细
 - **丰富的设置** —— 账号开关、菜单栏显示项、悬浮窗、刷新间隔、重置时间显示、中英双语、开机自动启动
 

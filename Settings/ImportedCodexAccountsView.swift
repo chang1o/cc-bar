@@ -13,6 +13,16 @@ struct ImportedCodexAccountsView: View {
     @State private var draggingId: String?
     @State private var dropTargetId: String?
 
+    /// 额外「Full reset」credit 明细的展开状态(懒加载,按账号 id 缓存,不持久化)。
+    @State private var expandedResetCreditsId: String?
+    @State private var loadingResetCreditsId: String?
+    @State private var resetCreditsById: [String: ResetCreditsLoadResult] = [:]
+
+    private enum ResetCreditsLoadResult {
+        case success(CodexResetCreditsClient.Fetched)
+        case failure(String)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // 账号列表
@@ -46,6 +56,10 @@ struct ImportedCodexAccountsView: View {
                         } isTargeted: { isTargeted in
                             dropTargetId = isTargeted ? account.id : (dropTargetId == account.id ? nil : dropTargetId)
                         }
+
+                    if expandedResetCreditsId == account.id {
+                        resetCreditsDetail(account: account)
+                    }
                 }
             }
 
@@ -143,6 +157,17 @@ struct ImportedCodexAccountsView: View {
 
             Spacer()
 
+            // 额外重置 credit 明细(懒加载)
+            Button {
+                toggleResetCredits(account: account)
+            } label: {
+                Image(systemName: "gift")
+                    .font(.system(size: 12))
+                    .foregroundStyle(expandedResetCreditsId == account.id ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(tr("Extra reset credits", "额外重置次数"))
+
             // 显示开关
             Toggle("", isOn: Binding(
                 get: { account.visibleInPopover },
@@ -182,6 +207,83 @@ struct ImportedCodexAccountsView: View {
         if let plan = account.planType, !plan.isEmpty { parts.append(plan.capitalized) }
         return parts.joined(separator: " · ")
     }
+
+    // MARK: 额外重置 credit(懒加载)
+
+    private func toggleResetCredits(account: ImportedCodexAccount) {
+        if expandedResetCreditsId == account.id {
+            expandedResetCreditsId = nil
+            return
+        }
+        expandedResetCreditsId = account.id
+        guard resetCreditsById[account.id] == nil else { return }
+        loadingResetCreditsId = account.id
+        Task {
+            let result = await appState.fetchImportedCodexResetCredits(account: account)
+            switch result {
+            case .success(let fetched):
+                resetCreditsById[account.id] = .success(fetched)
+            case .failure(let err):
+                resetCreditsById[account.id] = .failure(err.description)
+            }
+            if loadingResetCreditsId == account.id { loadingResetCreditsId = nil }
+        }
+    }
+
+    private func resetCreditsDetail(account: ImportedCodexAccount) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if loadingResetCreditsId == account.id {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(tr("Loading…", "加载中…"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } else if let result = resetCreditsById[account.id] {
+                switch result {
+                case .success(let fetched):
+                    Text(tr("\(fetched.availableCount) resets available", "可用额外重置 \(fetched.availableCount) 次"))
+                        .font(.system(size: 11, weight: .semibold))
+                    if fetched.credits.isEmpty {
+                        Text(tr("No records", "暂无记录"))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ForEach(fetched.credits) { credit in
+                            HStack(spacing: 6) {
+                                Text(credit.title.isEmpty ? credit.status : credit.title)
+                                    .font(.system(size: 10.5))
+                                    .lineLimit(1)
+                                Spacer()
+                                if let expiresAt = credit.expiresAt {
+                                    Text(tr(
+                                        "expires \(Self.dateFormatter.string(from: expiresAt))",
+                                        "过期 \(Self.dateFormatter.string(from: expiresAt))"
+                                    ))
+                                    .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                case .failure(let message):
+                    Text(message)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 2)
+        .padding(.bottom, 10)
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
 
     // MARK: 重排序
 

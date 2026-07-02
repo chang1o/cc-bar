@@ -471,6 +471,35 @@ final class AppState {
         }
     }
 
+    /// 按需拉取指定导入账号的额外「Full reset」credit(wham/rate-limit-reset-credits)。
+    /// 懒加载:仅供设置页展开时调用一次,不接入 Scheduler 定时刷新,也不写入持久化快照。
+    func fetchImportedCodexResetCredits(account: ImportedCodexAccount) async -> Result<CodexResetCreditsClient.Fetched, QuotaError> {
+        guard let tokens = ImportedCodexStore.loadTokens(accountId: account.id) else {
+            return .failure(.missingToken)
+        }
+        let isPAT = account.isPersonalAccessToken == true
+        let activeToken: String
+        if isPAT {
+            activeToken = tokens.accessToken
+        } else {
+            let refreshed = await CodexTokenRefresher.ensureFreshAccessToken(
+                currentAccessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                writeBack: .importedAccount(id: account.id)
+            )
+            switch refreshed {
+            case .success(let t):
+                activeToken = t
+            case .failure(let err):
+                return .failure(err)
+            }
+        }
+        return await CodexResetCreditsClient.fetch(
+            accessToken: activeToken,
+            accountId: isPAT ? nil : account.chatgptAccountId
+        )
+    }
+
     private func importedCodexAccountMirrorsPrimary(_ account: ImportedCodexAccount) -> Bool {
         guard let primary = codexAccount,
               let primaryAccountId = nonEmpty(primary.accountId),
