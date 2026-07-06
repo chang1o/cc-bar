@@ -53,7 +53,18 @@ enum Pricing {
         "gpt-5.5-codex":     .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "gpt-5.5-pro":       .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "gpt-5.6":           .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
-        "codex-mini-latest": .init(input: 1.50, output: 6,   cacheRead: 0.375, cacheCreation: 0)
+        "codex-mini-latest": .init(input: 1.50, output: 6,   cacheRead: 0.375, cacheCreation: 0),
+
+        // —— DeepSeek 系列（与 cc-switch seed_model_pricing 对齐）——
+        // 缓存语义：通过 Anthropic 兼容端点使用时 input 不含 cache_read，直接乘价。
+        // V4 系列官方 CNY 按 1 USD ≈ 7.14 折算。
+        "deepseek-v4-pro":    .init(input: 0.435, output: 0.87,  cacheRead: 0.003625, cacheCreation: 0),
+        "deepseek-v4-flash":  .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
+        "deepseek-v3.2":      .init(input: 0.28,  output: 0.42,  cacheRead: 0.028,    cacheCreation: 0),
+        "deepseek-v3.1":      .init(input: 0.55,  output: 1.67,  cacheRead: 0.055,    cacheCreation: 0),
+        "deepseek-v3":        .init(input: 0.28,  output: 1.11,  cacheRead: 0.028,    cacheCreation: 0),
+        "deepseek-chat":      .init(input: 0.27,  output: 1.10,  cacheRead: 0.07,     cacheCreation: 0),
+        "deepseek-reasoner":  .init(input: 0.55,  output: 2.19,  cacheRead: 0.14,     cacheCreation: 0),
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
     ]
 
@@ -89,6 +100,9 @@ enum Pricing {
         var m = model
         if m.hasPrefix("openai/") {
             m.removeFirst("openai/".count)
+        }
+        if m.hasPrefix("deepseek/") {
+            m.removeFirst("deepseek/".count)
         }
         // Vertex 风格：`name@YYYYMMDD`
         if let at = m.firstIndex(of: "@") {
