@@ -86,6 +86,18 @@ enum MenuBarWindowChoice: String, CaseIterable, Identifiable {
     }
 }
 
+struct ProviderDisplaySettings: Sendable, Codable, Equatable {
+    var enabled: Bool
+    var menuBar: Bool
+    var floatingHUD: Bool
+
+    static let enabledByDefault = ProviderDisplaySettings(
+        enabled: true,
+        menuBar: true,
+        floatingHUD: true
+    )
+}
+
 @Observable
 @MainActor
 final class SettingsStore {
@@ -93,19 +105,55 @@ final class SettingsStore {
 
     private let defaults: UserDefaults
 
-    // 账号
-    var showCodex: Bool { didSet { defaults.set(showCodex, forKey: Keys.showCodex) } }
-    var showClaude: Bool { didSet { defaults.set(showClaude, forKey: Keys.showClaude) } }
+    // 主 Provider 的全局 / 菜单栏 / 悬浮窗显示配置。
+    // 统一按 QuotaApp 索引，新增 Provider 时不再扩三组平行字段。
+    var providerDisplaySettings: [QuotaApp: ProviderDisplaySettings] {
+        didSet { saveProviderDisplaySettings() }
+    }
+
+    // 兼容现有调用方的语义化入口。
+    var showCodex: Bool {
+        get { isProviderEnabled(.codex) }
+        set { setProviderEnabled(newValue, for: .codex) }
+    }
+    var showClaude: Bool {
+        get { isProviderEnabled(.claude) }
+        set { setProviderEnabled(newValue, for: .claude) }
+    }
+    var showAntigravity: Bool {
+        get { isProviderEnabled(.antigravity) }
+        set { setProviderEnabled(newValue, for: .antigravity) }
+    }
+    var menuBarShowCodex: Bool {
+        get { isProviderShownInMenuBar(.codex) }
+        set { setProviderShownInMenuBar(newValue, for: .codex) }
+    }
+    var menuBarShowClaude: Bool {
+        get { isProviderShownInMenuBar(.claude) }
+        set { setProviderShownInMenuBar(newValue, for: .claude) }
+    }
+    var menuBarShowAntigravity: Bool {
+        get { isProviderShownInMenuBar(.antigravity) }
+        set { setProviderShownInMenuBar(newValue, for: .antigravity) }
+    }
 
     // 菜单栏
-    var menuBarShowCodex: Bool { didSet { defaults.set(menuBarShowCodex, forKey: Keys.menuBarShowCodex) } }
-    var menuBarShowClaude: Bool { didSet { defaults.set(menuBarShowClaude, forKey: Keys.menuBarShowClaude) } }
     var menuBarWindow: MenuBarWindowChoice { didSet { defaults.set(menuBarWindow.rawValue, forKey: Keys.menuBarWindow) } }
 
     // 悬浮窗（占位，M8 接）
     var floatingEnabled: Bool { didSet { defaults.set(floatingEnabled, forKey: Keys.floatingEnabled) } }
-    var floatingShowCodex: Bool { didSet { defaults.set(floatingShowCodex, forKey: Keys.floatingShowCodex) } }
-    var floatingShowClaude: Bool { didSet { defaults.set(floatingShowClaude, forKey: Keys.floatingShowClaude) } }
+    var floatingShowCodex: Bool {
+        get { isProviderShownInFloatingHUD(.codex) }
+        set { setProviderShownInFloatingHUD(newValue, for: .codex) }
+    }
+    var floatingShowClaude: Bool {
+        get { isProviderShownInFloatingHUD(.claude) }
+        set { setProviderShownInFloatingHUD(newValue, for: .claude) }
+    }
+    var floatingShowAntigravity: Bool {
+        get { isProviderShownInFloatingHUD(.antigravity) }
+        set { setProviderShownInFloatingHUD(newValue, for: .antigravity) }
+    }
 
     // 刷新
     var quotaInterval: QuotaIntervalChoice { didSet { defaults.set(quotaInterval.rawValue, forKey: Keys.quotaInterval) } }
@@ -134,18 +182,12 @@ final class SettingsStore {
 
     private init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // 账号
-        showCodex = defaults.object(forKey: Keys.showCodex) as? Bool ?? true
-        showClaude = defaults.object(forKey: Keys.showClaude) as? Bool ?? true
+        providerDisplaySettings = Self.loadProviderDisplaySettings(defaults: defaults)
         // 菜单栏
-        menuBarShowCodex = defaults.object(forKey: Keys.menuBarShowCodex) as? Bool ?? true
-        menuBarShowClaude = defaults.object(forKey: Keys.menuBarShowClaude) as? Bool ?? true
         let mbWindowRaw = defaults.string(forKey: Keys.menuBarWindow) ?? MenuBarWindowChoice.fiveHour.rawValue
         menuBarWindow = MenuBarWindowChoice(rawValue: mbWindowRaw) ?? .fiveHour
         // 悬浮窗
         floatingEnabled = defaults.object(forKey: Keys.floatingEnabled) as? Bool ?? false
-        floatingShowCodex = defaults.object(forKey: Keys.floatingShowCodex) as? Bool ?? true
-        floatingShowClaude = defaults.object(forKey: Keys.floatingShowClaude) as? Bool ?? true
         // 刷新
         let qiRaw = defaults.string(forKey: Keys.quotaInterval) ?? QuotaIntervalChoice.m2.rawValue
         quotaInterval = QuotaIntervalChoice(rawValue: qiRaw) ?? .m2
@@ -161,15 +203,89 @@ final class SettingsStore {
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? true
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false
+        saveProviderDisplaySettings()
     }
 
-    /// 账号与菜单栏开关的合取，最终决定菜单栏该不该画该应用
-    var effectiveMenuBarShowCodex: Bool { showCodex && menuBarShowCodex }
-    var effectiveMenuBarShowClaude: Bool { showClaude && menuBarShowClaude }
+    func isProviderEnabled(_ app: QuotaApp) -> Bool {
+        providerDisplaySettings[app, default: .enabledByDefault].enabled
+    }
 
-    /// 悬浮窗的行可见性同样需要叠加全局「显示该应用」开关
-    var effectiveFloatingShowCodex: Bool { showCodex && floatingShowCodex }
-    var effectiveFloatingShowClaude: Bool { showClaude && floatingShowClaude }
+    func setProviderEnabled(_ enabled: Bool, for app: QuotaApp) {
+        var settings = providerDisplaySettings[app, default: .enabledByDefault]
+        settings.enabled = enabled
+        providerDisplaySettings[app] = settings
+    }
+
+    func isProviderShownInMenuBar(_ app: QuotaApp) -> Bool {
+        providerDisplaySettings[app, default: .enabledByDefault].menuBar
+    }
+
+    func setProviderShownInMenuBar(_ shown: Bool, for app: QuotaApp) {
+        var settings = providerDisplaySettings[app, default: .enabledByDefault]
+        settings.menuBar = shown
+        providerDisplaySettings[app] = settings
+    }
+
+    func isProviderShownInFloatingHUD(_ app: QuotaApp) -> Bool {
+        providerDisplaySettings[app, default: .enabledByDefault].floatingHUD
+    }
+
+    func setProviderShownInFloatingHUD(_ shown: Bool, for app: QuotaApp) {
+        var settings = providerDisplaySettings[app, default: .enabledByDefault]
+        settings.floatingHUD = shown
+        providerDisplaySettings[app] = settings
+    }
+
+    func effectiveMenuBarVisibility(for app: QuotaApp) -> Bool {
+        isProviderEnabled(app) && isProviderShownInMenuBar(app)
+    }
+
+    func effectiveFloatingVisibility(for app: QuotaApp) -> Bool {
+        isProviderEnabled(app) && isProviderShownInFloatingHUD(app)
+    }
+
+    private static func loadProviderDisplaySettings(
+        defaults: UserDefaults
+    ) -> [QuotaApp: ProviderDisplaySettings] {
+        if let data = defaults.data(forKey: Keys.providerDisplaySettings),
+           let stored = try? JSONDecoder().decode([String: ProviderDisplaySettings].self, from: data)
+        {
+            var result: [QuotaApp: ProviderDisplaySettings] = [:]
+            for (raw, settings) in stored {
+                if let app = QuotaApp(rawValue: raw) {
+                    result[app] = settings
+                }
+            }
+            for app in QuotaApp.allCases where result[app] == nil {
+                result[app] = .enabledByDefault
+            }
+            return result
+        }
+
+        // 第一次升级到统一结构时读取旧 key；Antigravity 没有旧值，按计划默认开启。
+        return [
+            .codex: ProviderDisplaySettings(
+                enabled: defaults.object(forKey: Keys.showCodex) as? Bool ?? true,
+                menuBar: defaults.object(forKey: Keys.menuBarShowCodex) as? Bool ?? true,
+                floatingHUD: defaults.object(forKey: Keys.floatingShowCodex) as? Bool ?? true
+            ),
+            .claude: ProviderDisplaySettings(
+                enabled: defaults.object(forKey: Keys.showClaude) as? Bool ?? true,
+                menuBar: defaults.object(forKey: Keys.menuBarShowClaude) as? Bool ?? true,
+                floatingHUD: defaults.object(forKey: Keys.floatingShowClaude) as? Bool ?? true
+            ),
+            .antigravity: .enabledByDefault,
+        ]
+    }
+
+    private func saveProviderDisplaySettings() {
+        let stored = Dictionary(uniqueKeysWithValues: providerDisplaySettings.map {
+            ($0.key.rawValue, $0.value)
+        })
+        if let data = try? JSONEncoder().encode(stored) {
+            defaults.set(data, forKey: Keys.providerDisplaySettings)
+        }
+    }
 
     /// 把 `appLanguage` 解析为最终渲染语言。`.system` 看系统首选语言是否以 `zh` 开头。
     /// 不用 `Locale.current`:它返回的是 App 当前生效的本地化语言,工程未添加中文资源时会回退到开发语言 `en`,
@@ -257,6 +373,8 @@ final class SettingsStore {
     }
 
     private enum Keys {
+        static let providerDisplaySettings = "ccbar.settings.providerDisplaySettings.v1"
+        // 旧 key 仅用于首次迁移，后续不再写入。
         static let showCodex = "ccbar.settings.showCodex"
         static let showClaude = "ccbar.settings.showClaude"
         static let menuBarShowCodex = "ccbar.settings.menuBarShowCodex"

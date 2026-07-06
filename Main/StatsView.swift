@@ -478,10 +478,20 @@ struct StatsView: View {
     private var currentLimitsPanel: some View {
         Panel(title: "Current limits", chinese: "当前限额") {
             VStack(spacing: 4) {
-                LimitRingRow(label: "Codex 5H", window: appState.codexQuota?.fiveHour, tint: .codexAccent)
-                LimitRingRow(label: "Codex WK", window: appState.codexQuota?.weekly, tint: .codexAccent)
-                LimitRingRow(label: "Claude 5H", window: appState.claudeQuota?.fiveHour, tint: .claudeAccent)
-                LimitRingRow(label: "Claude WK", window: appState.claudeQuota?.weekly, tint: .claudeAccent)
+                ForEach(QuotaProviderDescriptor.primaryProviders.filter {
+                    SettingsStore.shared.isProviderEnabled($0.app)
+                }) { provider in
+                    LimitRingRow(
+                        label: "\(provider.title) 5H",
+                        window: appState.quotaSnapshot(for: provider.app)?.fiveHour,
+                        tint: provider.app.tintColor
+                    )
+                    LimitRingRow(
+                        label: "\(provider.title) WK",
+                        window: appState.quotaSnapshot(for: provider.app)?.weekly,
+                        tint: provider.app.tintColor
+                    )
+                }
             }
         }
     }

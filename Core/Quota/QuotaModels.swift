@@ -1,18 +1,59 @@
 import Foundation
 
-enum QuotaApp: String, Sendable, Codable {
+enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
+    case antigravity
+}
+
+struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
+    let app: QuotaApp
+    let title: String
+    let vendor: String
+    let logoName: String
+    let fallback: String
+    let supportsLocalCost: Bool
+
+    var id: QuotaApp { app }
+
+    static let primaryProviders: [QuotaProviderDescriptor] = [
+        QuotaProviderDescriptor(
+            app: .codex,
+            title: "Codex",
+            vendor: "OpenAI",
+            logoName: "codex",
+            fallback: "C",
+            supportsLocalCost: true
+        ),
+        QuotaProviderDescriptor(
+            app: .claude,
+            title: "Claude Code",
+            vendor: "Anthropic",
+            logoName: "claude",
+            fallback: "K",
+            supportsLocalCost: true
+        ),
+        QuotaProviderDescriptor(
+            app: .antigravity,
+            title: "Antigravity",
+            vendor: "Google",
+            logoName: "antigravity",
+            fallback: "A",
+            supportsLocalCost: false
+        ),
+    ]
 }
 
 enum QuotaSnapshotSource: String, Sendable, Codable {
     case api
+    case local
     case cache
     case cliFallback
 
     var displayName: String {
         switch self {
         case .api: return "API"
+        case .local: return "本机"
         case .cache: return "缓存"
         case .cliFallback: return "Claude CLI"
         }
@@ -31,6 +72,25 @@ struct QuotaRefreshState: Sendable, Equatable {
     var lastError: String?
     var inFlight: Bool = false
     var source: QuotaSnapshotSource?
+}
+
+struct PrimaryQuotaState: Sendable, Equatable {
+    var snapshot: QuotaSnapshot?
+    var error: String?
+    var source: QuotaSnapshotSource?
+    var refresh = QuotaRefreshState()
+}
+
+struct AntigravityAccount: Sendable, Equatable {
+    var email: String?
+    var planType: String?
+}
+
+enum AntigravityAvailability: Sendable, Equatable {
+    case notInstalled
+    case installed
+    case running
+    case unavailable(String)
 }
 
 struct QuotaWindow: Sendable, Equatable, Codable {
@@ -52,6 +112,8 @@ struct QuotaSnapshot: Sendable, Equatable, Codable {
     var weekly: QuotaWindow?
     var weeklyOpus: QuotaWindow?      // 仅 Claude
     var weeklySonnet: QuotaWindow?    // 仅 Claude
+    var geminiWindow: QuotaWindow?    // 仅 Antigravity，Gemini 5h 额度
+    var geminiWeekly: QuotaWindow?   // 仅 Antigravity，Gemini 周额度
     var planType: String?
     var fetchedAt: Date
 }

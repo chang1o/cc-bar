@@ -57,6 +57,8 @@ struct SettingsRootView: View {
                     fallback: "C",
                     email: appState.codexAccount?.email,
                     plan: appState.codexAccount?.planType,
+                    availability: appState.codexAccount == nil ? .notDetected : .connected,
+                    canToggle: appState.codexAccount != nil,
                     isOn: Binding(get: { settings.showCodex }, set: { settings.showCodex = $0 })
                 )
                 AccountRow(
@@ -67,7 +69,24 @@ struct SettingsRootView: View {
                     fallback: "K",
                     email: appState.claudeAccount?.email,
                     plan: appState.claudeAccount?.subscriptionType,
+                    availability: appState.claudeAccount == nil ? .notDetected : .connected,
+                    canToggle: appState.claudeAccount != nil,
                     isOn: Binding(get: { settings.showClaude }, set: { settings.showClaude = $0 })
+                )
+                AccountRow(
+                    title: "Antigravity",
+                    subtitle: "Google",
+                    tint: .antigravityAccent,
+                    logoName: "antigravity",
+                    fallback: "A",
+                    email: appState.antigravityAccount?.email,
+                    plan: appState.antigravityAccount?.planType,
+                    availability: antigravityAccountAvailability,
+                    canToggle: true,
+                    isOn: Binding(
+                        get: { settings.showAntigravity },
+                        set: { settings.showAntigravity = $0 }
+                    )
                 )
             }
 
@@ -92,17 +111,19 @@ struct SettingsRootView: View {
             desc: "What appears next to the icon.",
             chineseDesc: "图标旁显示什么"
         ) {
-            PrefsRow(label: "Show Codex", chinese: "显示 Codex") {
-                Toggle("", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
-            }
-            PrefsRow(label: "Show Claude", chinese: "显示 Claude") {
-                Toggle("", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
+            ForEach(QuotaProviderDescriptor.primaryProviders) { provider in
+                PrefsRow(
+                    label: "Show \(provider.title)",
+                    chinese: "显示 \(provider.title)"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { settings.isProviderShownInMenuBar(provider.app) },
+                        set: { settings.setProviderShownInMenuBar($0, for: provider.app) }
+                    ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(.green)
+                }
             }
             PrefsRow(
                 label: "Quota period",
@@ -143,31 +164,23 @@ struct SettingsRootView: View {
                 .toggleStyle(.switch)
                 .tint(.green)
             }
-            PrefsRow(label: "Show Codex row", chinese: "显示 Codex 行") {
-                Toggle("", isOn: Binding(
-                    get: { settings.floatingShowCodex },
-                    set: { newValue in
-                        settings.floatingShowCodex = newValue
-                        FloatingPanelController.shared.sync()
-                    }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(.green)
-                .disabled(!settings.floatingEnabled)
-            }
-            PrefsRow(label: "Show Claude row", chinese: "显示 Claude 行") {
-                Toggle("", isOn: Binding(
-                    get: { settings.floatingShowClaude },
-                    set: { newValue in
-                        settings.floatingShowClaude = newValue
-                        FloatingPanelController.shared.sync()
-                    }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(.green)
-                .disabled(!settings.floatingEnabled)
+            ForEach(QuotaProviderDescriptor.primaryProviders) { provider in
+                PrefsRow(
+                    label: "Show \(provider.title) row",
+                    chinese: "显示 \(provider.title) 行"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { settings.isProviderShownInFloatingHUD(provider.app) },
+                        set: { newValue in
+                            settings.setProviderShownInFloatingHUD(newValue, for: provider.app)
+                            FloatingPanelController.shared.sync()
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
+                    .disabled(!settings.floatingEnabled)
+                }
             }
         }
     }
@@ -294,8 +307,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Privacy mode",
                 chinese: "隐私模式",
-                desc: "Hide email in the popover and account names for other Codex accounts.",
-                chineseDesc: "弹出窗口中隐藏主账号邮箱,并隐藏 Codex 副账号名称"
+                desc: "Hide provider emails in the popover and names for other Codex accounts.",
+                chineseDesc: "弹出窗口中隐藏 Provider 邮箱,并隐藏 Codex 副账号名称"
             ) {
                 Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
                     .labelsHidden()
@@ -368,7 +381,7 @@ struct SettingsRootView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Text(tr("cc-bar \(shortVersion) · made with Liquid Glass",
-                    "CCBar \(shortVersion) · 双应用额度与本地用量统计"))
+                    "CCBar \(shortVersion) · 多服务额度与本地用量统计"))
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -379,10 +392,9 @@ struct SettingsRootView: View {
     // MARK: Helpers
 
     private var lastRefreshText: String {
-        let latest = [
-            appState.codexRefreshState.lastSuccessAt,
-            appState.claudeRefreshState.lastSuccessAt
-        ].compactMap { $0 }.max()
+        let latest = QuotaApp.allCases.compactMap {
+            appState.refreshState(for: $0).lastSuccessAt
+        }.max()
         guard let latest else { return "—" }
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "HH:mm:ss"
@@ -398,6 +410,18 @@ struct SettingsRootView: View {
     private var shortVersion: String {
         let info = Bundle.main.infoDictionary
         return info?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+}
+
+private extension SettingsRootView {
+    var antigravityAccountAvailability: AccountAvailability {
+        switch appState.antigravityAvailability {
+        case .running:
+            return appState.antigravityAccount == nil ? .running : .connected
+        case .installed: return .installed
+        case .notInstalled: return .notDetected
+        case .unavailable: return .unavailable
+        }
     }
 }
 
@@ -472,6 +496,8 @@ private struct AccountRow: View {
     let fallback: String
     let email: String?
     let plan: String?
+    let availability: AccountAvailability
+    let canToggle: Bool
     @Binding var isOn: Bool
 
     var body: some View {
@@ -500,7 +526,7 @@ private struct AccountRow: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
-                    .disabled(email == nil)
+                    .disabled(!canToggle)
             }
         }
         .padding(.vertical, 12)
@@ -514,12 +540,18 @@ private struct AccountRow: View {
             }
             return email
         }
-        return tr("Not detected", "未识别")
+        switch availability {
+        case .connected: return plan ?? tr("Connected", "已连接")
+        case .running: return tr("Running · waiting for quota", "运行中 · 等待额度")
+        case .installed: return tr("Installed · not running", "已安装 · 未运行")
+        case .unavailable: return tr("Local service unavailable", "本地服务不可用")
+        case .notDetected: return tr("Not detected", "未识别")
+        }
     }
 
     @ViewBuilder
     private var statusBadge: some View {
-        if email != nil {
+        if availability == .connected {
             HStack(spacing: 4) {
                 Circle().fill(Color.green).frame(width: 6, height: 6)
                 Text(tr("Connected", "已连接"))
@@ -528,13 +560,31 @@ private struct AccountRow: View {
             }
         } else {
             HStack(spacing: 4) {
-                Circle().fill(Color.orange).frame(width: 6, height: 6)
-                Text(tr("Not detected", "未识别"))
+                Circle().fill(availability == .notDetected ? Color.orange : Color.secondary).frame(width: 6, height: 6)
+                Text(statusText)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(availability == .notDetected ? Color.orange : Color.secondary)
             }
         }
     }
+
+    private var statusText: String {
+        switch availability {
+        case .connected: tr("Connected", "已连接")
+        case .running: tr("Running", "运行中")
+        case .installed: tr("Not running", "未运行")
+        case .unavailable: tr("Unavailable", "不可用")
+        case .notDetected: tr("Not detected", "未识别")
+        }
+    }
+}
+
+private enum AccountAvailability: Equatable {
+    case connected
+    case running
+    case installed
+    case unavailable
+    case notDetected
 }
 
 // MARK: - Bilingual display names for existing enums

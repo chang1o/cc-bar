@@ -96,16 +96,16 @@ struct PopoverRootView: View {
 
     /// `now` 由 header 的 TimelineView 提供,让"Xs 前已刷新"实时滚动。
     private func headerSubtitle(now: Date) -> String {
-        let latest = [
-            appState.codexRefreshState.lastSuccessAt,
-            appState.claudeRefreshState.lastSuccessAt
-        ].compactMap { $0 }.max()
+        let apps = enabledPrimaryApps
+        let latest = apps.compactMap {
+            appState.refreshState(for: $0).lastSuccessAt
+        }.max()
 
         if let latest {
             let age = Self.relativeAge(from: latest, now: now)
             return tr("refreshed \(age) ago", "\(age) 前已刷新")
         }
-        if appState.codexQuotaError != nil || appState.claudeQuotaError != nil {
+        if apps.contains(where: { appState.quotaError(for: $0) != nil }) {
             return tr("refresh failed", "刷新失败")
         }
         return tr("waiting…", "等待数据")
@@ -115,10 +115,13 @@ struct PopoverRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        let showCodex = SettingsStore.shared.showCodex
-        let showClaude = SettingsStore.shared.showClaude
+        let providers = QuotaProviderDescriptor.primaryProviders.filter {
+            SettingsStore.shared.isProviderEnabled($0.app)
+        }
+        let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
+        let includesCodex = providers.contains(where: { $0.app == .codex })
 
-        if !showCodex && !showClaude {
+        if providers.isEmpty && !hasImported {
             VStack(spacing: 6) {
                 Text(tr("No services enabled", "未启用任何服务"))
                     .font(.system(size: 12, weight: .medium))
@@ -131,92 +134,110 @@ struct PopoverRootView: View {
             .padding(.vertical, 24)
         } else {
             VStack(spacing: 0) {
-                if showCodex {
-                    ServiceBlockView(
-                        title: "Codex",
-                        subtitle: codexSubtitle,
-                        tint: .codexAccent,
-                        logoName: "codex",
-                        fallback: "C",
-                        snapshot: appState.codexQuota,
-                        error: appState.codexQuotaError,
-                        weekSpend: weekSpend(for: .codex),
-                        todayCost: appState.codexTodayCost,
-                        serviceStatus: SettingsStore.shared.showServiceStatus ? appState.codexServiceStatus : nil
-                    )
-                }
-
-                // 其他 Codex 账号分区（visible 为 0 时自动隐藏）
-                let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
-                if hasImported {
-                    Divider().padding(.horizontal, 16)
+                if hasImported && !includesCodex {
                     OtherCodexAccountsSection()
+                    if !providers.isEmpty {
+                        Divider().padding(.horizontal, 16)
+                    }
                 }
 
-                if showClaude && (showCodex || hasImported) {
-                    Divider().padding(.horizontal, 16)
-                }
-                if showClaude {
-                    ServiceBlockView(
-                        title: "Claude Code",
-                        subtitle: claudeSubtitle,
-                        tint: .claudeAccent,
-                        logoName: "claude",
-                        fallback: "K",
-                        snapshot: appState.claudeQuota,
-                        error: appState.claudeQuotaError,
-                        weekSpend: weekSpend(for: .claude),
-                        todayCost: appState.claudeTodayCost,
-                        serviceStatus: SettingsStore.shared.showServiceStatus ? appState.claudeServiceStatus : nil
-                    )
+                ForEach(Array(providers.enumerated()), id: \.element.app) { index, provider in
+                    if index > 0 {
+                        Divider().padding(.horizontal, 16)
+                    }
+                    primaryServiceBlock(provider)
+
+                    if provider.app == .codex && hasImported {
+                        Divider().padding(.horizontal, 16)
+                        OtherCodexAccountsSection()
+                    }
                 }
             }
         }
     }
 
-    private var codexSubtitle: String {
+    private func providerSubtitle(for app: QuotaApp) -> String {
         let privacy = SettingsStore.shared.privacyMode
         var parts: [String] = []
-        if !privacy, let email = appState.codexAccount?.email, !email.isEmpty {
-            parts.append(email)
+        let email: String?
+        let plan: String?
+        let fallback: String
+        switch app {
+        case .codex:
+            email = appState.codexAccount?.email
+            plan = appState.codexAccount?.planType?.capitalized
+            fallback = "OpenAI"
+        case .claude:
+            email = appState.claudeAccount?.email
+            plan = appState.claudeAccount?.subscriptionType?.capitalized
+            fallback = "Anthropic"
+        case .antigravity:
+            email = appState.antigravityAccount?.email
+            plan = appState.antigravityAccount?.planType
+            fallback = "Google"
         }
-        if let plan = appState.codexAccount?.planType, !plan.isEmpty {
-            parts.append(plan.capitalized)
-        }
-        if parts.isEmpty { parts.append("OpenAI") }
+        if !privacy, let email, !email.isEmpty { parts.append(email) }
+        if let plan, !plan.isEmpty { parts.append(plan) }
+        if parts.isEmpty { parts.append(fallback) }
         return parts.joined(separator: " · ")
     }
 
-    private var claudeSubtitle: String {
-        let privacy = SettingsStore.shared.privacyMode
-        var parts: [String] = []
-        if !privacy, let email = appState.claudeAccount?.email, !email.isEmpty {
-            parts.append(email)
-        }
-        if let plan = appState.claudeAccount?.subscriptionType, !plan.isEmpty {
-            parts.append(plan.capitalized)
-        }
-        if parts.isEmpty { parts.append("Anthropic") }
-        return parts.joined(separator: " · ")
+    private func primaryServiceBlock(
+        _ provider: QuotaProviderDescriptor
+    ) -> some View {
+        let snap = appState.quotaSnapshot(for: provider.app)
+        return ServiceBlockView(
+            title: provider.title,
+            subtitle: providerSubtitle(for: provider.app),
+            tint: provider.app.tintColor,
+            logoName: provider.logoName,
+            fallback: provider.fallback,
+            snapshot: snap,
+            error: appState.quotaError(for: provider.app),
+            weekSpend: weekSpend(for: provider.app),
+            todayCost: todayCost(for: provider.app),
+            serviceStatus: serviceStatus(for: provider.app),
+            geminiWindow: snap?.geminiWindow,
+            geminiWeekly: snap?.geminiWeekly
+        )
     }
 
-    private func weekSpend(for app: UsageApp) -> Decimal {
+    private func weekSpend(for app: QuotaApp) -> Decimal? {
+        let usageApp: UsageApp
+        switch app {
+        case .codex: usageApp = .codex
+        case .claude: usageApp = .claude
+        case .antigravity: return nil
+        }
         let (from, to) = Self.weekBounds()
-        let totals = appState.usageService.aggregator.totals(app: app, from: from, to: to)
+        let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
         return totals.costUSD
+    }
+
+    private func todayCost(for app: QuotaApp) -> Decimal? {
+        switch app {
+        case .codex: appState.codexTodayCost
+        case .claude: appState.claudeTodayCost
+        case .antigravity: nil
+        }
+    }
+
+    private func serviceStatus(for app: QuotaApp) -> ServiceStatus? {
+        guard SettingsStore.shared.showServiceStatus else { return nil }
+        return switch app {
+        case .codex: appState.codexServiceStatus
+        case .claude: appState.claudeServiceStatus
+        case .antigravity: nil as ServiceStatus?
+        }
     }
 
     // MARK: Header state (live / stale / offline)
 
     private var headerState: CCRefreshState? {
         let settings = SettingsStore.shared
-        let codex = appState.codexRefreshState
-        let claude = appState.claudeRefreshState
-        let codexLast = settings.showCodex ? codex.lastSuccessAt : nil
-        let claudeLast = settings.showClaude ? claude.lastSuccessAt : nil
-        let latest = [codexLast, claudeLast].compactMap { $0 }.max()
-        let hasError = (settings.showCodex && codex.lastError != nil)
-            || (settings.showClaude && claude.lastError != nil)
+        let states = enabledPrimaryApps.map { appState.refreshState(for: $0) }
+        let latest = states.compactMap(\.lastSuccessAt).max()
+        let hasError = states.contains(where: { $0.lastError != nil })
 
         guard let latest else {
             return hasError ? .offline : nil
@@ -227,6 +248,12 @@ struct PopoverRootView: View {
         if age <= interval * 1.5 { return .live }
         if age <= interval * 3 { return .stale }
         return .offline
+    }
+
+    private var enabledPrimaryApps: [QuotaApp] {
+        QuotaProviderDescriptor.primaryProviders.compactMap {
+            SettingsStore.shared.isProviderEnabled($0.app) ? $0.app : nil
+        }
     }
 
     // MARK: Open main window
@@ -286,15 +313,23 @@ private struct ServiceBlockView: View {
     let fallback: String
     let snapshot: QuotaSnapshot?
     let error: String?
-    let weekSpend: Decimal
+    let weekSpend: Decimal?
     let todayCost: Decimal?
     let serviceStatus: ServiceStatus?
+    var geminiWindow: QuotaWindow? = nil
+    var geminiWeekly: QuotaWindow? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
             bodyRow
             weeklyRow
+            if let gemini = geminiWindow {
+                geminiRow(gemini)
+            }
+            if let geminiWk = geminiWeekly {
+                geminiWeeklyRow(geminiWk)
+            }
             if let message = shortError(error) {
                 Text(message)
                     .font(.system(size: 11))
@@ -379,9 +414,11 @@ private struct ServiceBlockView: View {
 
                         Spacer(minLength: 8)
 
-                        HStack(spacing: 10) {
-                            statInline(value: formatCostInt(todayCost), english: "today", chinese: "今日")
-                            statInline(value: formatCostInt(weekSpend), english: "this week", chinese: "本周")
+                        if showsCost {
+                            HStack(spacing: 10) {
+                                statInline(value: formatCostInt(todayCost), english: "today", chinese: "今日")
+                                statInline(value: formatCostInt(weekSpend), english: "this week", chinese: "本周")
+                            }
                         }
                     }
 
@@ -390,11 +427,13 @@ private struct ServiceBlockView: View {
                             .font(.system(size: 9.5))
                             .foregroundStyle(.quaternary)
 
-                        Spacer(minLength: 0)
+                        if showsCost {
+                            Spacer(minLength: 0)
 
-                        BilingualInline(english: "cost", chinese: "花费")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.quaternary)
+                            BilingualInline(english: "cost", chinese: "花费")
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(.quaternary)
+                        }
                     }
                 }
             }
@@ -418,6 +457,52 @@ private struct ServiceBlockView: View {
                 .foregroundStyle(weeklyColor)
 
             ResetTimeText(resetsAt: snapshot?.weekly?.resetsAt)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.quaternary)
+        }
+    }
+
+    private func geminiRow(_ gemini: QuotaWindow) -> some View {
+        let remaining = gemini.remainingPercent
+        let color = statusColor(remainingPercent: remaining, tint: tint)
+        return HStack(spacing: 10) {
+            Text("GM")
+                .font(.system(size: 9, weight: .semibold))
+                .kerning(0.6)
+                .foregroundStyle(.quaternary)
+                .frame(width: 36, alignment: .leading)
+
+            ProgressBar(value: remaining / 100, tint: color, height: 2.5)
+
+            Text("\(Int(remaining.rounded()))%")
+                .font(.system(size: 10.5, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(color)
+
+            ResetTimeText(resetsAt: gemini.resetsAt)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.quaternary)
+        }
+    }
+
+    private func geminiWeeklyRow(_ geminiWk: QuotaWindow) -> some View {
+        let remaining = geminiWk.remainingPercent
+        let color = statusColor(remainingPercent: remaining, tint: tint)
+        return HStack(spacing: 10) {
+            Text("GW")
+                .font(.system(size: 9, weight: .semibold))
+                .kerning(0.6)
+                .foregroundStyle(.quaternary)
+                .frame(width: 36, alignment: .leading)
+
+            ProgressBar(value: remaining / 100, tint: color, height: 2.5)
+
+            Text("\(Int(remaining.rounded()))%")
+                .font(.system(size: 10.5, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(color)
+
+            ResetTimeText(resetsAt: geminiWk.resetsAt)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.quaternary)
         }
@@ -463,6 +548,10 @@ private struct ServiceBlockView: View {
     private var weeklyPercentText: String {
         guard let window = snapshot?.weekly else { return "--%" }
         return "\(Int(window.remainingPercent.rounded()))%"
+    }
+
+    private var showsCost: Bool {
+        weekSpend != nil
     }
 
     /// 取整美元金额:`<$1` 用于 0 ~ 0.99,`$0` 仅在 nil/0 时显示。

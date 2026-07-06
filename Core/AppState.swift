@@ -7,6 +7,8 @@ import Observation
 final class AppState {
     var codexAccount: CodexAccount?
     var claudeAccount: ClaudeAccount?
+    var antigravityAccount: AntigravityAccount?
+    var antigravityAvailability: AntigravityAvailability = .notInstalled
     var codexError: String?
     var claudeError: String?
 
@@ -29,14 +31,56 @@ final class AppState {
     /// 首次启动时由 bootstrap 设为 true,触发 Onboarding 窗口
     var shouldShowOnboarding: Bool = false
 
-    var codexQuota: QuotaSnapshot?
-    var claudeQuota: QuotaSnapshot?
-    var codexQuotaError: String?
-    var claudeQuotaError: String?
-    var codexQuotaSource: QuotaSnapshotSource?
-    var claudeQuotaSource: QuotaSnapshotSource?
-    var codexRefreshState = QuotaRefreshState()
-    var claudeRefreshState = QuotaRefreshState()
+    var primaryQuotaStates: [QuotaApp: PrimaryQuotaState] = [:]
+
+    var codexQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .codex) }
+        set { updatePrimaryState(.codex) { $0.snapshot = newValue } }
+    }
+    var claudeQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .claude) }
+        set { updatePrimaryState(.claude) { $0.snapshot = newValue } }
+    }
+    var antigravityQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.snapshot = newValue } }
+    }
+    var codexQuotaError: String? {
+        get { quotaError(for: .codex) }
+        set { updatePrimaryState(.codex) { $0.error = newValue } }
+    }
+    var claudeQuotaError: String? {
+        get { quotaError(for: .claude) }
+        set { updatePrimaryState(.claude) { $0.error = newValue } }
+    }
+    var antigravityQuotaError: String? {
+        get { quotaError(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.error = newValue } }
+    }
+    var codexQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .codex) }
+        set { updatePrimaryState(.codex) { $0.source = newValue } }
+    }
+    var claudeQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .claude) }
+        set { updatePrimaryState(.claude) { $0.source = newValue } }
+    }
+    var antigravityQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.source = newValue } }
+    }
+    var codexRefreshState: QuotaRefreshState {
+        get { refreshState(for: .codex) }
+        set { updatePrimaryState(.codex) { $0.refresh = newValue } }
+    }
+    var claudeRefreshState: QuotaRefreshState {
+        get { refreshState(for: .claude) }
+        set { updatePrimaryState(.claude) { $0.refresh = newValue } }
+    }
+    var antigravityRefreshState: QuotaRefreshState {
+        get { refreshState(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.refresh = newValue } }
+    }
     var quotaHistory = QuotaHistoryPayload()
 
     var codexTodayCost: Decimal?
@@ -76,6 +120,7 @@ final class AppState {
         await loadCodex()
         maybeShowKeychainPrompt()
         await loadClaude()
+        antigravityAvailability = await AntigravityQuotaClient.detectAvailability()
         logCredentialSummary()
 
         if !SettingsStore.shared.didCompleteOnboarding {
@@ -144,6 +189,7 @@ final class AppState {
         await loadClaude()
         await loadCodexQuota(reason: reason)
         await loadClaudeQuota(reason: reason)
+        await loadAntigravityQuota(reason: reason)
         await loadAllImportedCodexQuotas(reason: reason)
         logQuotaSummary()
     }
@@ -169,22 +215,10 @@ final class AppState {
     }
 
     func quotaStatusLine(for app: QuotaApp) -> String? {
-        let snapshot: QuotaSnapshot?
-        let source: QuotaSnapshotSource?
-        let error: String?
-        let state: QuotaRefreshState
-        switch app {
-        case .codex:
-            snapshot = codexQuota
-            source = codexQuotaSource
-            error = codexQuotaError
-            state = codexRefreshState
-        case .claude:
-            snapshot = claudeQuota
-            source = claudeQuotaSource
-            error = claudeQuotaError
-            state = claudeRefreshState
-        }
+        let snapshot = quotaSnapshot(for: app)
+        let source = quotaSource(for: app)
+        let error = quotaError(for: app)
+        let state = refreshState(for: app)
 
         var parts: [String] = []
         if let snapshot, !format(snapshot).isEmpty {
@@ -207,17 +241,13 @@ final class AppState {
 
     private func loadQuotaCache() {
         quotaCache = QuotaCache.load()
-        if let record = quotaCache.codex {
-            codexQuota = record.snapshot
-            codexQuotaSource = .cache
-            codexRefreshState.lastSuccessAt = record.updatedAt
-            codexRefreshState.source = .cache
-        }
-        if let record = quotaCache.claude {
-            claudeQuota = record.snapshot
-            claudeQuotaSource = .cache
-            claudeRefreshState.lastSuccessAt = record.updatedAt
-            claudeRefreshState.source = .cache
+        for (app, record) in quotaCache.providers {
+            var state = primaryQuotaStates[app] ?? PrimaryQuotaState()
+            state.snapshot = record.snapshot
+            state.source = .cache
+            state.refresh.lastSuccessAt = record.updatedAt
+            state.refresh.source = .cache
+            primaryQuotaStates[app] = state
         }
         for (id, record) in quotaCache.importedCodex ?? [:] {
             importedCodexQuotas[id] = record.snapshot
@@ -227,6 +257,28 @@ final class AppState {
             state.source = .cache
             importedCodexRefreshStates[id] = state
         }
+    }
+
+    func quotaSnapshot(for app: QuotaApp) -> QuotaSnapshot? {
+        primaryQuotaStates[app]?.snapshot
+    }
+
+    func quotaError(for app: QuotaApp) -> String? {
+        primaryQuotaStates[app]?.error
+    }
+
+    func quotaSource(for app: QuotaApp) -> QuotaSnapshotSource? {
+        primaryQuotaStates[app]?.source
+    }
+
+    func refreshState(for app: QuotaApp) -> QuotaRefreshState {
+        primaryQuotaStates[app]?.refresh ?? QuotaRefreshState()
+    }
+
+    private func updatePrimaryState(_ app: QuotaApp, _ update: (inout PrimaryQuotaState) -> Void) {
+        var state = primaryQuotaStates[app] ?? PrimaryQuotaState()
+        update(&state)
+        primaryQuotaStates[app] = state
     }
 
     private func loadQuotaHistory() {
@@ -873,6 +925,51 @@ final class AppState {
         }
     }
 
+    private func loadAntigravityQuota(reason: QuotaRefreshReason) async {
+        guard SettingsStore.shared.showAntigravity else { return }
+        guard beginAntigravityRefresh(reason: reason) else { return }
+        defer { antigravityRefreshState.inFlight = false }
+
+        let availability = await AntigravityQuotaClient.detectAvailability()
+        antigravityAvailability = availability
+        guard availability == .running else {
+            let message: String
+            switch availability {
+            case .notInstalled:
+                message = "未检测到 Antigravity"
+            case .installed:
+                message = "Antigravity 未运行"
+            case .unavailable(let detail):
+                message = detail
+            case .running:
+                message = "Antigravity 本地服务不可用"
+            }
+            markAntigravityFailure(message)
+            return
+        }
+
+        let result = await AntigravityQuotaClient.fetch()
+        switch result {
+        case .success(let fetched):
+            if let previousEmail = antigravityAccount?.email,
+               let nextEmail = fetched.account.email,
+               !previousEmail.isEmpty,
+               !nextEmail.isEmpty,
+               previousEmail != nextEmail
+            {
+                antigravityQuota = nil
+                antigravityQuotaSource = nil
+                quotaCache.antigravity = nil
+            }
+            antigravityAccount = fetched.account
+            antigravityAvailability = .running
+            storeAntigravity(snapshot: fetched.snapshot, source: .local)
+        case .failure(let error):
+            antigravityAvailability = .unavailable(error.description)
+            markAntigravityFailure(error.description, error: error)
+        }
+    }
+
     private func loadClaudeCLIFallback(apiError: QuotaError) async {
         let now = Date()
         if let claudeFallbackBackoffUntil, claudeFallbackBackoffUntil > now {
@@ -926,6 +1023,24 @@ final class AppState {
         return true
     }
 
+    private func beginAntigravityRefresh(reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        guard !antigravityRefreshState.inFlight else { return false }
+        if let backoffUntil = antigravityRefreshState.backoffUntil, backoffUntil > now {
+            markAntigravityFailure(backoffMessage(until: backoffUntil))
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = antigravityRefreshState.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        antigravityRefreshState.inFlight = true
+        antigravityRefreshState.lastAttemptAt = now
+        return true
+    }
+
     private func storeCodex(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
         let updatedAt = Date()
         codexQuota = snapshot
@@ -956,6 +1071,23 @@ final class AppState {
         recordClaudeQuotaHistory(snapshot: snapshot, sampledAt: updatedAt)
     }
 
+    private func storeAntigravity(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        antigravityQuota = snapshot
+        antigravityQuotaSource = source
+        antigravityQuotaError = nil
+        antigravityRefreshState.lastSuccessAt = updatedAt
+        antigravityRefreshState.lastError = nil
+        antigravityRefreshState.backoffUntil = nil
+        antigravityRefreshState.source = source
+        quotaCache.antigravity = QuotaCacheRecord(
+            snapshot: snapshot,
+            source: source,
+            updatedAt: updatedAt
+        )
+        saveQuotaCache()
+    }
+
     private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
         codexQuotaError = message
         codexRefreshState.lastError = message
@@ -969,6 +1101,14 @@ final class AppState {
         claudeRefreshState.lastError = message
         if error?.isRateLimited == true {
             claudeRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+    }
+
+    private func markAntigravityFailure(_ message: String, error: QuotaError? = nil) {
+        antigravityQuotaError = message
+        antigravityRefreshState.lastError = message
+        if error?.isRateLimited == true {
+            antigravityRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
     }
 
@@ -987,6 +1127,16 @@ final class AppState {
         } else {
             print("[Credentials 凭据] Claude 未加载: error=\(claudeError ?? "unknown")")
         }
+        switch antigravityAvailability {
+        case .running:
+            print("[Credentials 凭据] Antigravity: local language server running")
+        case .installed:
+            print("[Credentials 凭据] Antigravity 已安装但未运行")
+        case .notInstalled:
+            print("[Credentials 凭据] Antigravity 未安装")
+        case .unavailable(let detail):
+            print("[Credentials 凭据] Antigravity 检测失败: \(detail)")
+        }
     }
 
     private func logQuotaSummary() {
@@ -1001,6 +1151,11 @@ final class AppState {
             if let sonnet = q.weeklySonnet { print("       └─ weeklySonnet=\(format(window: sonnet))") }
         } else {
             print("[Quota 额度] Claude 拉取失败: error=\(claudeQuotaError ?? "unknown")")
+        }
+        if let q = antigravityQuota {
+            print("[Quota 额度] Antigravity: source=\(antigravityQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
+        } else {
+            print("[Quota 额度] Antigravity 拉取失败: error=\(antigravityQuotaError ?? "unknown")")
         }
     }
 

@@ -3,10 +3,19 @@ import AppKit
 
 // MARK: - Product accent colors
 //
-// Codex / Claude 识别色定义在 Asset Catalog (CodexAccent / ClaudeAccent)。
-// 浅色 #6C6C70 / #D97757,深色 #98989D / #E68A6E。
-// Xcode 自动从 .xcassets 生成 `Color.codexAccent` / `Color.claudeAccent`,直接使用即可。
+// Provider 识别色定义在 Asset Catalog (*Accent)。
+// Xcode 自动从 .xcassets 生成对应 Color,通过 QuotaApp.tintColor 统一访问。
 // 见 docs/03-设计风格.md §4.2。
+
+extension QuotaApp {
+    var tintColor: Color {
+        switch self {
+        case .codex: .codexAccent
+        case .claude: .claudeAccent
+        case .antigravity: .antigravityAccent
+        }
+    }
+}
 
 // MARK: - Status color
 

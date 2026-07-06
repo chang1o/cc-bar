@@ -6,20 +6,28 @@ struct MenuBarLabel: View {
 
     var body: some View {
         Image(nsImage: MenuBarBadgeImage.make(
-            codex: appState.codexQuota,
-            claude: appState.claudeQuota,
-            showCodex: SettingsStore.shared.effectiveMenuBarShowCodex,
-            showClaude: SettingsStore.shared.effectiveMenuBarShowClaude,
+            providers: visibleProviders,
+            snapshots: snapshots,
             window: SettingsStore.shared.menuBarWindow
         ))
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(MenuBarBadgeImage.accessibilityLabel(
-            codex: appState.codexQuota,
-            claude: appState.claudeQuota,
-            showCodex: SettingsStore.shared.effectiveMenuBarShowCodex,
-            showClaude: SettingsStore.shared.effectiveMenuBarShowClaude,
+            providers: visibleProviders,
+            snapshots: snapshots,
             window: SettingsStore.shared.menuBarWindow
         ))
+    }
+
+    private var visibleProviders: [QuotaProviderDescriptor] {
+        QuotaProviderDescriptor.primaryProviders.filter {
+            SettingsStore.shared.effectiveMenuBarVisibility(for: $0.app)
+        }
+    }
+
+    private var snapshots: [QuotaApp: QuotaSnapshot] {
+        Dictionary(uniqueKeysWithValues: QuotaApp.allCases.compactMap { app in
+            appState.quotaSnapshot(for: app).map { (app, $0) }
+        })
     }
 }
 
@@ -48,18 +56,16 @@ enum MenuBarBadgeImage {
     )
 
     static func make(
-        codex: QuotaSnapshot?,
-        claude: QuotaSnapshot?,
-        showCodex: Bool,
-        showClaude: Bool,
+        providers: [QuotaProviderDescriptor],
+        snapshots: [QuotaApp: QuotaSnapshot],
         window: MenuBarWindowChoice
     ) -> NSImage {
-        var items: [BadgeItem] = []
-        if showCodex {
-            items.append(BadgeItem(logo: "codex", fallback: "C", text: pctText(codex, window: window)))
-        }
-        if showClaude {
-            items.append(BadgeItem(logo: "claude", fallback: "K", text: pctText(claude, window: window)))
+        let items = providers.map { provider in
+            BadgeItem(
+                logo: provider.logoName,
+                fallback: provider.fallback,
+                text: pctText(snapshots[provider.app], window: window)
+            )
         }
 
         let attrs = textAttributes
@@ -100,15 +106,13 @@ enum MenuBarBadgeImage {
     }
 
     static func accessibilityLabel(
-        codex: QuotaSnapshot?,
-        claude: QuotaSnapshot?,
-        showCodex: Bool,
-        showClaude: Bool,
+        providers: [QuotaProviderDescriptor],
+        snapshots: [QuotaApp: QuotaSnapshot],
         window: MenuBarWindowChoice
     ) -> String {
-        var parts: [String] = []
-        if showCodex { parts.append("Codex \(pctText(codex, window: window))") }
-        if showClaude { parts.append("Claude \(pctText(claude, window: window))") }
+        let parts = providers.map {
+            "\($0.title) \(pctText(snapshots[$0.app], window: window))"
+        }
         return parts.isEmpty ? "CCBar" : parts.joined(separator: ", ")
     }
 

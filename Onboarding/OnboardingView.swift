@@ -81,8 +81,8 @@ private struct WelcomeStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Track Codex and Claude Code quota right from your menu bar. We'll detect your accounts automatically.",
-                "在菜单栏即时查看 Codex 与 Claude Code 的额度,我们将自动检测你的账号。"
+                "Track Codex, Claude Code, and Antigravity quota right from your menu bar. We'll detect local providers automatically.",
+                "在菜单栏即时查看 Codex、Claude Code 与 Antigravity 的额度,我们将自动检测本机服务。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -164,6 +164,17 @@ private struct DetectAccountsStep: View {
                     fallback: "K",
                     isDetected: appState.claudeAccount != nil
                 )
+                DetectedAccountRow(
+                    title: "Antigravity",
+                    subtitle: "Google",
+                    plan: appState.antigravityAccount?.planType,
+                    email: appState.antigravityAccount?.email,
+                    source: tr("Local Language Server", "本机 Language Server"),
+                    tint: .antigravityAccent,
+                    logoName: "antigravity",
+                    fallback: "A",
+                    isDetected: antigravityDetected
+                )
             }
             .padding(.top, 18)
 
@@ -191,6 +202,13 @@ private struct DetectAccountsStep: View {
         case .file: return "~/.claude/.credentials.json"
         case .keychain: return "Keychain · claude-code"
         case .none: return "—"
+        }
+    }
+
+    private var antigravityDetected: Bool {
+        switch appState.antigravityAvailability {
+        case .notInstalled: false
+        case .installed, .running, .unavailable: true
         }
     }
 }
@@ -311,13 +329,18 @@ private struct ConfigureStep: View {
             VStack(spacing: 14) {
                 ConfigureRow(title: "Show in menu bar",
                              chineseTitle: "菜单栏",
-                             subtitle: "Show Codex / Claude percentage next to the menu bar icon.",
+                             subtitle: "Show enabled providers next to the menu bar icon.",
                              chineseSubtitle: "在菜单栏图标旁显示百分比") {
                     HStack(spacing: 12) {
                         Toggle("Codex", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
                             .toggleStyle(.switch)
                         Toggle("Claude", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
                             .toggleStyle(.switch)
+                        Toggle("Antigravity", isOn: Binding(
+                            get: { settings.menuBarShowAntigravity },
+                            set: { settings.menuBarShowAntigravity = $0 }
+                        ))
+                        .toggleStyle(.switch)
                     }
                 }
 

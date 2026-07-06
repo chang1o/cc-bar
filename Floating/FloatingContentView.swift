@@ -12,27 +12,20 @@ struct FloatingContentView: View {
     let settings: SettingsStore
 
     var body: some View {
-        let showCodex = settings.effectiveFloatingShowCodex
-        let showClaude = settings.effectiveFloatingShowClaude
+        let providers = QuotaProviderDescriptor.primaryProviders.filter {
+            settings.effectiveFloatingVisibility(for: $0.app)
+        }
 
         VStack(alignment: .leading, spacing: 7) {
-            if showCodex {
+            ForEach(providers) { provider in
                 FloatingRow(
-                    logoName: "codex",
-                    fallback: "C",
-                    tint: .codexAccent,
-                    window: appState.codexQuota?.fiveHour
+                    logoName: provider.logoName,
+                    fallback: provider.fallback,
+                    tint: provider.app.tintColor,
+                    window: appState.quotaSnapshot(for: provider.app)?.fiveHour
                 )
             }
-            if showClaude {
-                FloatingRow(
-                    logoName: "claude",
-                    fallback: "K",
-                    tint: .claudeAccent,
-                    window: appState.claudeQuota?.fiveHour
-                )
-            }
-            if !showCodex && !showClaude {
+            if providers.isEmpty {
                 Text(tr("No services", "未启用"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
