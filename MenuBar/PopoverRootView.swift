@@ -65,7 +65,7 @@ struct PopoverRootView: View {
             // AppState.refreshNow() 内部已经做了 in-flight 去重,不会重复发请求。
             .help(tr("Refresh now", "立即刷新"))
 
-            Button { activateAndOpenMain() } label: {
+            Button { activateAndOpenMain(tab: .stats) } label: {
                 Image(systemName: "chart.bar.xaxis")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -73,7 +73,7 @@ struct PopoverRootView: View {
             .buttonStyle(PopoverIconButtonStyle())
             .help(tr("Open Statistics", "查看统计"))
 
-            Button { activateAndOpenMain() } label: {
+            Button { activateAndOpenMain(tab: .settings) } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -260,7 +260,10 @@ struct PopoverRootView: View {
 
     /// 菜单栏 App (`.accessory`) 默认不抢焦点,打开窗口后会被压在其他 App 后面;
     /// 先 `activate(ignoringOtherApps:)` 把进程置前,再 `openWindow` 才会出现在最前。
-    private func activateAndOpenMain() {
+    /// 先设置 `mainTab` 再 openWindow,确保点「统计」/「设置」总是落到对应 tab,
+    /// 不受上次窗口停留 tab 影响(与 ⌘, / ⌘1 命令行为一致)。
+    private func activateAndOpenMain(tab: MainTab) {
+        appState.mainTab = tab
         NSApp.activate(ignoringOtherApps: true)
         openWindow(id: "main")
     }

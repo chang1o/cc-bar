@@ -9,6 +9,18 @@ struct ModelPrice: Sendable {
     var cacheCreation: Decimal
 }
 
+/// 同一模型按单次请求完整输入量切换的上下文阶梯价。
+/// `shortContext` / `longContext` 均为完整费率，避免值类型递归引用。
+private struct ContextPriceTiers: Sendable {
+    let longContextThreshold: Int
+    let shortContext: ModelPrice
+    let longContext: ModelPrice
+
+    func rates(for inputTotal: Int) -> ModelPrice {
+        inputTotal > longContextThreshold ? longContext : shortContext
+    }
+}
+
 /// 限时覆盖价：某模型从 `from` 这天（UTC 0 点）起改用 `price`，用于极少数「同一模型中途涨价/降价」
 /// 的场景（如 Sonnet 5）。绝大多数模型价格固定，不需要出现在这张表里。
 private struct PricedPeriod: Sendable {
@@ -52,7 +64,6 @@ enum Pricing {
         "gpt-5.5":           .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "gpt-5.5-codex":     .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "gpt-5.5-pro":       .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
-        "gpt-5.6":           .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "codex-mini-latest": .init(input: 1.50, output: 6,   cacheRead: 0.375, cacheCreation: 0),
 
         // —— DeepSeek 系列（与 cc-switch seed_model_pricing 对齐）——
@@ -66,6 +77,32 @@ enum Pricing {
         "deepseek-chat":      .init(input: 0.27,  output: 1.10,  cacheRead: 0.07,     cacheCreation: 0),
         "deepseek-reasoner":  .init(input: 0.55,  output: 2.19,  cacheRead: 0.14,     cacheCreation: 0),
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
+    ]
+
+    /// OpenAI Standard API 的 GPT-5.6 上下文阶梯价（USD / 百万 token）。
+    /// 完整输入严格超过 272K 时，该次请求的输入、缓存读写和输出全部使用长上下文费率。
+    /// `gpt-5.6` 是 Sol 的别名；Pro 是 reasoning.mode，不是独立 model slug。
+    private static let contextPriceTiers: [String: ContextPriceTiers] = [
+        "gpt-5.6": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 5, output: 30, cacheRead: 0.50, cacheCreation: 6.25),
+            longContext: .init(input: 10, output: 45, cacheRead: 1, cacheCreation: 12.5)
+        ),
+        "gpt-5.6-sol": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 5, output: 30, cacheRead: 0.50, cacheCreation: 6.25),
+            longContext: .init(input: 10, output: 45, cacheRead: 1, cacheCreation: 12.5)
+        ),
+        "gpt-5.6-terra": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 2.5, output: 15, cacheRead: 0.25, cacheCreation: 3.125),
+            longContext: .init(input: 5, output: 22.5, cacheRead: 0.5, cacheCreation: 6.25)
+        ),
+        "gpt-5.6-luna": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 1, output: 6, cacheRead: 0.1, cacheCreation: 1.25),
+            longContext: .init(input: 2, output: 9, cacheRead: 0.2, cacheCreation: 2.5)
+        )
     ]
 
     /// 少数模型中途涨价/降价的时间点覆盖；不在这里出现的模型永远用 `table` 里的固定价。
@@ -84,7 +121,10 @@ enum Pricing {
     }
 
     /// 取某模型在 `date` 这天应使用的价格：`table` 里的基准价，按 `timedOverrides` 就近覆盖。
-    private static func price(for key: String, at date: Date) -> ModelPrice? {
+    private static func price(for key: String, at date: Date, inputTotal: Int) -> ModelPrice? {
+        if let tiers = contextPriceTiers[key] {
+            return tiers.rates(for: inputTotal)
+        }
         guard let base = table[key] else { return nil }
         guard let overrides = timedOverrides[key] else { return base }
         var chosen = base
@@ -125,17 +165,20 @@ enum Pricing {
     /// - Parameters:
     ///   - app: 用于隐含的 cache_read 语义；Codex 含、Claude 不含（调用方传 input 时已自处理）。
     ///   - at: 该条用量记录实际发生的时间，仅在模型存在 `timedOverrides` 时才会影响取价（如 Sonnet 5）。
-    ///   - input/output/cacheRead/cacheCreation: 直接乘价。
+    ///   - input/output/cacheRead/cacheCreation: 已拆分的四类 token，分别乘对应费率。
+    ///   - inputTotal: 该请求完整输入 token；GPT-5.6 用它判断长上下文，缺省时由前三类输入相加。
     static func cost(
         model: String,
         input: Int,
         output: Int,
         cacheRead: Int,
         cacheCreation: Int,
-        at date: Date
+        at date: Date,
+        inputTotal: Int? = nil
     ) -> Decimal {
         let key = normalize(model: model)
-        guard let p = price(for: key, at: date) else { return 0 }
+        let fullInput = max(0, inputTotal ?? (input + cacheRead + cacheCreation))
+        guard let p = price(for: key, at: date, inputTotal: fullInput) else { return 0 }
         let i = Decimal(input)     * p.input        / perMillion
         let o = Decimal(output)    * p.output       / perMillion
         let cr = Decimal(cacheRead) * p.cacheRead   / perMillion
@@ -144,7 +187,8 @@ enum Pricing {
     }
 
     static func hasPrice(model: String) -> Bool {
-        table[normalize(model: model)] != nil
+        let key = normalize(model: model)
+        return table[key] != nil || contextPriceTiers[key] != nil
     }
 
     /// 价格表内容指纹（SHA-256，确定性，跨进程稳定）。
@@ -155,6 +199,12 @@ enum Pricing {
             let p = table[key]!
             return "\(key):\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
         }.joined(separator: ";")
+        let tierBody = contextPriceTiers.keys.sorted().map { key -> String in
+            let tiers = contextPriceTiers[key]!
+            let short = tiers.shortContext
+            let long = tiers.longContext
+            return "\(key):\(tiers.longContextThreshold):\(short.input)/\(short.output)/\(short.cacheRead)/\(short.cacheCreation):\(long.input)/\(long.output)/\(long.cacheRead)/\(long.cacheCreation)"
+        }.joined(separator: ";")
         let overrideBody = timedOverrides.keys.sorted().map { key -> String in
             let parts = timedOverrides[key]!.sorted { $0.from < $1.from }.map { period -> String in
                 let p = period.price
@@ -162,7 +212,7 @@ enum Pricing {
             }.joined(separator: ",")
             return "\(key)@\(parts)"
         }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data("\(baseBody)|\(overrideBody)".utf8))
+        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }()
 }

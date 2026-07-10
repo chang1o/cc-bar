@@ -5,7 +5,7 @@ import Foundation
 ///   - `type=turn_context`，`payload.model` 提供当前模型（剥前缀 / 日期后缀）。
 ///   - `type=event_msg`，`payload.type=token_count`，`payload.info.last_token_usage` 是本次调用的真实 token；
 ///     使用 last_token_usage 直接累计，不再做累计 delta；info == null 时跳过。
-/// Codex `input_tokens` 含 cache_read，需在 billable 时扣掉。
+/// Codex `input_tokens` 含 cache_read；GPT-5.6 若日志提供 `cache_write_tokens` 也需从普通输入扣掉。
 enum CodexJSONLScanner {
     struct Result: Sendable {
         var entries: [UsageEntry]
@@ -73,9 +73,10 @@ enum CodexJSONLScanner {
                 }
                 let inputTotal = (last["input_tokens"] as? Int) ?? 0
                 let cachedInput = (last["cached_input_tokens"] as? Int) ?? 0
+                let cacheWrite = cacheWriteTokens(in: last)
                 let output = (last["output_tokens"] as? Int) ?? 0
-                let billableInput = max(0, inputTotal - cachedInput)
-                if output == 0 && billableInput == 0 && cachedInput == 0 { continue }
+                let billableInput = max(0, inputTotal - cachedInput - cacheWrite)
+                if output == 0 && billableInput == 0 && cachedInput == 0 && cacheWrite == 0 { continue }
 
                 let ts: Date
                 if let s = root["timestamp"] as? String,
@@ -90,8 +91,9 @@ enum CodexJSONLScanner {
                     input: billableInput,
                     output: output,
                     cacheRead: cachedInput,
-                    cacheCreation: 0,
-                    at: ts
+                    cacheCreation: cacheWrite,
+                    at: ts,
+                    inputTotal: inputTotal
                 )
                 entries.append(UsageEntry(
                     app: .codex,
@@ -101,7 +103,7 @@ enum CodexJSONLScanner {
                     inputTokens: billableInput,
                     outputTokens: output,
                     cacheReadTokens: cachedInput,
-                    cacheCreationTokens: 0,
+                    cacheCreationTokens: cacheWrite,
                     costUSD: cost
                 ))
             }
@@ -126,5 +128,20 @@ enum CodexJSONLScanner {
         if let d = f.date(from: s) { return d }
         f.formatOptions = [.withInternetDateTime]
         return f.date(from: s)
+    }
+
+    /// GPT-5.6 的 API usage 可将该字段放在顶层或 input / prompt token details。
+    /// 当前 Codex 本地日志未提供时返回 0，不对未记录的缓存写入做推测。
+    private nonisolated static func cacheWriteTokens(in usage: [String: Any]) -> Int {
+        if let value = usage["cache_write_tokens"] as? Int {
+            return value
+        }
+        for key in ["input_tokens_details", "prompt_tokens_details", "token_details"] {
+            if let details = usage[key] as? [String: Any],
+               let value = details["cache_write_tokens"] as? Int {
+                return value
+            }
+        }
+        return 0
     }
 }
