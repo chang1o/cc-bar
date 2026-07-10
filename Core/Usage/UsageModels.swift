@@ -1,12 +1,12 @@
 import Foundation
 
-enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
+nonisolated enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
     case codex
     case claude
 }
 
 /// 单次 API 调用解析出的用量记录（内存中流转，不直接持久化）。
-struct UsageEntry: Sendable, Equatable {
+nonisolated struct UsageEntry: Sendable, Equatable {
     var app: UsageApp
     var model: String
     var day: Date              // 本地时区 0 点
@@ -15,11 +15,13 @@ struct UsageEntry: Sendable, Equatable {
     var outputTokens: Int
     var cacheReadTokens: Int
     var cacheCreationTokens: Int
-    var costUSD: Decimal
+    /// `nil` = 未定价（区别于真实 $0）；由 `Pricing.cost()` 直接传入，聚合时按 0 计入总额
+    /// （`UsageAggregator.ingest`），未定价状态本身不持久化，由 `Pricing.hasPrice(model:)` 现查。
+    var costUSD: Decimal?
 }
 
 /// (day, app, model) 聚合桶；UsageAggregator 内存表的值。
-struct UsageBucket: Sendable, Equatable, Codable {
+nonisolated struct UsageBucket: Sendable, Equatable, Codable {
     var app: UsageApp
     var model: String
     var day: Date
@@ -30,7 +32,7 @@ struct UsageBucket: Sendable, Equatable, Codable {
     var costUSD: Decimal
 }
 
-struct UsageTotals: Sendable, Equatable {
+nonisolated struct UsageTotals: Sendable, Equatable {
     var inputTokens: Int = 0
     var outputTokens: Int = 0
     var cacheReadTokens: Int = 0
@@ -60,23 +62,23 @@ struct UsageTotals: Sendable, Equatable {
 
 /// Decimal <-> String 编解码，避免 Double 精度漂。
 extension Decimal {
-    var asPlainString: String {
+    nonisolated var asPlainString: String {
         var copy = self
         return NSDecimalString(&copy, Locale(identifier: "en_US_POSIX"))
     }
 
-    init?(plainString: String) {
+    nonisolated init?(plainString: String) {
         self.init(string: plainString, locale: Locale(identifier: "en_US_POSIX"))
     }
 }
 
 /// UsageBucket 的 Codable 用 Decimal 字符串。
 extension UsageBucket {
-    enum CodingKeys: String, CodingKey {
+    nonisolated enum CodingKeys: String, CodingKey {
         case app, model, day, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, costUSD
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.app = try c.decode(UsageApp.self, forKey: .app)
         self.model = try c.decode(String.self, forKey: .model)
@@ -89,7 +91,7 @@ extension UsageBucket {
         self.costUSD = Decimal(plainString: costStr) ?? 0
     }
 
-    func encode(to encoder: Encoder) throws {
+    nonisolated func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(app, forKey: .app)
         try c.encode(model, forKey: .model)
@@ -102,7 +104,7 @@ extension UsageBucket {
     }
 }
 
-enum UsageDay {
+nonisolated enum UsageDay {
     /// 本地时区 0 点。
     static func startOfDay(for date: Date) -> Date {
         Calendar.current.startOfDay(for: date)

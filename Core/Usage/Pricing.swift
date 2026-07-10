@@ -1,8 +1,8 @@
 import Foundation
 import CryptoKit
 
-/// 模型价格（USD / 百万 token）。命中不到的模型 cost 计 0，token 仍记录。
-struct ModelPrice: Sendable {
+/// 模型价格（USD / 百万 token）。命中不到的模型未定价（`Pricing.cost` 返回 nil），token 仍记录。
+nonisolated struct ModelPrice: Sendable, Codable, Equatable {
     var input: Decimal
     var output: Decimal
     var cacheRead: Decimal
@@ -11,7 +11,7 @@ struct ModelPrice: Sendable {
 
 /// 同一模型按单次请求完整输入量切换的上下文阶梯价。
 /// `shortContext` / `longContext` 均为完整费率，避免值类型递归引用。
-private struct ContextPriceTiers: Sendable {
+nonisolated private struct ContextPriceTiers: Sendable {
     let longContextThreshold: Int
     let shortContext: ModelPrice
     let longContext: ModelPrice
@@ -23,12 +23,12 @@ private struct ContextPriceTiers: Sendable {
 
 /// 限时覆盖价：某模型从 `from` 这天（UTC 0 点）起改用 `price`，用于极少数「同一模型中途涨价/降价」
 /// 的场景（如 Sonnet 5）。绝大多数模型价格固定，不需要出现在这张表里。
-private struct PricedPeriod: Sendable {
+nonisolated private struct PricedPeriod: Sendable {
     let from: Date
     let price: ModelPrice
 }
 
-enum Pricing {
+nonisolated enum Pricing {
     /// 价格表与 cc-switch `seed_model_pricing` / CodexBar `CostUsagePricing` 对齐（2026 上半年价位）。
     /// 命中不到时返回 nil。键为归一化后的模型名（剥 `openai/` 前缀和末尾 `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
     static let table: [String: ModelPrice] = [
@@ -105,7 +105,8 @@ enum Pricing {
         )
     ]
 
-    /// 少数模型中途涨价/降价的时间点覆盖；不在这里出现的模型永远用 `table` 里的固定价。
+    /// 少数模型中途涨价/降价的时间点覆盖；这里的每个 key 必须同时在 `table` 提供最早
+    /// 时段的基础价，不在这里出现的模型永远用 `table` 里的固定价。
     /// 键为归一化后的模型名，每条按 `from` 升序排列；只要用量记录的日期 ≥ `from` 就换成对应新价，
     /// 取满足条件里最晚的一档（早于所有 `from` 时退回 `table` 的基准价）。
     private static let timedOverrides: [String: [PricedPeriod]] = [
@@ -120,23 +121,36 @@ enum Pricing {
         return calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
-    /// 取某模型在 `date` 这天应使用的价格：`table` 里的基准价，按 `timedOverrides` 就近覆盖。
+    /// A 类模型：受本地特殊规则（阶梯价 / 分段生效价）管辖的 key。远端价格目录对这些 key 零参与——
+    /// 一旦让远端「今天的单一价」覆盖进来，272K 阶梯和分段计价会被破坏、历史计价错乱。
+    private static let localOverrideKeys: Set<String> = {
+        precondition(
+            timedOverrides.keys.allSatisfy { table[$0] != nil },
+            "timedOverrides 中的模型必须在 Pricing.table 中提供基础价"
+        )
+        return Set(contextPriceTiers.keys).union(timedOverrides.keys)
+    }()
+
+    /// 取某模型在 `date` 这天应使用的价格。
+    /// A 类（`localOverrideKeys`）：走本地阶梯价 / 分段生效价，远端价格目录零参与。
+    /// B 类（其余）：远端价格目录优先，命中不到才回落内置 `table`；两者都没有 → nil（未定价）。
     private static func price(for key: String, at date: Date, inputTotal: Int) -> ModelPrice? {
         if let tiers = contextPriceTiers[key] {
             return tiers.rates(for: inputTotal)
         }
-        guard let base = table[key] else { return nil }
-        guard let overrides = timedOverrides[key] else { return base }
-        var chosen = base
-        for period in overrides where period.from <= date {
-            chosen = period.price
+        if let overrides = timedOverrides[key] {
+            var chosen = table[key]
+            for period in overrides where period.from <= date {
+                chosen = period.price
+            }
+            return chosen
         }
-        return chosen
+        return PricingCatalogStore.shared.rate(for: key) ?? table[key]
     }
 
     /// 归一化模型名：去 `openai/` 前缀；剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；
     /// 兼容 Vertex AI 的 `@日期` 写法。
-    static func normalize(model: String) -> String {
+    nonisolated static func normalize(model: String) -> String {
         var m = model
         if m.hasPrefix("openai/") {
             m.removeFirst("openai/".count)
@@ -167,6 +181,8 @@ enum Pricing {
     ///   - at: 该条用量记录实际发生的时间，仅在模型存在 `timedOverrides` 时才会影响取价（如 Sonnet 5）。
     ///   - input/output/cacheRead/cacheCreation: 已拆分的四类 token，分别乘对应费率。
     ///   - inputTotal: 该请求完整输入 token；GPT-5.6 用它判断长上下文，缺省时由前三类输入相加。
+    /// - Returns: 命中价格返回计算结果（含真实 $0）；命中不到任何价格源时返回 `nil`（未定价，
+    ///   区别于真实 $0，调用方不应把 nil 当 0 计入金额汇总——`UsageAggregator.ingest` 已按此处理）。
     static func cost(
         model: String,
         input: Int,
@@ -175,10 +191,10 @@ enum Pricing {
         cacheCreation: Int,
         at date: Date,
         inputTotal: Int? = nil
-    ) -> Decimal {
+    ) -> Decimal? {
         let key = normalize(model: model)
         let fullInput = max(0, inputTotal ?? (input + cacheRead + cacheCreation))
-        guard let p = price(for: key, at: date, inputTotal: fullInput) else { return 0 }
+        guard let p = price(for: key, at: date, inputTotal: fullInput) else { return nil }
         let i = Decimal(input)     * p.input        / perMillion
         let o = Decimal(output)    * p.output       / perMillion
         let cr = Decimal(cacheRead) * p.cacheRead   / perMillion
@@ -186,15 +202,24 @@ enum Pricing {
         return i + o + cr + cc
     }
 
+    /// 该模型是否已有可用价格（本地表 / 阶梯价 / 远端价格目录任一命中）。唯一权威接口，
+    /// 供 UI 层区分「已定价（含真实 $0）/ 未定价」（目前尚无调用点，供后续统计 UI 使用）。
     static func hasPrice(model: String) -> Bool {
         let key = normalize(model: model)
-        return table[key] != nil || contextPriceTiers[key] != nil
+        if localOverrideKeys.contains(key) { return true }
+        if table[key] != nil { return true }
+        return PricingCatalogStore.shared.rate(for: key) != nil
     }
 
-    /// 价格表内容指纹（SHA-256，确定性，跨进程稳定）。
-    /// 扫描状态 / 汇总缓存持久化它；表一变（新增模型、改价、修正数值、调整限时覆盖）→ 指纹变 →
-    /// 缓存自动失效并全量重扫重算历史桶，无需手动 bump 版本号，避免「改了价却忘了重算」。
-    static let fingerprint: String = {
+    /// 价格表内容指纹（SHA-256，确定性）。
+    /// 扫描状态 / 汇总缓存持久化它；内容一变（新增模型、改价、修正数值、调整限时覆盖，或 B 类模型
+    /// 的远端合并价变化）→ 指纹变 → 缓存自动失效并全量重扫重算历史桶，无需手动 bump 版本号。
+    ///
+    /// - Parameter knownModels: 当前用量中实际出现过的（归一化后）模型名集合。B 类远端合并价只对
+    ///   这个集合里的模型算入哈希——而不是把整个 LiteLLM/models.dev 目录塞进去，否则远端新增的、
+    ///   本地用户根本没用过的模型也会触发全量重扫。调用方通常传 `Set(aggregator.snapshot().map(\.model))`
+    ///   或从磁盘缓存自带的 buckets 推导（`UsageRollupCache.load()` 即如此，见该文件）。
+    static func fingerprint(knownModels: Set<String>) -> String {
         let baseBody = table.keys.sorted().map { key -> String in
             let p = table[key]!
             return "\(key):\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
@@ -212,7 +237,11 @@ enum Pricing {
             }.joined(separator: ",")
             return "\(key)@\(parts)"
         }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)".utf8))
+        let remoteBody = knownModels.subtracting(localOverrideKeys).sorted().compactMap { key -> String? in
+            guard let rate = PricingCatalogStore.shared.rate(for: key) else { return nil }
+            return "\(key):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
+        }.joined(separator: ";")
+        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)|\(remoteBody)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
-    }()
+    }
 }

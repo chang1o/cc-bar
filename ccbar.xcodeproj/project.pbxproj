@@ -45,6 +45,10 @@
 		49C1B154000000000001AABB /* CodexJSONLScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B154000000000001AAAA /* CodexJSONLScanner.swift */; };
 		49C1B155000000000001AABB /* UsageAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B155000000000001AAAA /* UsageAggregator.swift */; };
 		49C1B156000000000001AABB /* UsageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B156000000000001AAAA /* UsageService.swift */; };
+		49C1B157000000000001AABB /* PricingCatalogModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B157000000000001AAAA /* PricingCatalogModels.swift */; };
+		49C1B158000000000001AABB /* LiteLLMPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */; };
+		49C1B159000000000001AABB /* ModelsDevPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */; };
+		49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B15A000000000001AAAA /* PricingCatalogStore.swift */; };
 		49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B161000000000001AAAA /* MainWindowRootView.swift */; };
 		49C1B162000000000001AABB /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B162000000000001AAAA /* StatsView.swift */; };
 		49C1B163000000000001AABB /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B163000000000001AAAA /* DesignSystem.swift */; };
@@ -101,6 +105,10 @@
 		49C1B154000000000001AAAA /* CodexJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexJSONLScanner.swift; sourceTree = "<group>"; };
 		49C1B155000000000001AAAA /* UsageAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAggregator.swift; sourceTree = "<group>"; };
 		49C1B156000000000001AAAA /* UsageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageService.swift; sourceTree = "<group>"; };
+		49C1B157000000000001AAAA /* PricingCatalogModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogModels.swift; sourceTree = "<group>"; };
+		49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteLLMPricingDecoder.swift; sourceTree = "<group>"; };
+		49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsDevPricingDecoder.swift; sourceTree = "<group>"; };
+		49C1B15A000000000001AAAA /* PricingCatalogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogStore.swift; sourceTree = "<group>"; };
 		49C1B161000000000001AAAA /* MainWindowRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowRootView.swift; sourceTree = "<group>"; };
 		49C1B162000000000001AAAA /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
 		49C1B163000000000001AAAA /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
@@ -163,6 +171,7 @@
 				49C1B110000000000001AAAA /* Credentials */,
 				49C1B112000000000001AAAA /* Quota */,
 				49C1B15F000000000001AAAA /* Usage */,
+				49C1B15B000000000001AAAA /* Pricing */,
 				49C1B111000000000001AAAA /* Storage */,
 			);
 			path = Core;
@@ -265,6 +274,17 @@
 				49C1B156000000000001AAAA /* UsageService.swift */,
 			);
 			path = Usage;
+			sourceTree = "<group>";
+		};
+		49C1B15B000000000001AAAA /* Pricing */ = {
+			isa = PBXGroup;
+			children = (
+				49C1B157000000000001AAAA /* PricingCatalogModels.swift */,
+				49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */,
+				49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */,
+				49C1B15A000000000001AAAA /* PricingCatalogStore.swift */,
+			);
+			path = Pricing;
 			sourceTree = "<group>";
 		};
 		49C1B160000000000001AAAA /* Main */ = {
@@ -450,6 +470,10 @@
 				49C1B154000000000001AABB /* CodexJSONLScanner.swift in Sources */,
 				49C1B155000000000001AABB /* UsageAggregator.swift in Sources */,
 				49C1B156000000000001AABB /* UsageService.swift in Sources */,
+				49C1B157000000000001AABB /* PricingCatalogModels.swift in Sources */,
+				49C1B158000000000001AABB /* LiteLLMPricingDecoder.swift in Sources */,
+				49C1B159000000000001AABB /* ModelsDevPricingDecoder.swift in Sources */,
+				49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */,
 				49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */,
 				49C1B162000000000001AABB /* StatsView.swift in Sources */,
 				49C1B163000000000001AABB /* DesignSystem.swift in Sources */,

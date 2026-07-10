@@ -1,19 +1,19 @@
 import Foundation
 
 /// 单个 JSONL 文件的扫描 watermark。
-struct ScanFileState: Sendable, Equatable, Codable {
+nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var mtime: Double          // file modification time, epoch seconds
     var offset: UInt64         // 已扫到的字节数
     /// Codex 用：当前会话最近一次 `turn_context` 里的模型，用于给后续 token_count 打标签。
     var lastModel: String?
 }
 
-struct ScanState: Sendable, Equatable, Codable {
+nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
     /// v4: 引入 pricingFingerprint，价格表变化自动触发全量重扫，不再依赖手动 bump。
     static let currentVersion: Int = 4
     var version: Int = ScanState.currentVersion
-    /// 写盘时记录的价格表指纹；load 时与当前 `Pricing.fingerprint` 不一致即视为缓存失效、全量重扫重算。
+    /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即视为缓存失效、全量重扫重算。
     var pricingFingerprint: String = ""
     var claude: [String: ScanFileState] = [:]
     var codex: [String: ScanFileState] = [:]
@@ -21,20 +21,38 @@ struct ScanState: Sendable, Equatable, Codable {
     var claudeSeenMessageIds: [String] = []
 }
 
+/// 扫描缓存的读取结论。缓存文件缺失、损坏、版本不符或价格指纹变化都必须显式标为失效，
+/// 由调用方在全量扫描前清空内存聚合，不能把它们和「本来就为空的有效状态」混为一谈。
+nonisolated enum ScanCacheLoadResult: Sendable {
+    case valid(ScanState)
+    case invalidated
+
+    var state: ScanState {
+        switch self {
+        case .valid(let state):
+            return state
+        case .invalidated:
+            return ScanState()
+        }
+    }
+}
+
 enum ScanCache {
     nonisolated private static let fileName = "scan-state.json"
     nonisolated private static let bundleDirectory = "CCBar"
 
-    nonisolated static func load() -> ScanState {
+    /// - Parameter knownModels: 用于比对价格指纹的「当前已知模型集合」，通常传
+    ///   `Set(aggregator.snapshot().map(\.model))`（调用方 `UsageService.scanNow()` 传入）。
+    nonisolated static func load(knownModels: Set<String>) -> ScanCacheLoadResult {
         let url = cacheFileURL()
         guard let data = try? Data(contentsOf: url),
               let state = try? JSONDecoder().decode(ScanState.self, from: data),
               state.version == ScanState.currentVersion,
-              state.pricingFingerprint == Pricing.fingerprint
+              state.pricingFingerprint == Pricing.fingerprint(knownModels: knownModels)
         else {
-            return ScanState()
+            return .invalidated
         }
-        return state
+        return .valid(state)
     }
 
     nonisolated static func save(_ state: ScanState) throws {
@@ -58,12 +76,12 @@ enum ScanCache {
 }
 
 /// 聚合结果磁盘缓存，启动后立刻 UI 有数。
-struct UsageRollupPayload: Sendable, Codable {
+nonisolated struct UsageRollupPayload: Sendable, Codable {
     /// version 管「结构变更」；价格变更由 pricingFingerprint 接管。
     /// v4: 引入 pricingFingerprint，价格表变化自动触发重算，丢弃用旧价存的桶。
     static let currentVersion: Int = 4
     var version: Int = UsageRollupPayload.currentVersion
-    /// 写盘时记录的价格表指纹；load 时与当前 `Pricing.fingerprint` 不一致即丢弃，全量重扫重建。
+    /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即丢弃，全量重扫重建。
     var pricingFingerprint: String = ""
     var buckets: [UsageBucket] = []
     var updatedAt: Date = Date()
@@ -73,13 +91,18 @@ enum UsageRollupCache {
     nonisolated private static let fileName = "usage-rollup.json"
     nonisolated private static let bundleDirectory = "CCBar"
 
+    /// 自包含校验：用 payload 自带的 `buckets` 推导「已知模型集合」现算指纹去比对，
+    /// 不需要外部传参——等价于「用这份缓存自己包含的模型集合，检验它的指纹在今天的价格下是否还成立」。
     nonisolated static func load() -> UsageRollupPayload {
         let url = cacheFileURL()
         guard let data = try? Data(contentsOf: url),
               let payload = try? JSONDecoder().decode(UsageRollupPayload.self, from: data),
-              payload.version == UsageRollupPayload.currentVersion,
-              payload.pricingFingerprint == Pricing.fingerprint
+              payload.version == UsageRollupPayload.currentVersion
         else {
+            return UsageRollupPayload()
+        }
+        let knownModels = Set(payload.buckets.map { $0.model })
+        guard payload.pricingFingerprint == Pricing.fingerprint(knownModels: knownModels) else {
             return UsageRollupPayload()
         }
         return payload

@@ -33,7 +33,8 @@ final class UsageAggregator {
                 b.outputTokens += e.outputTokens
                 b.cacheReadTokens += e.cacheReadTokens
                 b.cacheCreationTokens += e.cacheCreationTokens
-                b.costUSD += e.costUSD
+                // 未定价（nil）按 0 计入聚合；数值上不污染总成本，「未定价」本身由 Pricing.hasPrice(model:) 现查。
+                b.costUSD += e.costUSD ?? 0
                 buckets[key] = b
             } else {
                 buckets[key] = UsageBucket(
@@ -44,7 +45,7 @@ final class UsageAggregator {
                     outputTokens: e.outputTokens,
                     cacheReadTokens: e.cacheReadTokens,
                     cacheCreationTokens: e.cacheCreationTokens,
-                    costUSD: e.costUSD
+                    costUSD: e.costUSD ?? 0
                 )
             }
         }

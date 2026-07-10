@@ -1,16 +1,15 @@
 import Foundation
 import os
 
-private let refresherLog = Logger(subsystem: "com.cc-bar", category: "claude-refresh")
-
-enum ClaudeTokenRefresher {
+nonisolated enum ClaudeTokenRefresher {
+    private static let log = Logger(subsystem: "com.cc-bar", category: "claude-refresh")
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let tokenEndpoint = URL(string: "https://platform.claude.com/v1/oauth/token")!
     /// access_token 临期判定 skew。cc-bar 是只读监控,不需要太激进的提前刷新——
     /// 让出主动权给 Claude Code CLI / Desktop 等"重客户端",避免和它们争抢
     /// 一次性的 refresh_token。原值 300s 太激进,会频繁触发竞态;30s 已经足够
     /// 覆盖网络往返开销。
-    static let refreshSkew: TimeInterval = 30
+    nonisolated static let refreshSkew: TimeInterval = 30
     /// 若 credentials.json 在最近这么久内被改过,认为别的客户端刚完成刷新,
     /// 跳过自己发请求,直接重读存储里的最新值。
     static let politeMtimeWindow: TimeInterval = 10
@@ -176,7 +175,7 @@ enum ClaudeTokenRefresher {
                 //    成功时会通过 NotificationCenter 通知 AppState 自动再触发一次
                 //    刷新,UI 自然更新到新数据。
                 //    这样用户点刷新永远不会等 10 秒,体感"无感后台自愈"。
-                refresherLog.warning("soft-recovery failed, kicking off background delegated refresh")
+                log.warning("soft-recovery failed, kicking off background delegated refresh")
                 ClaudeDelegatedRefresh.attemptInBackground(source: source)
                 throw QuotaError.tokenRevoked
             }
