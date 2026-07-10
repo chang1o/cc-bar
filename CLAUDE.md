@@ -17,7 +17,7 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于
 - 悬浮窗：`Floating/`
 - 引导：`Onboarding/`
 - 设置：`Settings/`
-- 凭据 / 额度 / 调度 / 用量 / 存储：`Core/`
+- 凭据 / 额度 / 调度 / 用量 / 定价 / 存储 / 本地化：`Core/`（`Credentials` `Quota` `Scheduler` `Usage` `Pricing` `Storage`、`L10n.swift`）
 - Xcode 工程：`ccbar.xcodeproj`
 
 ## 必读文档
