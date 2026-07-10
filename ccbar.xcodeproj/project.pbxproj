@@ -262,6 +262,17 @@
 			path = Logos;
 			sourceTree = "<group>";
 		};
+		49C1B15B000000000001AAAA /* Pricing */ = {
+			isa = PBXGroup;
+			children = (
+				49C1B157000000000001AAAA /* PricingCatalogModels.swift */,
+				49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */,
+				49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */,
+				49C1B15A000000000001AAAA /* PricingCatalogStore.swift */,
+			);
+			path = Pricing;
+			sourceTree = "<group>";
+		};
 		49C1B15F000000000001AAAA /* Usage */ = {
 			isa = PBXGroup;
 			children = (
@@ -274,17 +285,6 @@
 				49C1B156000000000001AAAA /* UsageService.swift */,
 			);
 			path = Usage;
-			sourceTree = "<group>";
-		};
-		49C1B15B000000000001AAAA /* Pricing */ = {
-			isa = PBXGroup;
-			children = (
-				49C1B157000000000001AAAA /* PricingCatalogModels.swift */,
-				49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */,
-				49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */,
-				49C1B15A000000000001AAAA /* PricingCatalogStore.swift */,
-			);
-			path = Pricing;
 			sourceTree = "<group>";
 		};
 		49C1B160000000000001AAAA /* Main */ = {
@@ -629,7 +629,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.15.0;
+				MARKETING_VERSION = 0.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
@@ -662,7 +662,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.15.0;
+				MARKETING_VERSION = 0.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
