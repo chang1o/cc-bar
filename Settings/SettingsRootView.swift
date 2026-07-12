@@ -285,10 +285,15 @@ struct SettingsRootView: View {
                 .fixedSize()
             }
             PrefsRow(label: "Last refresh", chinese: "上次刷新") {
-                Text(lastRefreshText)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                HStack(spacing: 6) {
+                    if appState.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(lastRefreshText)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
             PrefsRow(
                 label: "Service status dot",

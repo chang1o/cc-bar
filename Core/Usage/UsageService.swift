@@ -83,7 +83,12 @@ final class UsageService {
     /// 清空内存聚合并把本地全部日志按当前已提交的价格目录重新解析、重新计费。
     /// 用于「定价表改错后修复，想立刻重算」这类场景，不必等下次价格表变动或重启 App。
     func forceRescan() async {
-        guard !isScanning else { return }
+        // 撞上另一次进行中的扫描(常见于 App 冷启动自动扫描、或 Scheduler 定时扫描)时,
+        // 不再静默丢弃这次操作:等它跑完再真正强制重算,保证用户点的这次一定生效。
+        // 设置页按钮的 spinner 在等待期间会一直转,用户感知不到差异,只是变"诚实"了。
+        while isScanning {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
         isScanning = true
         defer { isScanning = false }
         PricingCatalogStore.shared.refreshIfNeeded()

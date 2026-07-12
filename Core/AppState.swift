@@ -101,6 +101,11 @@ final class AppState {
     /// UI 的"刷新按钮"依然每点必转图标,只是不会真的发起重复请求。
     private var refreshInFlight: Task<Void, Never>?
 
+    /// 是否有一次由 `refreshNow()` 发起的整体刷新正在进行(用户点击 popover 刷新按钮或按 ⌘R)。
+    /// popover 用它统一驱动刷新按钮的转圈动画,让两个入口的视觉反馈一致。
+    /// 周期性后台刷新(Scheduler 的 quotaLoop/usageLoop)不走 `refreshNow()`,不会触发这个信号。
+    var isRefreshing: Bool { refreshInFlight != nil }
+
     /// `ClaudeDelegatedRefresh` 完成成功时的通知订阅。
     /// 保留引用以便释放时取消(目前 AppState 生命周期 = App 生命周期,实际不会释放)。
     private var delegatedRefreshObserver: NSObjectProtocol?

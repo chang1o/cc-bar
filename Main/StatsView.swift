@@ -416,7 +416,11 @@ struct StatsView: View {
         )) {
             VStack(spacing: 6) {
                 if dailySamples.isEmpty {
-                    placeholderHeight(160, message: tr("No data", "无数据"))
+                    if appState.usageService.isScanning {
+                        loadingPlaceholder(160, message: tr("Recalculating…", "正在计算中…"))
+                    } else {
+                        placeholderHeight(160, message: tr("No data", "无数据"))
+                    }
                 } else {
                     Chart {
                         ForEach(dailySamples) { sample in
@@ -545,7 +549,8 @@ struct StatsView: View {
                     key: key,
                     title: "Codex",
                     tint: .codexAccent,
-                    snapshot: appState.codexQuota
+                    snapshot: appState.codexQuota,
+                    isLoading: appState.refreshState(for: .codex).inFlight
                 ))
                 addedPrimaryCodex = true
             }
@@ -558,7 +563,8 @@ struct StatsView: View {
                     key: key,
                     title: importedCodexTimelineTitle(account, index: idx),
                     tint: .codexAccent,
-                    snapshot: appState.importedCodexQuota(for: account)
+                    snapshot: appState.importedCodexQuota(for: account),
+                    isLoading: appState.importedCodexRefreshState(for: account).inFlight
                 ))
             }
         }
@@ -570,7 +576,8 @@ struct StatsView: View {
                     key: key,
                     title: "Claude Code",
                     tint: .claudeAccent,
-                    snapshot: appState.claudeQuota
+                    snapshot: appState.claudeQuota,
+                    isLoading: appState.refreshState(for: .claude).inFlight
                 ))
             }
         }
@@ -582,7 +589,8 @@ struct StatsView: View {
         key: String,
         title: String,
         tint: Color,
-        snapshot: QuotaSnapshot?
+        snapshot: QuotaSnapshot?,
+        isLoading: Bool
     ) -> QuotaTimelineSection {
         let events = timelineEvents(for: key)
         let sample = appState.quotaHistory.lastSamples[key]
@@ -593,7 +601,8 @@ struct StatsView: View {
             currentRemaining: sample?.remainingPercent ?? roundedRemaining(snapshot),
             totalDelta: events.reduce(0) { $0 + $1.deltaPercent },
             latestEventAt: events.last?.sampledAt,
-            events: events
+            events: events,
+            isLoading: isLoading
         )
     }
 
@@ -789,6 +798,18 @@ struct StatsView: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .frame(height: height)
+    }
+
+    /// 区分"还在扫描/刷新中"和"确实没有数据"两种空态,避免用户误以为没有记录。
+    private func loadingPlaceholder(_ height: CGFloat, message: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
     }
 }
 
@@ -1131,11 +1152,22 @@ private struct QuotaTimelineAccountPanel: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if section.events.isEmpty {
-                Text(tr("No changes today", "今天暂无变动"))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                if section.isLoading {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(tr("Loading…", "加载中…"))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
                     .frame(maxWidth: .infinity)
                     .frame(height: 120)
+                } else {
+                    Text(tr("No changes today", "今天暂无变动"))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 120)
+                }
             } else {
                 QuotaTimelineChart(events: section.events, tint: section.tint)
                     .frame(height: 180)
@@ -1338,6 +1370,7 @@ private struct QuotaTimelineSection: Identifiable {
     let totalDelta: Int
     let latestEventAt: Date?
     let events: [QuotaChangeEvent]
+    var isLoading: Bool = false
 }
 
 // MARK: - Formatter

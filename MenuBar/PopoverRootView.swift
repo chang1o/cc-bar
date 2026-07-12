@@ -22,6 +22,11 @@ struct PopoverRootView: View {
             content
         }
         .frame(width: 340)
+        // 转圈由 appState.isRefreshing 统一驱动:无论刷新从哪个入口发起
+        // (点击刷新按钮、⌘R 全局快捷键),只要整体刷新真正开始,按钮就转一圈。
+        .onChange(of: appState.isRefreshing) { _, refreshing in
+            if refreshing { refreshRotation += 360 }
+        }
     }
 
     // MARK: Header
@@ -61,8 +66,8 @@ struct PopoverRootView: View {
                     .animation(.easeInOut(duration: 0.7), value: refreshRotation)
             }
             .buttonStyle(PopoverIconButtonStyle())
-            // 不加 disabled:按钮永远可点,每次点击都有图标转动的视觉反馈;
-            // AppState.refreshNow() 内部已经做了 in-flight 去重,不会重复发请求。
+            // 不加 disabled:按钮永远可点;AppState.refreshNow() 内部已经做了
+            // in-flight 去重,不会重复发请求。刷新真正开始时由 isRefreshing 驱动转圈。
             .help(tr("Refresh now", "立即刷新"))
 
             Button { activateAndOpenMain(tab: .stats) } label: {
@@ -275,12 +280,12 @@ struct PopoverRootView: View {
     // MARK: Refresh
 
     /// 用户点刷新按钮的处理:
-    /// - **永远**先转一圈图标(无论内部状态),给用户即时视觉反馈
-    /// - 启动一个非阻塞 Task 去做真正的刷新工作;UI 不等
-    /// - 真正的去重 / 协调放在 `AppState.refreshNow()` 内部,这里只负责"启动"
+    /// - 只负责启动一个非阻塞 Task 去做真正的刷新工作;UI 不等
+    /// - 真正的去重 / 协调放在 `AppState.refreshNow()` 内部
+    /// - 转圈动画不在这里手动触发,而由 body 上监听 `appState.isRefreshing` 统一驱动,
+    ///   让点击和 ⌘R 两个入口的视觉反馈完全一致(刷新真正开始才转,in-flight 去重时不转)
     /// - 数据更新通过 @Observable 自动驱动 UI 刷新,不需要在这里 await 结果
     private func refresh() {
-        refreshRotation += 360
         Task { await appState.refreshNow() }
     }
 
