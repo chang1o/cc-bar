@@ -31,9 +31,7 @@ enum ConversationRollupCache {
     nonisolated static func save(_ payload: ConversationRollupPayload) throws {
         let url = cacheFileURL()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        try encoder.encode(payload).write(to: url, options: [.atomic])
+        try JSONEncoder().encode(payload).write(to: url, options: [.atomic])
     }
 
     nonisolated static func cacheFileURL() -> URL {

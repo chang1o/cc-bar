@@ -42,6 +42,9 @@ enum CodexJSONLScanner {
         var seeds: [String: ConversationSeed] = [:]
         var linesParsed = 0
         var projectResolver = ConversationProjectResolver()
+        // 本批次内出现过 cache_write 的对话 key；避免每个文件收尾时对全部
+        // 已累积 entries 做线性 contains（全量重扫时是平方级开销）。
+        var cacheCreationKeys: Set<String> = []
 
         for url in files {
             let path = url.path
@@ -129,7 +132,7 @@ enum CodexJSONLScanner {
 
                 let ts: Date
                 if let s = root["timestamp"] as? String,
-                   let parsed = parseISO(s) {
+                   let parsed = JSONLTimestamp.parse(s) {
                     ts = parsed
                 } else {
                     ts = Date()
@@ -145,6 +148,9 @@ enum CodexJSONLScanner {
                     at: ts,
                     inputTotal: inputTotal
                 )
+                if cacheWrite > 0 {
+                    cacheCreationKeys.insert("codex:\(resolvedID)")
+                }
                 entries.append(UsageEntry(
                     app: .codex,
                     conversationKey: "codex:\(resolvedID)",
@@ -169,7 +175,7 @@ enum CodexJSONLScanner {
             newState[stateKey] = state
             if let id = sessionID {
                 let key = "codex:\(id)"
-                let hasCacheCreation = entries.contains { $0.conversationKey == key && $0.cacheCreationTokens > 0 }
+                let hasCacheCreation = cacheCreationKeys.contains(key)
                 seeds[key] = ConversationSeed(
                     key: key,
                     id: id,
@@ -190,14 +196,6 @@ enum CodexJSONLScanner {
         }
 
         return Result(entries: entries, conversationSeeds: Array(seeds.values), newState: newState, filesScanned: files.count, linesParsed: linesParsed)
-    }
-
-    private nonisolated static func parseISO(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
     }
 
     private nonisolated static func conversationID(from url: URL) -> String? {

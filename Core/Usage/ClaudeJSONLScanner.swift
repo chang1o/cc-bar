@@ -247,14 +247,6 @@ enum ClaudeJSONLScanner {
         var container: String
     }
 
-    private nonisolated static func parseTimestamp(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
-    }
-
     private nonisolated static func parseAssistantLine(_ line: String) -> ParsedAssistant? {
         guard let data = line.data(using: .utf8) else { return nil }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -272,7 +264,7 @@ enum ClaudeJSONLScanner {
         let stopReason = message["stop_reason"] as? String
 
         let ts: Date
-        if let s = root["timestamp"] as? String, let parsed = parseTimestamp(s) {
+        if let s = root["timestamp"] as? String, let parsed = JSONLTimestamp.parse(s) {
             ts = parsed
         } else {
             ts = Date()

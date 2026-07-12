@@ -51,6 +51,29 @@ enum JSONLLineReader {
     }
 }
 
+/// JSONL 行时间戳解析。ISO8601DateFormatter 创建成本很高，不能按行新建；
+/// 这里静态复用两个固定配置的实例（含 / 不含小数秒各一个）。实例创建后
+/// 不再修改配置，Foundation 的 formatter 在只读并发使用下是线程安全的，
+/// 因此对 Sendable 检查用 nonisolated(unsafe) 显式豁免。
+enum JSONLTimestamp {
+    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    nonisolated(unsafe) private static let plain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    nonisolated static func parse(_ s: String) -> Date? {
+        if let d = fractional.date(from: s) { return d }
+        return plain.date(from: s)
+    }
+}
+
 /// 递归列出某目录下后缀为 .jsonl 的文件。
 enum JSONLDirectoryEnumerator {
     nonisolated static func files(at root: URL) -> [URL] {

@@ -66,9 +66,8 @@ enum ScanCache {
         let url = cacheFileURL()
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(state)
+        // 纯机器读的缓存文件，不用 sortedKeys：省掉每轮写盘时的全量键排序。
+        let data = try JSONEncoder().encode(state)
         try data.write(to: url, options: [.atomic])
     }
 
@@ -127,9 +126,7 @@ enum UsageRollupCache {
         let url = cacheFileURL()
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(payload)
+        let data = try JSONEncoder().encode(payload)
         try data.write(to: url, options: [.atomic])
     }
 

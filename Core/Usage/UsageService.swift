@@ -15,6 +15,11 @@ final class UsageService {
     private var scanQueued = false
     private var requiresFullRebuild = false
     private var loadedRollupGeneration: String?
+    /// 上一轮成功提交的 ScanState 常驻内存，避免每轮扫描都从磁盘重读重解码
+    /// scan-state.json（随文件数和 seen ID 增长，本地实测已近 1MB）。
+    /// 冷启动首轮才从磁盘恢复；持久化失败时清空内存副本，
+    /// 由 requiresFullRebuild 强制下轮全量重建。
+    private var cachedScanState: ScanState?
 
     func bootstrap(appState: AppState) {
         self.appState = appState
@@ -55,19 +60,9 @@ final class UsageService {
             PricingCatalogStore.shared.refreshIfNeeded()
             PricingCatalogStore.shared.commitPending()
             let knownModels = Set(aggregator.snapshot().map { $0.model })
-            let loadedCache = requiresFullRebuild
-                ? ScanCacheLoadResult.invalidated
-                : await Task.detached(priority: .utility) {
-                    ScanCache.load(knownModels: knownModels)
-                }.value
-            let cacheResult: ScanCacheLoadResult
-            if case .valid(let state) = loadedCache,
-               state.generationID == loadedRollupGeneration {
-                cacheResult = loadedCache
-            } else {
-                cacheResult = .invalidated
-            }
+            let cacheResult = await resolveScanState(knownModels: knownModels)
             if case .invalidated = cacheResult {
+                cachedScanState = nil
                 aggregator.load(from: [])
                 conversationAggregator.load(infos: [], buckets: [])
                 loadedRollupGeneration = nil
@@ -77,6 +72,29 @@ final class UsageService {
                 requiresFullRebuild = false
             }
         } while scanQueued
+    }
+
+    /// 决定本轮扫描的起点状态。优先用内存里上一轮已提交的 ScanState；
+    /// 内存路径与磁盘路径执行同样的校验——generationID 须与已加载 rollup 同代、
+    /// 价格指纹须与当前 active 价格目录一致（commitPending 提交新价格后指纹变化，
+    /// 照旧触发全量重建）。只有冷启动且两份 rollup 恢复成功时，
+    /// 首轮需要读盘取得与它们同代的 ScanState。
+    private func resolveScanState(knownModels: Set<String>) async -> ScanCacheLoadResult {
+        if requiresFullRebuild { return .invalidated }
+        if let cached = cachedScanState {
+            if cached.generationID == loadedRollupGeneration,
+               cached.pricingFingerprint == Pricing.fingerprint(knownModels: knownModels) {
+                return .valid(cached)
+            }
+            return .invalidated
+        }
+        let loaded = await Task.detached(priority: .utility) {
+            ScanCache.load(knownModels: knownModels)
+        }.value
+        if case .valid(let state) = loaded, state.generationID == loadedRollupGeneration {
+            return loaded
+        }
+        return .invalidated
     }
 
     /// 用户在设置页手动触发的强制重算：无视已有 watermark 和 fingerprint，
@@ -95,6 +113,7 @@ final class UsageService {
         // 手动重算同样是一次完整扫描：先提交已经刷好的 pending，避免用户刚点击重算
         // 却仍按旧 active 价格扫描；本次刚发起的网络刷新则留给下一次扫描。
         PricingCatalogStore.shared.commitPending()
+        cachedScanState = nil
         aggregator.load(from: [])
         conversationAggregator.load(infos: [], buckets: [])
         loadedRollupGeneration = nil
@@ -188,12 +207,14 @@ final class UsageService {
 
         if let persistenceError {
             requiresFullRebuild = true
+            cachedScanState = nil
             lastError = persistenceError
             print("[UsageScan 用量扫描] 持久化失败 persistence failed: \(persistenceError)")
             return false
         }
 
         loadedRollupGeneration = generationID
+        cachedScanState = newScanState
         lastScanAt = Date()
         lastError = nil
         publishTotals()
