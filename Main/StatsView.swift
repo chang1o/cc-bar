@@ -336,6 +336,15 @@ struct StatsView: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             Spacer()
+            if appState.usageService.isScanning {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(tr("Recalculating usage…", "正在重新计算用量…"))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
             Picker("", selection: $range) {
                 ForEach(StatsRange.allCases, id: \.self) { r in
                     Text(tr(r.englishLabel, r.chineseLabel)).tag(r)

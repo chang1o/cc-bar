@@ -21,7 +21,18 @@
 - **丰富的设置** —— 账号开关、菜单栏显示项、悬浮窗、刷新间隔、重置时间显示、中英双语、开机自动启动
 
 <p align="center">
-  <img src="docs/Screenshots/statistics.png" width="720" alt="用量统计">
+  <img src="docs/Screenshots/statistics-overview.png" width="720" alt="用量统计 - 概览"><br>
+  <sub>概览:本月 Token / 花费汇总、按服务与模型拆分</sub>
+</p>
+
+<p align="center">
+  <img src="docs/Screenshots/statistics-conversations.png" width="720" alt="用量统计 - 对话"><br>
+  <sub>对话:按单个对话查看 Token 与费用明细</sub>
+</p>
+
+<p align="center">
+  <img src="docs/Screenshots/statistics-timeline.png" width="720" alt="用量统计 - 时间线"><br>
+  <sub>时间线:5 小时窗口额度随时间变化</sub>
 </p>
 
 ## 安装
