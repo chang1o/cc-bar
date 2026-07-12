@@ -60,6 +60,7 @@
 		49C1B192000000000001AABB /* ImportedCodexStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B192000000000001AAAA /* ImportedCodexStore.swift */; };
 		49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */; };
 		49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */; };
+		49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -120,6 +121,7 @@
 		49C1B192000000000001AAAA /* ImportedCodexStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexStore.swift; sourceTree = "<group>"; };
 		49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OtherCodexAccountsSection.swift; sourceTree = "<group>"; };
 		49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexAccountsView.swift; sourceTree = "<group>"; };
+		49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsDetailView.swift; sourceTree = "<group>"; };
 		49C1B200000000000001AAAA /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -202,6 +204,7 @@
 			children = (
 				4931AC542FC02A4200EE598C /* SettingsRootView.swift */,
 				49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */,
+				49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -485,6 +488,7 @@
 				49C1B192000000000001AABB /* ImportedCodexStore.swift in Sources */,
 				49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */,
 				49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */,
+				49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -629,7 +633,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.16.0;
+				MARKETING_VERSION = 0.17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
@@ -662,7 +666,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.16.0;
+				MARKETING_VERSION = 0.17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;

@@ -552,7 +552,38 @@ final class AppState {
         )
     }
 
-    private func importedCodexAccountMirrorsPrimary(_ account: ImportedCodexAccount) -> Bool {
+    /// 按需拉取当前 CLI 主账号的额外「Full reset」credit。
+    /// 与 `fetchImportedCodexResetCredits` 对称:懒加载,仅供设置页展开时调用一次,
+    /// 不接入 Scheduler 定时刷新,也不写入持久化快照。
+    func fetchCodexResetCredits() async -> Result<CodexResetCreditsClient.Fetched, QuotaError> {
+        guard let account = codexAccount, let token = account.accessToken else {
+            return .failure(.missingToken)
+        }
+        let activeToken: String
+        if account.isPersonalAccessToken {
+            activeToken = token
+        } else {
+            let refreshed = await CodexTokenRefresher.ensureFreshAccessToken(
+                currentAccessToken: token,
+                refreshToken: account.refreshToken,
+                writeBack: .codexAuthJSON
+            )
+            switch refreshed {
+            case .success(let t):
+                activeToken = t
+            case .failure(let err):
+                return .failure(err)
+            }
+        }
+        return await CodexResetCreditsClient.fetch(
+            accessToken: activeToken,
+            accountId: account.isPersonalAccessToken ? nil : account.accountId
+        )
+    }
+
+    /// 判断某导入账号是否与当前 CLI 主账号是同一身份(accountId 相等,且 userId 相等或有一方缺失)。
+    /// 展示层(Popover / 统计页)据此对同一身份去重,只显示一次;设置页作为管理界面不去重。
+    func importedCodexAccountMirrorsPrimary(_ account: ImportedCodexAccount) -> Bool {
         guard let primary = codexAccount,
               let primaryAccountId = nonEmpty(primary.accountId),
               let importedAccountId = nonEmpty(account.chatgptAccountId),

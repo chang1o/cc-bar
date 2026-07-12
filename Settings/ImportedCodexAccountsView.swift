@@ -14,8 +14,8 @@ struct ImportedCodexAccountsView: View {
     @State private var dropTargetId: String?
 
     /// 额外「Full reset」credit 明细的展开状态(懒加载,按账号 id 缓存,不持久化)。
+    /// 结果未就位(`resetCreditsById[id] == nil`)即视为加载中,无需单独的 loading 标记。
     @State private var expandedResetCreditsId: String?
-    @State private var loadingResetCreditsId: String?
     @State private var resetCreditsById: [String: ResetCreditsLoadResult] = [:]
 
     private enum ResetCreditsLoadResult {
@@ -217,7 +217,6 @@ struct ImportedCodexAccountsView: View {
         }
         expandedResetCreditsId = account.id
         guard resetCreditsById[account.id] == nil else { return }
-        loadingResetCreditsId = account.id
         Task {
             let result = await appState.fetchImportedCodexResetCredits(account: account)
             switch result {
@@ -226,64 +225,22 @@ struct ImportedCodexAccountsView: View {
             case .failure(let err):
                 resetCreditsById[account.id] = .failure(err.description)
             }
-            if loadingResetCreditsId == account.id { loadingResetCreditsId = nil }
         }
     }
 
     private func resetCreditsDetail(account: ImportedCodexAccount) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if loadingResetCreditsId == account.id {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text(tr("Loading…", "加载中…"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            } else if let result = resetCreditsById[account.id] {
-                switch result {
-                case .success(let fetched):
-                    Text(tr("\(fetched.availableCount) resets available", "可用额外重置 \(fetched.availableCount) 次"))
-                        .font(.system(size: 11, weight: .semibold))
-                    if fetched.credits.isEmpty {
-                        Text(tr("No records", "暂无记录"))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        ForEach(fetched.credits) { credit in
-                            HStack(spacing: 6) {
-                                Text(credit.title.isEmpty ? credit.status : credit.title)
-                                    .font(.system(size: 10.5))
-                                    .lineLimit(1)
-                                Spacer()
-                                if let expiresAt = credit.expiresAt {
-                                    Text(tr(
-                                        "expires \(Self.dateFormatter.string(from: expiresAt))",
-                                        "过期 \(Self.dateFormatter.string(from: expiresAt))"
-                                    ))
-                                    .font(.system(size: 9.5, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                case .failure(let message):
-                    Text(message)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.red)
-                }
+        let state: CodexResetCreditsState
+        if let result = resetCreditsById[account.id] {
+            switch result {
+            case .success(let fetched): state = .success(fetched)
+            case .failure(let message): state = .failure(message)
             }
+        } else {
+            // 尚无缓存 → 正在懒加载
+            state = .loading
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 2)
-        .padding(.bottom, 10)
+        return CodexResetCreditsDetailView(state: state)
     }
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
-    }()
 
     // MARK: 重排序
 

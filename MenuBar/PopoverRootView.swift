@@ -120,6 +120,10 @@ struct PopoverRootView: View {
         }
         let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
         let includesCodex = providers.contains(where: { $0.app == .codex })
+        // 主 Codex 卡片会展示时,「其他账号」区去掉与主账号同身份的镜像项后是否还有内容。
+        let hasOtherCodexAfterDedup = appState.importedCodexAccounts.contains {
+            $0.visibleInPopover && !appState.importedCodexAccountMirrorsPrimary($0)
+        }
 
         if providers.isEmpty && !hasImported {
             VStack(spacing: 6) {
@@ -147,9 +151,9 @@ struct PopoverRootView: View {
                     }
                     primaryServiceBlock(provider)
 
-                    if provider.app == .codex && hasImported {
+                    if provider.app == .codex && hasOtherCodexAfterDedup {
                         Divider().padding(.horizontal, 16)
-                        OtherCodexAccountsSection()
+                        OtherCodexAccountsSection(dedupPrimary: true)
                     }
                 }
             }

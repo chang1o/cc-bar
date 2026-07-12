@@ -537,16 +537,20 @@ struct StatsView: View {
 
         if serviceFilter != .claude {
             let key = QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
+            var addedPrimaryCodex = false
             if shouldShowTimelineSection(key: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
                 sections.append(timelineSection(
                     key: key,
-                    title: tr("Codex · Primary", "Codex · 主账号"),
+                    title: "Codex",
                     tint: .codexAccent,
                     snapshot: appState.codexQuota
                 ))
+                addedPrimaryCodex = true
             }
 
             for (idx, account) in appState.importedCodexAccounts.enumerated() {
+                // 展示层去重:主账号段已展示时,跳过与它同身份的镜像导入项(历史 key 不变,仍在盘上)。
+                if addedPrimaryCodex && appState.importedCodexAccountMirrorsPrimary(account) { continue }
                 let key = QuotaHistoryAccountKey.codexImported(id: account.id)
                 sections.append(timelineSection(
                     key: key,

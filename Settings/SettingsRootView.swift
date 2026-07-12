@@ -11,6 +11,10 @@ struct SettingsRootView: View {
     @State private var launchAtLoginMessageIsError = false
     @State private var isRecalculatingUsage = false
 
+    /// 主账号额外重置 credit 的展开状态与懒加载结果(nil = 尚未加载)。
+    @State private var codexResetCreditsExpanded = false
+    @State private var codexResetCreditsState: CodexResetCreditsState?
+
     var body: some View {
         @Bindable var settings = SettingsStore.shared
 
@@ -49,18 +53,24 @@ struct SettingsRootView: View {
                 desc: "Auto-detected on your Mac. Toggle which services to display.",
                 chineseDesc: "自动检测,自行勾选要显示的"
             ) {
-                AccountRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    tint: .codexAccent,
-                    logoName: "codex",
-                    fallback: "C",
-                    email: appState.codexAccount?.email,
-                    plan: appState.codexAccount?.planType,
-                    availability: appState.codexAccount == nil ? .notDetected : .connected,
-                    canToggle: appState.codexAccount != nil,
-                    isOn: Binding(get: { settings.showCodex }, set: { settings.showCodex = $0 })
-                )
+                VStack(spacing: 0) {
+                    AccountRow(
+                        title: "Codex",
+                        subtitle: "OpenAI",
+                        tint: .codexAccent,
+                        logoName: "codex",
+                        fallback: "C",
+                        email: appState.codexAccount?.email,
+                        plan: appState.codexAccount?.planType,
+                        availability: appState.codexAccount == nil ? .notDetected : .connected,
+                        canToggle: appState.codexAccount != nil,
+                        isOn: Binding(get: { settings.showCodex }, set: { settings.showCodex = $0 }),
+                        accessory: appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
+                    )
+                    if codexResetCreditsExpanded, let state = codexResetCreditsState {
+                        CodexResetCreditsDetailView(state: state)
+                    }
+                }
                 AccountRow(
                     title: "Claude Code",
                     subtitle: "Anthropic",
@@ -98,6 +108,37 @@ struct SettingsRootView: View {
                 chineseDesc: "粘贴 auth.json 添加更多 Codex 账号额度，仅查看，不会切换 CLI 登录状态"
             ) {
                 ImportedCodexAccountsView()
+            }
+        }
+    }
+
+    /// 主账号「额外重置次数」入口(🎁),点击展开懒加载明细。
+    private var codexResetCreditsButton: some View {
+        Button {
+            toggleCodexResetCredits()
+        } label: {
+            Image(systemName: "gift")
+                .font(.system(size: 12))
+                .foregroundStyle(codexResetCreditsExpanded ? Color.accentColor : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(tr("Extra reset credits", "额外重置次数"))
+    }
+
+    private func toggleCodexResetCredits() {
+        if codexResetCreditsExpanded {
+            codexResetCreditsExpanded = false
+            return
+        }
+        codexResetCreditsExpanded = true
+        // 已有缓存则直接复用,不重复联网。
+        guard codexResetCreditsState == nil else { return }
+        codexResetCreditsState = .loading
+        Task {
+            let result = await appState.fetchCodexResetCredits()
+            switch result {
+            case .success(let fetched): codexResetCreditsState = .success(fetched)
+            case .failure(let err): codexResetCreditsState = .failure(err.description)
             }
         }
     }
@@ -499,6 +540,8 @@ private struct AccountRow: View {
     let availability: AccountAvailability
     let canToggle: Bool
     @Binding var isOn: Bool
+    /// 可选的额外控件(如 Codex 主账号的重置次数入口),放在状态徽标与开关之间。
+    var accessory: AnyView? = nil
 
     var body: some View {
         HStack(spacing: 11) {
@@ -521,6 +564,8 @@ private struct AccountRow: View {
 
             HStack(spacing: 8) {
                 statusBadge
+
+                if let accessory { accessory }
 
                 Toggle("", isOn: $isOn)
                     .labelsHidden()

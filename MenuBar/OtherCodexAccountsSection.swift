@@ -8,9 +8,13 @@ import SwiftUI
 
 struct OtherCodexAccountsSection: View {
     @Environment(AppState.self) private var appState
+    /// 为 true 时,隐藏与当前 CLI 主账号同身份的镜像项(主卡片已经展示了它),避免重复。
+    var dedupPrimary: Bool = false
 
     private var visible: [ImportedCodexAccount] {
-        appState.importedCodexAccounts.filter(\.visibleInPopover)
+        appState.importedCodexAccounts.filter {
+            $0.visibleInPopover && !(dedupPrimary && appState.importedCodexAccountMirrorsPrimary($0))
+        }
     }
 
     var body: some View {
