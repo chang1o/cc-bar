@@ -58,6 +58,13 @@ nonisolated struct UsageTotals: Sendable, Equatable {
     var totalTokens: Int {
         inputWithCacheTokens + outputTokens
     }
+
+    /// 缓存命中率:缓存读取 token 占「输入侧 token(含缓存)」的比例,0~1。口径参考 cc-switch:
+    /// cacheRead / (input + cacheCreation + cacheRead),即 cacheRead / inputWithCacheTokens。
+    var cacheHitRate: Double {
+        guard inputWithCacheTokens > 0 else { return 0 }
+        return Double(cacheReadTokens) / Double(inputWithCacheTokens)
+    }
 }
 
 /// Decimal <-> String 编解码，避免 Double 精度漂。

@@ -183,14 +183,11 @@ struct StatsView: View {
 
             kpiRow.padding(.top, 6)
 
+            tokenBreakdownPanel
+
             dailyUsagePanel
 
-            HStack(alignment: .top, spacing: 12) {
-                byServicePanel
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
-                currentLimitsPanel
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
-            }
+            byServicePanel
 
             byModelPanel
         }
@@ -382,6 +379,14 @@ struct StatsView: View {
         }
     }
 
+    // MARK: Token breakdown panel
+
+    private var tokenBreakdownPanel: some View {
+        Panel(title: "Token breakdown", chinese: "Token 拆分") {
+            TokenBreakdownView(totals: currentTotalsAll)
+        }
+    }
+
     // MARK: Daily usage panel
 
     private var dailyUsagePanel: some View {
@@ -400,6 +405,7 @@ struct StatsView: View {
                             BarMark(
                                 x: .value("Day", sample.day, unit: .day),
                                 y: .value("Cost", sample.codexCost.doubleValue),
+                                width: .fixed(dailyBarWidth),
                                 stacking: .standard
                             )
                             .foregroundStyle(Color.codexAccent)
@@ -409,6 +415,7 @@ struct StatsView: View {
                             BarMark(
                                 x: .value("Day", sample.day, unit: .day),
                                 y: .value("Cost", sample.claudeCost.doubleValue),
+                                width: .fixed(dailyBarWidth),
                                 stacking: .standard
                             )
                             .foregroundStyle(Color.claudeAccent)
@@ -459,7 +466,7 @@ struct StatsView: View {
                     tint: .codexAccent,
                     value: currentTotals(.codex).costUSD,
                     totalValue: currentTotalsAll.costUSD,
-                    tokens: currentTotals(.codex).totalTokens
+                    totals: currentTotals(.codex)
                 )
                 ByServiceRow(
                     title: "Claude Code",
@@ -467,31 +474,8 @@ struct StatsView: View {
                     tint: .claudeAccent,
                     value: currentTotals(.claude).costUSD,
                     totalValue: currentTotalsAll.costUSD,
-                    tokens: currentTotals(.claude).totalTokens
+                    totals: currentTotals(.claude)
                 )
-            }
-        }
-    }
-
-    // MARK: Current limits panel
-
-    private var currentLimitsPanel: some View {
-        Panel(title: "Current limits", chinese: "当前限额") {
-            VStack(spacing: 4) {
-                ForEach(QuotaProviderDescriptor.primaryProviders.filter {
-                    SettingsStore.shared.isProviderEnabled($0.app)
-                }) { provider in
-                    LimitRingRow(
-                        label: "\(provider.title) 5H",
-                        window: appState.quotaSnapshot(for: provider.app)?.fiveHour,
-                        tint: provider.app.tintColor
-                    )
-                    LimitRingRow(
-                        label: "\(provider.title) WK",
-                        window: appState.quotaSnapshot(for: provider.app)?.weekly,
-                        tint: provider.app.tintColor
-                    )
-                }
             }
         }
     }
@@ -637,22 +621,20 @@ struct StatsView: View {
                     .padding(.leading, 12)
             } else {
                 ForEach(rows) { row in
-                    HStack {
-                        Text(row.model)
-                            .font(.system(size: 12.5))
-                        Spacer()
-                        Text("\(tr("in", "入")) \(StatsFormatter.compactToken(row.totals.inputWithCacheTokens))")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        Text("\(tr("out", "出")) \(StatsFormatter.compactToken(row.totals.outputTokens))")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        Text(StatsFormatter.cost(row.totals.costUSD))
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .monospacedDigit()
-                            .frame(width: 96, alignment: .trailing)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(row.model)
+                                .font(.system(size: 12.5))
+                            Spacer()
+                            Text("\(StatsFormatter.compactToken(row.totals.totalTokens)) Tokens")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                            Text(StatsFormatter.cost(row.totals.costUSD))
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .monospacedDigit()
+                        }
+                        TokenBreakdownInlineRow(totals: row.totals)
                     }
                     .padding(.leading, 12)
                 }
@@ -736,13 +718,7 @@ struct StatsView: View {
         }
         return byDay
             .map {
-                DailySample(
-                    day: $0.key,
-                    codexCost: $0.value.codex.costUSD,
-                    claudeCost: $0.value.claude.costUSD,
-                    codexTokens: $0.value.codex.totalTokens,
-                    claudeTokens: $0.value.claude.totalTokens
-                )
+                DailySample(day: $0.key, codex: $0.value.codex, claude: $0.value.claude)
             }
             .sorted { $0.day < $1.day }
     }
@@ -759,6 +735,17 @@ struct StatsView: View {
     private func barOpacity(for sample: DailySample) -> Double {
         guard let selected = selectedSample else { return 1 }
         return selected.id == sample.id ? 1 : 0.35
+    }
+
+    /// 柱宽用固定值而非交给 Swift Charts 自动计算——天数很少(极端情况只有 1 天)时,
+    /// 自动宽度会把柱子撑到接近整个绘图区;天数越多则相应调窄,避免拥挤。
+    private var dailyBarWidth: CGFloat {
+        switch dailySamples.count {
+        case 0...3: return 28
+        case 4...14: return 18
+        case 15...45: return 10
+        default: return 5
+        }
     }
 
     private func modelRows(for app: UsageApp) -> [ModelRow] {
@@ -844,10 +831,18 @@ private struct DailyTooltip: View {
 
             totalRow(label: tr("Total", "合计"), value: StatsFormatter.cost(sample.totalCost), emphasized: true)
             totalRow(label: "Tokens", value: StatsFormatter.compactToken(sample.totalTokens), emphasized: false)
+
+            Divider()
+
+            totalRow(label: tr("Input", "输入"), value: StatsFormatter.compactToken(sample.totalUsage.inputTokens), emphasized: false)
+            totalRow(label: tr("Output", "输出"), value: StatsFormatter.compactToken(sample.totalUsage.outputTokens), emphasized: false)
+            totalRow(label: tr("Cache hit", "缓存命中"), value: StatsFormatter.compactToken(sample.totalUsage.cacheReadTokens), emphasized: false)
+            totalRow(label: tr("Hit rate", "命中率"), value: hitRateText(sample.totalUsage.cacheHitRate), emphasized: false)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(width: 156, alignment: .leading)
+        .frame(width: 200, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .ccPanelStroke(cornerRadius: 8)
     }
@@ -857,10 +852,12 @@ private struct DailyTooltip: View {
             ServiceMark(color: color)
             Text(label)
                 .font(.system(size: 12))
+                .lineLimit(1)
             Spacer(minLength: 8)
             Text(value)
                 .font(.system(size: 12))
                 .monospacedDigit()
+                .lineLimit(1)
         }
     }
 
@@ -868,10 +865,12 @@ private struct DailyTooltip: View {
         HStack(spacing: 6) {
             Text(label)
                 .font(.system(size: emphasized ? 12 : 10.5, weight: emphasized ? .semibold : .regular))
+                .lineLimit(1)
             Spacer(minLength: 8)
             Text(value)
                 .font(.system(size: emphasized ? 12 : 10.5, weight: emphasized ? .semibold : .regular))
                 .monospacedDigit()
+                .lineLimit(1)
         }
         .foregroundStyle(emphasized ? .primary : .secondary)
     }
@@ -923,6 +922,135 @@ private struct KPICard: View {
     }
 }
 
+// MARK: - Token breakdown
+
+private func hitRateText(_ rate: Double) -> String {
+    "\(Int((max(0, min(1, rate)) * 100).rounded()))%"
+}
+
+private enum TokenCategoryStyle {
+    static let input = 0.85
+    static let output = 0.6
+    static let cacheRead = 0.4
+}
+
+/// KPI 行下方的 Token 拆分面板内容:总量 + 命中率 + 迷你堆叠条 + 输入/输出/缓存命中三项。
+/// 缓存写入(创建)不展示——量级小、Codex 协议也不上报,详见与用户的讨论。
+private struct TokenBreakdownView: View {
+    let totals: UsageTotals
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tr("Total tokens", "总 Tokens"))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Text(StatsFormatter.compactToken(totals.totalTokens))
+                        .font(.system(size: 20, weight: .semibold))
+                        .monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(tr("Cache hit rate", "缓存命中率"))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Text(hitRateText(totals.cacheHitRate))
+                        .font(.system(size: 20, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.green)
+                }
+            }
+
+            TokenStackBar(totals: totals)
+
+            HStack(spacing: 0) {
+                stat(tr("Input", "输入"), StatsFormatter.compactToken(totals.inputTokens), dot: TokenCategoryStyle.input)
+                stat(tr("Output", "输出"), StatsFormatter.compactToken(totals.outputTokens), dot: TokenCategoryStyle.output)
+                stat(tr("Cache hit", "缓存命中"), StatsFormatter.compactToken(totals.cacheReadTokens), dot: TokenCategoryStyle.cacheRead)
+            }
+        }
+    }
+
+    private func stat(_ label: String, _ value: String, dot: Double) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Circle().fill(Color.primary.opacity(dot)).frame(width: 6, height: 6)
+                Text(label)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.system(size: 12.5, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Color.primary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 输入 / 输出 / 缓存命中 三段迷你堆叠条,风格延续 `ProgressBar`(Capsule + 灰底轨道)。
+private struct TokenStackBar: View {
+    let totals: UsageTotals
+    var height: CGFloat = 8
+
+    private var segments: [(tokens: Int, opacity: Double)] {
+        [
+            (totals.inputTokens, TokenCategoryStyle.input),
+            (totals.outputTokens, TokenCategoryStyle.output),
+            (totals.cacheReadTokens, TokenCategoryStyle.cacheRead)
+        ]
+    }
+
+    private var total: Int { segments.reduce(0) { $0 + $1.tokens } }
+
+    var body: some View {
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    Color.primary.opacity(segment.opacity)
+                        .frame(width: proxy.size.width * ratio(segment.tokens))
+                }
+            }
+        }
+        .frame(height: height)
+        .background(Color.secondary.opacity(0.18))
+        .clipShape(Capsule())
+    }
+
+    private func ratio(_ tokens: Int) -> Double {
+        guard total > 0 else { return 0 }
+        return Double(tokens) / Double(total)
+    }
+}
+
+/// 「按服务」「按模型」行下的紧凑一行:入 / 出 / 缓存命中 + 命中率。
+private struct TokenBreakdownInlineRow: View {
+    let totals: UsageTotals
+
+    var body: some View {
+        HStack(spacing: 10) {
+            item(tr("in", "入"), StatsFormatter.compactToken(totals.inputTokens))
+            item(tr("out", "出"), StatsFormatter.compactToken(totals.outputTokens))
+            item(tr("cache hit", "缓存命中"), StatsFormatter.compactToken(totals.cacheReadTokens))
+            Spacer(minLength: 4)
+            item(tr("hit rate", "命中率"), hitRateText(totals.cacheHitRate), emphasized: true)
+        }
+        .font(.system(size: 10.5))
+    }
+
+    private func item(_ label: String, _ value: String, emphasized: Bool = false) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .monospacedDigit()
+                .fontWeight(emphasized ? .semibold : .regular)
+                .foregroundStyle(emphasized ? Color.green : Color.secondary)
+        }
+    }
+}
+
 // MARK: - By service row
 
 private struct ByServiceRow: View {
@@ -931,7 +1059,7 @@ private struct ByServiceRow: View {
     let tint: Color
     let value: Decimal
     let totalValue: Decimal
-    let tokens: Int
+    let totals: UsageTotals
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -950,7 +1078,7 @@ private struct ByServiceRow: View {
             ProgressBar(value: ratio, tint: tint, height: 5)
                 .padding(.leading, 16)
             HStack {
-                Text("\(StatsFormatter.compactToken(tokens)) Tokens")
+                Text("\(StatsFormatter.compactToken(totals.totalTokens)) Tokens")
                     .font(.system(size: 10.5))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -961,6 +1089,8 @@ private struct ByServiceRow: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.leading, 16)
+            TokenBreakdownInlineRow(totals: totals)
+                .padding(.leading, 16)
         }
         .padding(.vertical, 8)
     }
@@ -971,53 +1101,6 @@ private struct ByServiceRow: View {
         let d = NSDecimalNumber(decimal: totalValue).doubleValue
         guard d > 0 else { return 0 }
         return n / d
-    }
-}
-
-// MARK: - Limit ring row
-
-private struct LimitRingRow: View {
-    let label: String
-    let window: QuotaWindow?
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 11) {
-            ProgressRing(
-                value: (window?.remainingPercent ?? 0) / 100,
-                tint: ringColor,
-                diameter: 32,
-                stroke: 4
-            ) {
-                Text(percentText)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .monospacedDigit()
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label)
-                    .font(.system(size: 12, weight: .medium))
-                Text(resetText)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Spacer()
-        }
-        .padding(.vertical, 7)
-    }
-
-    private var ringColor: Color {
-        guard window != nil else { return .secondary }
-        return statusColor(remainingPercent: window?.remainingPercent, tint: tint)
-    }
-
-    private var percentText: String {
-        guard let window else { return "--" }
-        return "\(Int(window.remainingPercent.rounded()))"
-    }
-
-    private var resetText: String {
-        formatResetHint(window?.resetsAt)
     }
 }
 
@@ -1202,13 +1285,24 @@ private struct QuotaTimelineTable: View {
 private struct DailySample: Identifiable {
     var id: Date { day }
     let day: Date
-    let codexCost: Decimal
-    let claudeCost: Decimal
-    let codexTokens: Int
-    let claudeTokens: Int
+    let codex: UsageTotals
+    let claude: UsageTotals
 
+    var codexCost: Decimal { codex.costUSD }
+    var claudeCost: Decimal { claude.costUSD }
     var totalCost: Decimal { codexCost + claudeCost }
-    var totalTokens: Int { codexTokens + claudeTokens }
+    var totalTokens: Int { totalUsage.totalTokens }
+
+    /// codex + claude 合并后的口径,供每日悬浮明细展示 token 拆分 + 命中率。
+    var totalUsage: UsageTotals {
+        var t = UsageTotals.zero
+        t.inputTokens = codex.inputTokens + claude.inputTokens
+        t.outputTokens = codex.outputTokens + claude.outputTokens
+        t.cacheReadTokens = codex.cacheReadTokens + claude.cacheReadTokens
+        t.cacheCreationTokens = codex.cacheCreationTokens + claude.cacheCreationTokens
+        t.costUSD = totalCost
+        return t
+    }
 }
 
 private struct ModelRow: Identifiable {
