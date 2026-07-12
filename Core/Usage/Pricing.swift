@@ -9,6 +9,16 @@ nonisolated struct ModelPrice: Sendable, Codable, Equatable {
     var cacheCreation: Decimal
 }
 
+/// 单次调用四类 token 的成本拆分。只有模型已定价时才会生成；未定价继续用 `nil` 表达。
+nonisolated struct CostBreakdown: Sendable, Equatable {
+    var input: Decimal
+    var output: Decimal
+    var cacheRead: Decimal
+    var cacheCreation: Decimal
+
+    var total: Decimal { input + output + cacheRead + cacheCreation }
+}
+
 /// 同一模型按单次请求完整输入量切换的上下文阶梯价。
 /// `shortContext` / `longContext` 均为完整费率，避免值类型递归引用。
 nonisolated private struct ContextPriceTiers: Sendable {
@@ -192,6 +202,27 @@ nonisolated enum Pricing {
         at date: Date,
         inputTotal: Int? = nil
     ) -> Decimal? {
+        costBreakdown(
+            model: model,
+            input: input,
+            output: output,
+            cacheRead: cacheRead,
+            cacheCreation: cacheCreation,
+            at: date,
+            inputTotal: inputTotal
+        )?.total
+    }
+
+    /// 计算单次调用的四项成本；模型未定价时返回 nil，不能折成真实 $0。
+    static func costBreakdown(
+        model: String,
+        input: Int,
+        output: Int,
+        cacheRead: Int,
+        cacheCreation: Int,
+        at date: Date,
+        inputTotal: Int? = nil
+    ) -> CostBreakdown? {
         let key = normalize(model: model)
         let fullInput = max(0, inputTotal ?? (input + cacheRead + cacheCreation))
         guard let p = price(for: key, at: date, inputTotal: fullInput) else { return nil }
@@ -199,7 +230,7 @@ nonisolated enum Pricing {
         let o = Decimal(output)    * p.output       / perMillion
         let cr = Decimal(cacheRead) * p.cacheRead   / perMillion
         let cc = Decimal(cacheCreation) * p.cacheCreation / perMillion
-        return i + o + cr + cc
+        return CostBreakdown(input: i, output: o, cacheRead: cr, cacheCreation: cc)
     }
 
     /// 该模型是否已有可用价格（本地表 / 阶梯价 / 远端价格目录任一命中）。唯一权威接口，

@@ -52,6 +52,11 @@
 		49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B161000000000001AAAA /* MainWindowRootView.swift */; };
 		49C1B162000000000001AABB /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B162000000000001AAAA /* StatsView.swift */; };
 		49C1B163000000000001AABB /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B163000000000001AAAA /* DesignSystem.swift */; };
+		49C1B164000000000001AABB /* ConversationStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B164000000000001AAAA /* ConversationStatsView.swift */; };
+		49C1B165000000000001AABB /* ConversationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B165000000000001AAAA /* ConversationModels.swift */; };
+		49C1B166000000000001AABB /* ConversationAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B166000000000001AAAA /* ConversationAggregator.swift */; };
+		49C1B167000000000001AABB /* ConversationTitleIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B167000000000001AAAA /* ConversationTitleIndex.swift */; };
+		49C1B168000000000001AABB /* ConversationRollupCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B168000000000001AAAA /* ConversationRollupCache.swift */; };
 		49C1B171000000000001AABB /* FloatingPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B171000000000001AAAA /* FloatingPanel.swift */; };
 		49C1B172000000000001AABB /* FloatingContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B172000000000001AAAA /* FloatingContentView.swift */; };
 		49C1B173000000000001AABB /* FloatingPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B173000000000001AAAA /* FloatingPanelController.swift */; };
@@ -113,6 +118,11 @@
 		49C1B161000000000001AAAA /* MainWindowRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowRootView.swift; sourceTree = "<group>"; };
 		49C1B162000000000001AAAA /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
 		49C1B163000000000001AAAA /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		49C1B164000000000001AAAA /* ConversationStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatsView.swift; sourceTree = "<group>"; };
+		49C1B165000000000001AAAA /* ConversationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationModels.swift; sourceTree = "<group>"; };
+		49C1B166000000000001AAAA /* ConversationAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationAggregator.swift; sourceTree = "<group>"; };
+		49C1B167000000000001AAAA /* ConversationTitleIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTitleIndex.swift; sourceTree = "<group>"; };
+		49C1B168000000000001AAAA /* ConversationRollupCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRollupCache.swift; sourceTree = "<group>"; };
 		49C1B171000000000001AAAA /* FloatingPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanel.swift; sourceTree = "<group>"; };
 		49C1B172000000000001AAAA /* FloatingContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingContentView.swift; sourceTree = "<group>"; };
 		49C1B173000000000001AAAA /* FloatingPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanelController.swift; sourceTree = "<group>"; };
@@ -234,6 +244,7 @@
 				49C1B106000000000001AAAA /* QuotaCache.swift */,
 				49C1B108000000000001AAAA /* QuotaHistoryStore.swift */,
 				49C1B107000000000001AAAA /* ScanCache.swift */,
+				49C1B168000000000001AAAA /* ConversationRollupCache.swift */,
 			);
 			path = Storage;
 			sourceTree = "<group>";
@@ -286,6 +297,9 @@
 				49C1B154000000000001AAAA /* CodexJSONLScanner.swift */,
 				49C1B155000000000001AAAA /* UsageAggregator.swift */,
 				49C1B156000000000001AAAA /* UsageService.swift */,
+				49C1B165000000000001AAAA /* ConversationModels.swift */,
+				49C1B166000000000001AAAA /* ConversationAggregator.swift */,
+				49C1B167000000000001AAAA /* ConversationTitleIndex.swift */,
 			);
 			path = Usage;
 			sourceTree = "<group>";
@@ -296,6 +310,7 @@
 				49C1B161000000000001AAAA /* MainWindowRootView.swift */,
 				49C1B162000000000001AAAA /* StatsView.swift */,
 				49C1B163000000000001AAAA /* DesignSystem.swift */,
+				49C1B164000000000001AAAA /* ConversationStatsView.swift */,
 			);
 			path = Main;
 			sourceTree = "<group>";
@@ -480,6 +495,11 @@
 				49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */,
 				49C1B162000000000001AABB /* StatsView.swift in Sources */,
 				49C1B163000000000001AABB /* DesignSystem.swift in Sources */,
+				49C1B164000000000001AABB /* ConversationStatsView.swift in Sources */,
+				49C1B165000000000001AABB /* ConversationModels.swift in Sources */,
+				49C1B166000000000001AABB /* ConversationAggregator.swift in Sources */,
+				49C1B167000000000001AABB /* ConversationTitleIndex.swift in Sources */,
+				49C1B168000000000001AABB /* ConversationRollupCache.swift in Sources */,
 				49C1B171000000000001AABB /* FloatingPanel.swift in Sources */,
 				49C1B172000000000001AABB /* FloatingContentView.swift in Sources */,
 				49C1B173000000000001AABB /* FloatingPanelController.swift in Sources */,

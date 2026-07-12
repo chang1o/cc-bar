@@ -121,7 +121,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
     var chineseLabel: String {
         switch self {
         case .all: return "全部"
-        case .codex: return "OpenAI"
+        case .codex: return "Codex"
         case .claude: return "Anthropic"
         }
     }
@@ -137,6 +137,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
 
 enum StatsViewMode: Hashable {
     case overview
+    case conversations
     case timeline
 }
 
@@ -160,8 +161,18 @@ struct StatsView: View {
 
             Divider()
 
-            ScrollView {
-                mainContent
+            if viewMode == .conversations {
+                ConversationStatsView(
+                    range: $range,
+                    customFrom: $customFrom,
+                    customTo: $customTo,
+                    serviceFilter: serviceFilter
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                ScrollView {
+                    mainContent
+                }
             }
         }
     }
@@ -171,6 +182,8 @@ struct StatsView: View {
         switch viewMode {
         case .overview:
             overviewContent
+        case .conversations:
+            EmptyView()
         case .timeline:
             timelineContent
         }
@@ -236,6 +249,14 @@ struct StatsView: View {
                     viewMode = .overview
                 }
                 sidebarItem(
+                    english: "Conversations",
+                    chinese: "对话",
+                    icon: "bubble.left.and.bubble.right",
+                    active: viewMode == .conversations
+                ) {
+                    viewMode = .conversations
+                }
+                sidebarItem(
                     english: "Timeline",
                     chinese: "时间线",
                     icon: "chart.line.uptrend.xyaxis",
@@ -243,9 +264,6 @@ struct StatsView: View {
                 ) {
                     viewMode = .timeline
                 }
-                sidebarItem(english: "Breakdown", chinese: "明细", icon: "list.bullet", active: false) {}
-                    .disabled(true)
-                    .opacity(0.5)
             }
 
             Spacer()
@@ -936,7 +954,7 @@ private enum TokenCategoryStyle {
 
 /// KPI 行下方的 Token 拆分面板内容:总量 + 命中率 + 迷你堆叠条 + 输入/输出/缓存命中三项。
 /// 缓存写入(创建)不展示——量级小、Codex 协议也不上报,详见与用户的讨论。
-private struct TokenBreakdownView: View {
+struct TokenBreakdownView: View {
     let totals: UsageTotals
 
     var body: some View {
@@ -1334,6 +1352,17 @@ enum StatsFormatter {
         f.minimumFractionDigits = 2
         f.maximumFractionDigits = 2
         return "$\(f.string(from: ns) ?? "0.00")"
+    }
+
+    static func costPrecise(_ value: Decimal) -> String {
+        let ns = NSDecimalNumber(decimal: value)
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.groupingSeparator = ","
+        f.minimumFractionDigits = 4
+        f.maximumFractionDigits = 6
+        return "$\(f.string(from: ns) ?? "0.0000")"
     }
 
     static func token(_ value: Int) -> String {

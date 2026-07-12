@@ -6,13 +6,20 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var offset: UInt64         // 已扫到的字节数
     /// Codex 用：当前会话最近一次 `turn_context` 里的模型，用于给后续 token_count 打标签。
     var lastModel: String?
+    /// 对话元数据：Codex 用于跨 active/archive 复用 watermark；Claude 用于未变化文件的轻量项目重解析。
+    var conversationID: String?
+    var conversationCwd: String?
+    var conversationGitBranch: String?
+    var conversationIsSidechain: Bool?
+    var fallbackTitle: String?
 }
 
 nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
-    /// v4: 引入 pricingFingerprint，价格表变化自动触发全量重扫，不再依赖手动 bump。
-    static let currentVersion: Int = 4
+    /// v7: 三份用量缓存共享 generationID，防止部分写入后 watermark 与聚合桶错代。
+    static let currentVersion: Int = 7
     var version: Int = ScanState.currentVersion
+    var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即视为缓存失效、全量重扫重算。
     var pricingFingerprint: String = ""
     var claude: [String: ScanFileState] = [:]
@@ -65,6 +72,13 @@ enum ScanCache {
         try data.write(to: url, options: [.atomic])
     }
 
+    /// 聚合缓存保存失败时移除已提交 watermark，确保下次只能走全量重建。
+    nonisolated static func invalidate() throws {
+        let url = cacheFileURL()
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
+    }
+
     nonisolated static func cacheFileURL() -> URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
@@ -78,9 +92,10 @@ enum ScanCache {
 /// 聚合结果磁盘缓存，启动后立刻 UI 有数。
 nonisolated struct UsageRollupPayload: Sendable, Codable {
     /// version 管「结构变更」；价格变更由 pricingFingerprint 接管。
-    /// v4: 引入 pricingFingerprint，价格表变化自动触发重算，丢弃用旧价存的桶。
-    static let currentVersion: Int = 4
+    /// v6: 与 scan-state / conversation-rollup 共享 generationID。
+    static let currentVersion: Int = 6
     var version: Int = UsageRollupPayload.currentVersion
+    var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即丢弃，全量重扫重建。
     var pricingFingerprint: String = ""
     var buckets: [UsageBucket] = []
