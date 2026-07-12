@@ -5,7 +5,6 @@
 <p>
   <img alt="platform" src="https://img.shields.io/badge/macOS-14+-blue.svg">
   <img alt="swift" src="https://img.shields.io/badge/Swift-5.9-orange.svg">
-  <img alt="version" src="https://img.shields.io/badge/version-0.16.0-brightgreen.svg">
 </p>
 
 <p align="center">
