@@ -179,8 +179,8 @@ struct StatsView: View {
         }
     }
 
-    /// 宽度断点:主画布达到该宽度时,概览的 Token 拆分 / 按服务两面板、
-    /// 时间线的折线图与表格改为左右并排;更窄(如最小窗口)时回落单列堆叠,避免内容挤压截断。
+    /// 宽度断点:主画布达到该宽度时,时间线的折线图与表格改为左右并排;
+    /// 更窄(如最小窗口)时回落单列堆叠,避免内容挤压截断。
     private static let wideCanvasWidth: CGFloat = 880
 
     @ViewBuilder
@@ -188,7 +188,7 @@ struct StatsView: View {
         let isWide = canvasWidth >= Self.wideCanvasWidth
         switch viewMode {
         case .overview:
-            overviewContent(isWide: isWide)
+            overviewContent
         case .conversations:
             EmptyView()
         case .timeline:
@@ -196,22 +196,15 @@ struct StatsView: View {
         }
     }
 
-    private func overviewContent(isWide: Bool) -> some View {
+    private var overviewContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             topBar
             if range == .custom { customRangeRow }
 
             kpiRow.padding(.top, 6)
 
-            if isWide {
-                HStack(alignment: .top, spacing: 12) {
-                    tokenBreakdownPanel
-                    byServicePanel
-                }
-            } else {
-                tokenBreakdownPanel
-                byServicePanel
-            }
+            tokenBreakdownPanel
+            byServicePanel
 
             dailyUsagePanel
 
@@ -422,8 +415,8 @@ struct StatsView: View {
     // MARK: Token breakdown panel
 
     private var tokenBreakdownPanel: some View {
-        Panel(title: "Token breakdown", chinese: "Token 拆分", fillsHeight: true) {
-            // 隐藏 hero:总 Tokens 与 KPI 卡 1 重复;分项改纵排图例,与按服务面板等高。
+        Panel(title: "Token breakdown", chinese: "Token 拆分") {
+            // 隐藏 hero:总 Tokens 与 KPI 卡 1 重复;分项使用横排图例。
             TokenBreakdownView(totals: currentTotalsAll, showsHero: false)
         }
     }
@@ -508,8 +501,8 @@ struct StatsView: View {
     // MARK: By service panel
 
     private var byServicePanel: some View {
-        Panel(title: "By service", chinese: "按服务", fillsHeight: true) {
-            VStack(alignment: .leading, spacing: 4) {
+        Panel(title: "By service", chinese: "按服务") {
+            HStack(alignment: .top, spacing: 16) {
                 ByServiceRow(
                     title: "Codex",
                     subtitle: "OpenAI",
@@ -518,6 +511,7 @@ struct StatsView: View {
                     totalValue: currentTotalsAll.costUSD,
                     totals: currentTotals(.codex)
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
                 ByServiceRow(
                     title: "Claude Code",
                     subtitle: "Anthropic",
@@ -526,6 +520,7 @@ struct StatsView: View {
                     totalValue: currentTotalsAll.costUSD,
                     totals: currentTotals(.claude)
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -683,8 +678,8 @@ struct StatsView: View {
                                 .font(.system(size: 12.5))
                             Spacer()
                             Text("\(StatsFormatter.compactToken(row.totals.totalTokens)) Tokens")
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.primary)
                                 .monospacedDigit()
                             Text(StatsFormatter.cost(row.totals.costUSD))
                                 .font(.system(size: 12.5, weight: .semibold))
@@ -874,8 +869,6 @@ private struct Panel<Content: View>: View {
     let title: String
     let chinese: String
     var right: AnyView? = nil
-    /// 与其他面板左右并排时传 true:高度拉伸到并排行的最大高度,保证两卡等高。
-    var fillsHeight: Bool = false
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -890,7 +883,6 @@ private struct Panel<Content: View>: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(maxHeight: fillsHeight ? .infinity : nil, alignment: .top)
         .ccPanel(cornerRadius: 12)
     }
 }
@@ -927,7 +919,7 @@ private struct DailyTooltip: View {
             Divider()
 
             totalRow(label: tr("Total", "合计"), value: StatsFormatter.cost(sample.totalCost), emphasized: true)
-            totalRow(label: "Tokens", value: StatsFormatter.compactToken(sample.totalTokens), emphasized: false)
+            totalRow(label: "Tokens", value: StatsFormatter.compactToken(sample.totalTokens), emphasized: true)
 
             Divider()
 
@@ -952,7 +944,7 @@ private struct DailyTooltip: View {
                 .lineLimit(1)
             Spacer(minLength: 8)
             Text(value)
-                .font(.system(size: 12))
+                .font(.system(size: 12, weight: .semibold))
                 .monospacedDigit()
                 .lineLimit(1)
         }
@@ -1035,8 +1027,8 @@ private enum TokenCategoryStyle {
 /// 缓存写入(创建)不展示——量级小、Codex 协议也不上报,详见与用户的讨论。
 struct TokenBreakdownView: View {
     let totals: UsageTotals
-    /// 概览面板传 false:总 Tokens 与 KPI 卡重复不再展示,分项改为纵排图例列表
-    /// (与并排的按服务面板高度匹配)。对话明细保持默认 true(hero 版:大数字 + 横排 3 列)。
+    /// 概览面板传 false:总 Tokens 与 KPI 卡重复不再展示,分项改为横排图例。
+    /// 对话明细保持默认 true(hero 版:大数字 + 横排 3 列)。
     var showsHero: Bool = true
 
     var body: some View {
@@ -1073,21 +1065,28 @@ struct TokenBreakdownView: View {
             } else {
                 TokenStackBar(totals: totals)
 
-                VStack(spacing: 10) {
-                    legendRow(tr("Input", "输入"), StatsFormatter.compactToken(totals.inputTokens), dot: TokenCategoryStyle.input)
-                    legendRow(tr("Output", "输出"), StatsFormatter.compactToken(totals.outputTokens), dot: TokenCategoryStyle.output)
-                    legendRow(tr("Cache hit", "缓存命中"), StatsFormatter.compactToken(totals.cacheReadTokens), dot: TokenCategoryStyle.cacheRead)
-                    legendRow(tr("Hit rate", "命中率"), hitRateText(totals.cacheHitRate), valueColor: .green)
+                HStack(spacing: 0) {
+                    stat(tr("Input", "输入"), StatsFormatter.compactToken(totals.inputTokens), dot: TokenCategoryStyle.input)
+                    stat(tr("Output", "输出"), StatsFormatter.compactToken(totals.outputTokens), dot: TokenCategoryStyle.output)
+                    stat(tr("Cache hit", "缓存命中"), StatsFormatter.compactToken(totals.cacheReadTokens), dot: TokenCategoryStyle.cacheRead)
+                    stat(tr("Hit rate", "命中率"), hitRateText(totals.cacheHitRate), valueColor: .green)
                 }
                 .padding(.top, 2)
             }
         }
     }
 
-    private func stat(_ label: String, _ value: String, dot: Double) -> some View {
+    private func stat(
+        _ label: String,
+        _ value: String,
+        dot: Double? = nil,
+        valueColor: Color = .primary
+    ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
-                Circle().fill(Color.primary.opacity(dot)).frame(width: 6, height: 6)
+                Circle()
+                    .fill(dot.map { Color.primary.opacity($0) } ?? Color.clear)
+                    .frame(width: 6, height: 6)
                 Text(label)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
@@ -1095,26 +1094,9 @@ struct TokenBreakdownView: View {
             Text(value)
                 .font(.system(size: 12.5, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(Color.primary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// 纵排图例行:圆点 + 标签靠左,数值右对齐。命中率行无圆点(非堆叠条分段),用透明占位对齐。
-    private func legendRow(_ label: String, _ value: String, dot: Double? = nil, valueColor: Color = .primary) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(dot.map { Color.primary.opacity($0) } ?? Color.clear)
-                .frame(width: 6, height: 6)
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(.system(size: 12.5, weight: .semibold))
-                .monospacedDigit()
                 .foregroundStyle(valueColor)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1211,9 +1193,9 @@ private struct ByServiceRow: View {
             ProgressBar(value: ratio, tint: tint, height: 5)
                 .padding(.leading, 16)
             Text("\(StatsFormatter.compactToken(totals.totalTokens)) Tokens")
-                .font(.system(size: 10.5))
+                .font(.system(size: 10.5, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .padding(.leading, 16)
             TokenBreakdownInlineRow(totals: totals)
                 .padding(.leading, 16)
