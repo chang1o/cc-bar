@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/Screenshots/overview.png" width="380" alt="Popover 总览">
+  <img src="docs/Screenshots/popover-light.png" width="360" alt="Popover 总览 - 浅色模式">
+  <img src="docs/Screenshots/popover-dark.png" width="360" alt="Popover 总览 - 深色模式">
 </p>
 
 ## 功能
