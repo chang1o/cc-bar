@@ -1,13 +1,13 @@
 import Foundation
 
-struct QuotaCacheRecord: Sendable, Equatable, Codable {
+nonisolated struct QuotaCacheRecord: Sendable, Equatable, Codable {
     var snapshot: QuotaSnapshot
     var source: QuotaSnapshotSource
     var updatedAt: Date
 }
 
-struct QuotaCachePayload: Sendable, Equatable, Codable {
-    static let currentVersion = 2
+nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
+    static let currentVersion = 3
 
     var version: Int = Self.currentVersion
     var providers: [QuotaApp: QuotaCacheRecord] = [:]
@@ -56,7 +56,7 @@ struct QuotaCachePayload: Sendable, Equatable, Codable {
             forKey: .importedCodex
         )
 
-        if decodedVersion >= Self.currentVersion {
+        if decodedVersion >= 2 {
             version = Self.currentVersion
             providers = try container.decodeIfPresent(
                 [QuotaApp: QuotaCacheRecord].self,

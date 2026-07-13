@@ -553,7 +553,7 @@ struct StatsView: View {
     private var timelineHeader: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(tr("Today 5H Quota", "今日 5H 额度"))
+                Text(tr("Today Primary Quota", "今日主要额度"))
                     .font(.system(size: 18, weight: .semibold))
                 Text(tr("Only quota changes are shown.", "仅展示额度发生变化的时间点。"))
                     .font(.system(size: 11.5))
@@ -626,6 +626,7 @@ struct StatsView: View {
             accountKey: key,
             title: title,
             tint: tint,
+            limitKind: sample?.limitKind ?? snapshot?.primaryLimit?.kind,
             currentRemaining: sample?.remainingPercent ?? roundedRemaining(snapshot),
             totalDelta: events.reduce(0) { $0 + $1.deltaPercent },
             latestEventAt: events.last?.sampledAt,
@@ -645,7 +646,7 @@ struct StatsView: View {
     }
 
     private func roundedRemaining(_ snapshot: QuotaSnapshot?) -> Int? {
-        guard let remaining = snapshot?.fiveHour?.remainingPercent else { return nil }
+        guard let remaining = snapshot?.primaryWindow?.remainingPercent else { return nil }
         return max(0, min(100, Int(remaining.rounded())))
     }
 
@@ -1281,6 +1282,14 @@ private struct QuotaTimelineAccountPanel: View {
                 ServiceMark(color: section.tint, size: 8)
                 Text(section.title)
                     .font(.system(size: 13, weight: .semibold))
+                if let kind = section.limitKind {
+                    Text(limitKindLabel(kind))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.1), in: Capsule())
+                }
             }
             Spacer()
             timelineMetric(label: tr("Current", "当前"), value: currentText)
@@ -1308,6 +1317,15 @@ private struct QuotaTimelineAccountPanel: View {
     private var latestText: String {
         guard let date = section.latestEventAt else { return "--" }
         return StatsFormatter.time(date)
+    }
+
+    private func limitKindLabel(_ kind: QuotaLimitKind) -> String {
+        switch kind {
+        case .fiveHour: return "5H"
+        case .weekly: return "WK"
+        case .modelWeekly: return tr("MODEL", "模型")
+        case .unknown: return tr("CURRENT", "当前")
+        }
     }
 }
 
@@ -1484,6 +1502,7 @@ private struct QuotaTimelineSection: Identifiable {
     let accountKey: String
     let title: String
     let tint: Color
+    let limitKind: QuotaLimitKind?
     let currentRemaining: Int?
     let totalDelta: Int
     let latestEventAt: Date?

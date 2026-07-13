@@ -1,6 +1,6 @@
 import Foundation
 
-enum CodexTokenRefresher {
+nonisolated enum CodexTokenRefresher {
     static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     static let tokenEndpoint = URL(string: "https://auth.openai.com/oauth/token")!
     static let refreshSkew: TimeInterval = 300

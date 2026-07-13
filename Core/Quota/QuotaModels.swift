@@ -1,12 +1,12 @@
 import Foundation
 
-enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
+nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
     case antigravity
 }
 
-struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
+nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
     let app: QuotaApp
     let title: String
     let vendor: String
@@ -44,7 +44,7 @@ struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
     ]
 }
 
-enum QuotaSnapshotSource: String, Sendable, Codable {
+nonisolated enum QuotaSnapshotSource: String, Sendable, Codable {
     case api
     case local
     case cache
@@ -60,12 +60,12 @@ enum QuotaSnapshotSource: String, Sendable, Codable {
     }
 }
 
-enum QuotaRefreshReason: Sendable {
+nonisolated enum QuotaRefreshReason: Sendable {
     case periodic
     case userInitiated
 }
 
-struct QuotaRefreshState: Sendable, Equatable {
+nonisolated struct QuotaRefreshState: Sendable, Equatable {
     var lastSuccessAt: Date?
     var lastAttemptAt: Date?
     var backoffUntil: Date?
@@ -74,26 +74,26 @@ struct QuotaRefreshState: Sendable, Equatable {
     var source: QuotaSnapshotSource?
 }
 
-struct PrimaryQuotaState: Sendable, Equatable {
+nonisolated struct PrimaryQuotaState: Sendable, Equatable {
     var snapshot: QuotaSnapshot?
     var error: String?
     var source: QuotaSnapshotSource?
     var refresh = QuotaRefreshState()
 }
 
-struct AntigravityAccount: Sendable, Equatable {
+nonisolated struct AntigravityAccount: Sendable, Equatable {
     var email: String?
     var planType: String?
 }
 
-enum AntigravityAvailability: Sendable, Equatable {
+nonisolated enum AntigravityAvailability: Sendable, Equatable {
     case notInstalled
     case installed
     case running
     case unavailable(String)
 }
 
-struct QuotaWindow: Sendable, Equatable, Codable {
+nonisolated struct QuotaWindow: Sendable, Equatable, Codable {
     /// 0~100，已用百分比
     var usedPercent: Double
     /// 窗口重置时间
@@ -106,19 +106,245 @@ struct QuotaWindow: Sendable, Equatable, Codable {
     }
 }
 
-struct QuotaSnapshot: Sendable, Equatable, Codable {
-    var app: QuotaApp
-    var fiveHour: QuotaWindow?
-    var weekly: QuotaWindow?
-    var weeklyOpus: QuotaWindow?      // 仅 Claude
-    var weeklySonnet: QuotaWindow?    // 仅 Claude
-    var geminiWindow: QuotaWindow?    // 仅 Antigravity，Gemini 5h 额度
-    var geminiWeekly: QuotaWindow?   // 仅 Antigravity，Gemini 周额度
-    var planType: String?
-    var fetchedAt: Date
+nonisolated enum QuotaLimitKind: String, Sendable, Equatable, Codable {
+    case fiveHour
+    case weekly
+    case modelWeekly
+    case unknown
 }
 
-enum QuotaError: Error, CustomStringConvertible {
+nonisolated struct QuotaLimit: Sendable, Equatable, Codable, Identifiable {
+    var id: String
+    var kind: QuotaLimitKind
+    var displayName: String?
+    var window: QuotaWindow
+    var isActive: Bool?
+
+    nonisolated static func standard(
+        kind: QuotaLimitKind,
+        window: QuotaWindow,
+        displayName: String? = nil,
+        isActive: Bool? = nil
+    ) -> QuotaLimit {
+        let id: String
+        switch kind {
+        case .fiveHour: id = "five-hour"
+        case .weekly: id = "weekly"
+        case .modelWeekly:
+            id = modelID(displayName ?? "model")
+        case .unknown:
+            id = "unknown-\(window.windowSeconds.map { String($0) } ?? "unspecified")"
+        }
+        return QuotaLimit(
+            id: id,
+            kind: kind,
+            displayName: displayName,
+            window: window,
+            isActive: isActive
+        )
+    }
+
+    nonisolated static func model(
+        id rawID: String?,
+        displayName: String,
+        window: QuotaWindow,
+        isActive: Bool?
+    ) -> QuotaLimit {
+        let trimmedID = rawID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return QuotaLimit(
+            id: trimmedID.flatMap { $0.isEmpty ? nil : "model:\($0.lowercased())" }
+                ?? modelID(displayName),
+            kind: .modelWeekly,
+            displayName: displayName,
+            window: window,
+            isActive: isActive
+        )
+    }
+
+    nonisolated private static func modelID(_ displayName: String) -> String {
+        let normalized = displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+        return "model:\(normalized.isEmpty ? "unknown" : normalized)"
+    }
+}
+
+nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
+    var app: QuotaApp
+    var primaryLimit: QuotaLimit?
+    var secondaryLimit: QuotaLimit?
+    var modelLimits: [QuotaLimit]
+    var geminiWindow: QuotaWindow?    // 仅 Antigravity，Gemini 5h 额度
+    var geminiWeekly: QuotaWindow?    // 仅 Antigravity，Gemini 周额度
+    var planType: String?
+    var fetchedAt: Date
+
+    init(
+        app: QuotaApp,
+        primaryLimit: QuotaLimit?,
+        secondaryLimit: QuotaLimit?,
+        modelLimits: [QuotaLimit] = [],
+        geminiWindow: QuotaWindow? = nil,
+        geminiWeekly: QuotaWindow? = nil,
+        planType: String?,
+        fetchedAt: Date
+    ) {
+        self.app = app
+        self.primaryLimit = primaryLimit
+        self.secondaryLimit = secondaryLimit
+        self.modelLimits = modelLimits
+        self.geminiWindow = geminiWindow
+        self.geminiWeekly = geminiWeekly
+        self.planType = planType
+        self.fetchedAt = fetchedAt
+    }
+
+    var primaryWindow: QuotaWindow? { primaryLimit?.window }
+
+    var fiveHourLimit: QuotaLimit? {
+        [primaryLimit, secondaryLimit].compactMap { $0 }.first { $0.kind == .fiveHour }
+    }
+
+    var weeklyLimit: QuotaLimit? {
+        [primaryLimit, secondaryLimit].compactMap { $0 }.first { $0.kind == .weekly }
+    }
+
+    /// 兼容仍按标准窗口取值的调用点；新展示入口应优先使用 primaryLimit。
+    var fiveHour: QuotaWindow? { fiveHourLimit?.window }
+    var weekly: QuotaWindow? { weeklyLimit?.window }
+
+    var weeklyOpus: QuotaWindow? {
+        modelLimit(named: "opus")?.window
+    }
+
+    var weeklySonnet: QuotaWindow? {
+        modelLimit(named: "sonnet")?.window
+    }
+
+    var allLimits: [QuotaLimit] {
+        [primaryLimit, secondaryLimit].compactMap { $0 } + modelLimits
+    }
+
+    func preservingFutureResetDates(
+        from previous: QuotaSnapshot?,
+        now: Date = Date()
+    ) -> QuotaSnapshot {
+        guard let previous, previous.app == app else { return self }
+        let previousByID = Dictionary(
+            previous.allLimits.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var next = self
+        next.primaryLimit = carryingReset(for: primaryLimit, previousByID: previousByID, now: now)
+        next.secondaryLimit = carryingReset(for: secondaryLimit, previousByID: previousByID, now: now)
+        next.modelLimits = modelLimits.map {
+            carryingReset(for: $0, previousByID: previousByID, now: now) ?? $0
+        }
+        return next
+    }
+
+    private func modelLimit(named fragment: String) -> QuotaLimit? {
+        modelLimits.first {
+            $0.displayName?.localizedCaseInsensitiveContains(fragment) == true
+        }
+    }
+
+    private func carryingReset(
+        for limit: QuotaLimit?,
+        previousByID: [String: QuotaLimit],
+        now: Date
+    ) -> QuotaLimit? {
+        guard var limit, limit.window.resetsAt == nil,
+              let previous = previousByID[limit.id],
+              previous.kind == limit.kind,
+              let reset = previous.window.resetsAt,
+              reset > now
+        else { return limit }
+        limit.window.resetsAt = reset
+        return limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case app
+        case primaryLimit
+        case secondaryLimit
+        case modelLimits
+        case geminiWindow
+        case geminiWeekly
+        case planType
+        case fetchedAt
+        // v2 及更早缓存字段。
+        case fiveHour
+        case weekly
+        case weeklyOpus
+        case weeklySonnet
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        app = try container.decode(QuotaApp.self, forKey: .app)
+        geminiWindow = try container.decodeIfPresent(QuotaWindow.self, forKey: .geminiWindow)
+        geminiWeekly = try container.decodeIfPresent(QuotaWindow.self, forKey: .geminiWeekly)
+        planType = try container.decodeIfPresent(String.self, forKey: .planType)
+        fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+
+        if container.contains(.primaryLimit) || container.contains(.secondaryLimit) || container.contains(.modelLimits) {
+            primaryLimit = try container.decodeIfPresent(QuotaLimit.self, forKey: .primaryLimit)
+            secondaryLimit = try container.decodeIfPresent(QuotaLimit.self, forKey: .secondaryLimit)
+            modelLimits = try container.decodeIfPresent([QuotaLimit].self, forKey: .modelLimits) ?? []
+            return
+        }
+
+        let legacyFiveHour = try container.decodeIfPresent(QuotaWindow.self, forKey: .fiveHour)
+        let legacyWeekly = try container.decodeIfPresent(QuotaWindow.self, forKey: .weekly)
+        let assumedPrimaryKind: QuotaLimitKind = app == .codex ? .unknown : .fiveHour
+        primaryLimit = legacyFiveHour.map {
+            QuotaLimit.standard(kind: Self.kind(for: $0, fallback: assumedPrimaryKind), window: $0)
+        }
+        secondaryLimit = legacyWeekly.map {
+            QuotaLimit.standard(kind: Self.kind(for: $0, fallback: .weekly), window: $0)
+        }
+        if primaryLimit == nil, let secondaryLimit {
+            primaryLimit = secondaryLimit
+            self.secondaryLimit = nil
+        }
+
+        modelLimits = []
+        if let opus = try container.decodeIfPresent(QuotaWindow.self, forKey: .weeklyOpus) {
+            modelLimits.append(.model(id: nil, displayName: "Opus", window: opus, isActive: nil))
+        }
+        if let sonnet = try container.decodeIfPresent(QuotaWindow.self, forKey: .weeklySonnet) {
+            modelLimits.append(.model(id: nil, displayName: "Sonnet", window: sonnet, isActive: nil))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(app, forKey: .app)
+        try container.encodeIfPresent(primaryLimit, forKey: .primaryLimit)
+        try container.encodeIfPresent(secondaryLimit, forKey: .secondaryLimit)
+        try container.encode(modelLimits, forKey: .modelLimits)
+        try container.encodeIfPresent(geminiWindow, forKey: .geminiWindow)
+        try container.encodeIfPresent(geminiWeekly, forKey: .geminiWeekly)
+        try container.encodeIfPresent(planType, forKey: .planType)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+    }
+
+    nonisolated static func kind(
+        for window: QuotaWindow,
+        fallback: QuotaLimitKind = .unknown
+    ) -> QuotaLimitKind {
+        switch window.windowSeconds {
+        case 5 * 60 * 60: return .fiveHour
+        case 7 * 24 * 60 * 60: return .weekly
+        default: return fallback
+        }
+    }
+}
+
+nonisolated enum QuotaError: Error, CustomStringConvertible {
     case missingToken
     case http(Int, String)
     case transport(String)

@@ -71,7 +71,7 @@ enum ResetTimeDisplay: String, CaseIterable, Identifiable {
 }
 
 enum MenuBarWindowChoice: String, CaseIterable, Identifiable {
-    case fiveHour
+    case primary
     case weekly
     case both
 
@@ -79,7 +79,7 @@ enum MenuBarWindowChoice: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .fiveHour: return "5H 窗口"
+        case .primary: return "主要额度"
         case .weekly: return "WK 窗口"
         case .both: return "两者都显示"
         }
@@ -184,8 +184,13 @@ final class SettingsStore {
         self.defaults = defaults
         providerDisplaySettings = Self.loadProviderDisplaySettings(defaults: defaults)
         // 菜单栏
-        let mbWindowRaw = defaults.string(forKey: Keys.menuBarWindow) ?? MenuBarWindowChoice.fiveHour.rawValue
-        menuBarWindow = MenuBarWindowChoice(rawValue: mbWindowRaw) ?? .fiveHour
+        let mbWindowRaw = defaults.string(forKey: Keys.menuBarWindow) ?? MenuBarWindowChoice.primary.rawValue
+        if mbWindowRaw == "fiveHour" {
+            menuBarWindow = .primary
+            defaults.set(MenuBarWindowChoice.primary.rawValue, forKey: Keys.menuBarWindow)
+        } else {
+            menuBarWindow = MenuBarWindowChoice(rawValue: mbWindowRaw) ?? .primary
+        }
         // 悬浮窗
         floatingEnabled = defaults.object(forKey: Keys.floatingEnabled) as? Bool ?? false
         // 刷新

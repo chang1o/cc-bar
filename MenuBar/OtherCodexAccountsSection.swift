@@ -85,11 +85,19 @@ private struct ImportedCodexRow: View {
             }
             .frame(width: 52, alignment: .leading)
 
-            // 右：5H + WK 两行进度
+            // 右：服务端主要额度 + 可选次要额度
             if let snap = snapshot {
                 VStack(alignment: .leading, spacing: 5) {
-                    quotaRow(label: "5H", window: snap.fiveHour)
-                    quotaRow(label: "WK", window: snap.weekly)
+                    if let primary = snap.primaryLimit {
+                        quotaRow(label: compactLabel(for: primary.kind), window: primary.window)
+                    } else {
+                        quotaRow(label: "NOW", window: nil)
+                    }
+                    if let secondary = snap.secondaryLimit,
+                       secondary.id != snap.primaryLimit?.id
+                    {
+                        quotaRow(label: compactLabel(for: secondary.kind), window: secondary.window)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -127,6 +135,14 @@ private struct ImportedCodexRow: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.quaternary)
                 .frame(width: 70, alignment: .trailing)
+        }
+    }
+
+    private func compactLabel(for kind: QuotaLimitKind) -> String {
+        switch kind {
+        case .fiveHour: return "5H"
+        case .weekly, .modelWeekly: return "WK"
+        case .unknown: return "NOW"
         }
     }
 

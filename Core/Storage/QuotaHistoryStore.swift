@@ -1,34 +1,38 @@
 import Foundation
 
-enum QuotaHistoryAccountKind: String, Sendable, Codable {
+nonisolated enum QuotaHistoryAccountKind: String, Sendable, Codable {
     case codexPrimary
     case codexImported
     case claudePrimary
 }
 
-struct QuotaHistorySample: Sendable, Equatable, Codable {
+nonisolated struct QuotaHistorySample: Sendable, Equatable, Codable {
     var accountKey: String
     var app: QuotaApp
     var kind: QuotaHistoryAccountKind
     var sampledAt: Date
+    var limitID: String
+    var limitKind: QuotaLimitKind
     var remainingPercent: Int
     var resetsAt: Date?
 }
 
-struct QuotaChangeEvent: Sendable, Equatable, Codable, Identifiable {
+nonisolated struct QuotaChangeEvent: Sendable, Equatable, Codable, Identifiable {
     var id: String
     var accountKey: String
     var app: QuotaApp
     var kind: QuotaHistoryAccountKind
     var sampledAt: Date
+    var limitID: String
+    var limitKind: QuotaLimitKind
     var beforeRemainingPercent: Int
     var afterRemainingPercent: Int
     var deltaPercent: Int
     var resetsAt: Date?
 }
 
-struct QuotaHistoryPayload: Sendable, Equatable, Codable {
-    static let currentVersion = 1
+nonisolated struct QuotaHistoryPayload: Sendable, Equatable, Codable {
+    static let currentVersion = 2
 
     var version: Int = Self.currentVersion
     var dayStart: Date = QuotaHistoryStore.todayStart()
@@ -94,38 +98,62 @@ enum QuotaHistoryStore {
         snapshot: QuotaSnapshot,
         sampledAt: Date
     ) -> QuotaHistoryPayload {
-        guard let fiveHour = snapshot.fiveHour else {
+        guard let primary = snapshot.primaryLimit else {
             return prune(payload, now: sampledAt)
         }
 
         var next = prune(payload, now: sampledAt)
-        let remaining = roundedPercent(fiveHour.remainingPercent)
+        let remaining = roundedPercent(primary.window.remainingPercent)
         let previous = next.lastSamples[accountKey]
+        let sameLimitPrevious = previous.flatMap {
+            $0.limitID == primary.id && $0.limitKind == primary.kind ? $0 : nil
+        }
+
+        // 服务端把主额度从 5H 切成 WK（或恢复）时，两者不是同一条曲线。
+        // 清掉该账号当天旧基准和事件，从新窗口重新采样，避免制造虚假涨跌。
+        if let previous,
+           previous.limitID != primary.id || previous.limitKind != primary.kind
+        {
+            next.events.removeAll { $0.accountKey == accountKey }
+            next.lastSamples.removeValue(forKey: accountKey)
+        }
 
         next.lastSamples[accountKey] = QuotaHistorySample(
             accountKey: accountKey,
             app: app,
             kind: kind,
             sampledAt: sampledAt,
+            limitID: primary.id,
+            limitKind: primary.kind,
             remainingPercent: remaining,
-            resetsAt: fiveHour.resetsAt
+            resetsAt: primary.window.resetsAt
         )
 
-        guard let previous, previous.remainingPercent != remaining else {
+        guard let previous = sameLimitPrevious,
+              previous.remainingPercent != remaining
+        else {
             return next
         }
 
         let delta = remaining - previous.remainingPercent
         next.events.append(QuotaChangeEvent(
-            id: eventId(accountKey: accountKey, sampledAt: sampledAt, before: previous.remainingPercent, after: remaining),
+            id: eventId(
+                accountKey: accountKey,
+                limitID: primary.id,
+                sampledAt: sampledAt,
+                before: previous.remainingPercent,
+                after: remaining
+            ),
             accountKey: accountKey,
             app: app,
             kind: kind,
             sampledAt: sampledAt,
+            limitID: primary.id,
+            limitKind: primary.kind,
             beforeRemainingPercent: previous.remainingPercent,
             afterRemainingPercent: remaining,
             deltaPercent: delta,
-            resetsAt: fiveHour.resetsAt
+            resetsAt: primary.window.resetsAt
         ))
         return next
     }
@@ -162,10 +190,11 @@ enum QuotaHistoryStore {
 
     nonisolated private static func eventId(
         accountKey: String,
+        limitID: String,
         sampledAt: Date,
         before: Int,
         after: Int
     ) -> String {
-        "\(accountKey)|\(Int(sampledAt.timeIntervalSince1970))|\(before)|\(after)"
+        "\(accountKey)|\(limitID)|\(Int(sampledAt.timeIntervalSince1970))|\(before)|\(after)"
     }
 }

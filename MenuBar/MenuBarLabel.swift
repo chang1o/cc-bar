@@ -124,16 +124,10 @@ enum MenuBarBadgeImage {
     }
 
     private static func pctText(_ snap: QuotaSnapshot?, window: MenuBarWindowChoice) -> String {
-        switch window {
-        case .fiveHour:
-            return pctOrPlaceholder(snap?.fiveHour)
-        case .weekly:
-            return pctOrPlaceholder(snap?.weekly)
-        case .both:
-            let a = pctOrPlaceholder(snap?.fiveHour)
-            let b = pctOrPlaceholder(snap?.weekly)
-            return "\(a)/\(b)"
-        }
+        guard let snap else { return "--" }
+        let limits = MenuBarQuotaSelection.limits(in: snap, choice: window)
+        guard !limits.isEmpty else { return "--" }
+        return limits.map { pctOrPlaceholder($0.window) }.joined(separator: "/")
     }
 
     private static func pctOrPlaceholder(_ window: QuotaWindow?) -> String {
@@ -176,5 +170,25 @@ enum MenuBarBadgeImage {
         let logo: String
         let fallback: String
         let text: String
+    }
+}
+
+enum MenuBarQuotaSelection {
+    static func limits(
+        in snapshot: QuotaSnapshot,
+        choice: MenuBarWindowChoice
+    ) -> [QuotaLimit] {
+        switch choice {
+        case .primary:
+            return [snapshot.primaryLimit].compactMap { $0 }
+        case .weekly:
+            return [snapshot.weeklyLimit].compactMap { $0 }
+        case .both:
+            return [snapshot.primaryLimit, snapshot.secondaryLimit]
+                .compactMap { $0 }
+                .reduce(into: [QuotaLimit]()) { result, limit in
+                    if !result.contains(where: { $0.id == limit.id }) { result.append(limit) }
+                }
+        }
     }
 }

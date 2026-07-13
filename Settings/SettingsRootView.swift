@@ -173,7 +173,7 @@ struct SettingsRootView: View {
                 chineseDesc: "菜单栏显示哪个窗口"
             ) {
                 Picker("", selection: Binding(get: { settings.menuBarWindow }, set: { settings.menuBarWindow = $0 })) {
-                    Text("5H").tag(MenuBarWindowChoice.fiveHour)
+                    Text(tr("Main", "主要")).tag(MenuBarWindowChoice.primary)
                     Text("WK").tag(MenuBarWindowChoice.weekly)
                     Text(tr("Both", "都显示")).tag(MenuBarWindowChoice.both)
                 }

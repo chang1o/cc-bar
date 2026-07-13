@@ -1,6 +1,6 @@
 import Foundation
 
-enum CodexQuotaClient {
+nonisolated enum CodexQuotaClient {
     static let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
 
     /// 取数结果。`wham/usage` 响应除配额外还自带身份字段，
@@ -41,15 +41,19 @@ enum CodexQuotaClient {
         return .success(parse(root: root))
     }
 
-    nonisolated private static func parse(root: [String: Any]) -> Fetched {
+    nonisolated static func parse(root: [String: Any]) -> Fetched {
         let planType = root["plan_type"] as? String
         let rate = root["rate_limit"] as? [String: Any] ?? [:]
+        let primaryWindow = parseWindow(rate["primary_window"] as? [String: Any])
+        let secondaryWindow = parseWindow(rate["secondary_window"] as? [String: Any])
         let snapshot = QuotaSnapshot(
             app: .codex,
-            fiveHour: parseWindow(rate["primary_window"] as? [String: Any]),
-            weekly: parseWindow(rate["secondary_window"] as? [String: Any]),
-            weeklyOpus: nil,
-            weeklySonnet: nil,
+            primaryLimit: primaryWindow.map {
+                QuotaLimit.standard(kind: QuotaSnapshot.kind(for: $0), window: $0)
+            },
+            secondaryLimit: secondaryWindow.map {
+                QuotaLimit.standard(kind: QuotaSnapshot.kind(for: $0), window: $0)
+            },
             planType: planType,
             fetchedAt: Date()
         )

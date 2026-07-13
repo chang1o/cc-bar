@@ -22,7 +22,7 @@ struct FloatingContentView: View {
                     logoName: provider.logoName,
                     fallback: provider.fallback,
                     tint: provider.app.tintColor,
-                    window: appState.quotaSnapshot(for: provider.app)?.fiveHour
+                    window: appState.quotaSnapshot(for: provider.app)?.primaryWindow
                 )
             }
             if providers.isEmpty {

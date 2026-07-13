@@ -677,7 +677,11 @@ final class AppState {
 
     private func storeImportedCodex(id: String, snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
         let updatedAt = Date()
-        importedCodexQuotas[id] = snapshot
+        let mergedSnapshot = snapshot.preservingFutureResetDates(
+            from: importedCodexQuotas[id],
+            now: updatedAt
+        )
+        importedCodexQuotas[id] = mergedSnapshot
         importedCodexSources[id] = source
         importedCodexErrors[id] = nil
         var state = importedCodexRefreshStates[id] ?? QuotaRefreshState()
@@ -688,10 +692,10 @@ final class AppState {
         importedCodexRefreshStates[id] = state
 
         var cache = quotaCache.importedCodex ?? [:]
-        cache[id] = QuotaCacheRecord(snapshot: snapshot, source: source, updatedAt: updatedAt)
+        cache[id] = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
         quotaCache.importedCodex = cache
         saveQuotaCache()
-        recordImportedCodexQuotaHistory(id: id, snapshot: snapshot, sampledAt: updatedAt)
+        recordImportedCodexQuotaHistory(id: id, snapshot: mergedSnapshot, sampledAt: updatedAt)
     }
 
     private func markImportedCodexFailure(id: String, message: String, error: QuotaError? = nil) {
@@ -1079,21 +1083,23 @@ final class AppState {
 
     private func storeCodex(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
         let updatedAt = Date()
-        codexQuota = snapshot
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: codexQuota, now: updatedAt)
+        codexQuota = mergedSnapshot
         codexQuotaSource = source
         codexQuotaError = nil
         codexRefreshState.lastSuccessAt = updatedAt
         codexRefreshState.lastError = nil
         codexRefreshState.backoffUntil = nil
         codexRefreshState.source = source
-        quotaCache.codex = QuotaCacheRecord(snapshot: snapshot, source: source, updatedAt: updatedAt)
+        quotaCache.codex = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
         saveQuotaCache()
-        recordCodexQuotaHistory(snapshot: snapshot, sampledAt: updatedAt)
+        recordCodexQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
     }
 
     private func storeClaude(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
         let updatedAt = Date()
-        claudeQuota = snapshot
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: claudeQuota, now: updatedAt)
+        claudeQuota = mergedSnapshot
         claudeQuotaSource = source
         claudeQuotaError = nil
         claudeRefreshState.lastSuccessAt = updatedAt
@@ -1102,14 +1108,15 @@ final class AppState {
             claudeRefreshState.backoffUntil = nil
         }
         claudeRefreshState.source = source
-        quotaCache.claude = QuotaCacheRecord(snapshot: snapshot, source: source, updatedAt: updatedAt)
+        quotaCache.claude = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
         saveQuotaCache()
-        recordClaudeQuotaHistory(snapshot: snapshot, sampledAt: updatedAt)
+        recordClaudeQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
     }
 
     private func storeAntigravity(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
         let updatedAt = Date()
-        antigravityQuota = snapshot
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: antigravityQuota, now: updatedAt)
+        antigravityQuota = mergedSnapshot
         antigravityQuotaSource = source
         antigravityQuotaError = nil
         antigravityRefreshState.lastSuccessAt = updatedAt
@@ -1117,7 +1124,7 @@ final class AppState {
         antigravityRefreshState.backoffUntil = nil
         antigravityRefreshState.source = source
         quotaCache.antigravity = QuotaCacheRecord(
-            snapshot: snapshot,
+            snapshot: mergedSnapshot,
             source: source,
             updatedAt: updatedAt
         )
@@ -1183,8 +1190,9 @@ final class AppState {
         }
         if let q = claudeQuota {
             print("[Quota 额度] Claude: source=\(claudeQuotaSource?.rawValue ?? "—") \(format(q))")
-            if let opus = q.weeklyOpus { print("       └─ weeklyOpus=\(format(window: opus))") }
-            if let sonnet = q.weeklySonnet { print("       └─ weeklySonnet=\(format(window: sonnet))") }
+            for limit in q.modelLimits {
+                print("       └─ \(limit.displayName ?? limit.id)=\(format(window: limit.window))")
+            }
         } else {
             print("[Quota 额度] Claude 拉取失败: error=\(claudeQuotaError ?? "unknown")")
         }
@@ -1197,8 +1205,8 @@ final class AppState {
 
     private func format(_ q: QuotaSnapshot) -> String {
         let parts = [
-            q.fiveHour.map { "5h=\(format(window: $0))" },
-            q.weekly.map { "1w=\(format(window: $0))" }
+            q.primaryLimit.map { "primary[\($0.kind.rawValue)]=\(format(window: $0.window))" },
+            q.secondaryLimit.map { "secondary[\($0.kind.rawValue)]=\(format(window: $0.window))" }
         ].compactMap { $0 }
         return parts.joined(separator: " ")
     }

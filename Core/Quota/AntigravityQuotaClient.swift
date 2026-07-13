@@ -69,10 +69,9 @@ enum AntigravityQuotaClient {
                             )
                             let merged = QuotaSnapshot(
                                 app: .antigravity,
-                                fiveHour: snapshot.fiveHour,
-                                weekly: snapshot.weekly,
-                                weeklyOpus: nil,
-                                weeklySonnet: nil,
+                                primaryLimit: snapshot.primaryLimit,
+                                secondaryLimit: snapshot.secondaryLimit,
+                                modelLimits: snapshot.modelLimits,
                                 geminiWindow: snapshot.geminiWindow,
                                 geminiWeekly: snapshot.geminiWeekly,
                                 planType: identity?.account.planType,
@@ -89,7 +88,7 @@ enum AntigravityQuotaClient {
                             port: port,
                             csrfToken: process.csrfToken
                            ),
-                           fallback.snapshot.fiveHour != nil
+                           fallback.snapshot.primaryLimit != nil
                         {
                             processFallback = fallback
                         }
@@ -321,10 +320,11 @@ enum AntigravityQuotaClient {
         guard fiveHour != nil || weekly != nil else { return nil }
         return QuotaSnapshot(
             app: .antigravity,
-            fiveHour: fiveHour,
-            weekly: weekly,
-            weeklyOpus: nil,
-            weeklySonnet: nil,
+            primaryLimit: fiveHour.map { .standard(kind: .fiveHour, window: $0) }
+                ?? weekly.map { .standard(kind: .weekly, window: $0) },
+            secondaryLimit: fiveHour == nil ? nil : weekly.map {
+                .standard(kind: .weekly, window: $0)
+            },
             geminiWindow: geminiWindow,
             geminiWeekly: geminiWeekly,
             planType: nil,
@@ -406,10 +406,8 @@ enum AntigravityQuotaClient {
 
         let snapshot = QuotaSnapshot(
             app: .antigravity,
-            fiveHour: fiveHour,
-            weekly: nil,
-            weeklyOpus: nil,
-            weeklySonnet: nil,
+            primaryLimit: fiveHour.map { .standard(kind: .fiveHour, window: $0) },
+            secondaryLimit: nil,
             geminiWindow: geminiWindow,
             geminiWeekly: nil,
             planType: account.planType,

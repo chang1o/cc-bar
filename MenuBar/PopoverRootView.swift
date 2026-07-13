@@ -196,6 +196,7 @@ struct PopoverRootView: View {
     ) -> some View {
         let snap = appState.quotaSnapshot(for: provider.app)
         return ServiceBlockView(
+            app: provider.app,
             title: provider.title,
             subtitle: providerSubtitle(for: provider.app),
             tint: provider.app.tintColor,
@@ -318,6 +319,7 @@ struct PopoverRootView: View {
 // MARK: - ServiceBlockView
 
 private struct ServiceBlockView: View {
+    let app: QuotaApp
     let title: String
     let subtitle: String
     let tint: Color
@@ -335,7 +337,12 @@ private struct ServiceBlockView: View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
             bodyRow
-            weeklyRow
+            if let secondary = visibleSecondaryLimit {
+                compactLimitRow(secondary)
+            }
+            ForEach(snapshot?.modelLimits ?? []) { limit in
+                compactLimitRow(limit)
+            }
             if let gemini = geminiWindow {
                 geminiRow(gemini)
             }
@@ -392,34 +399,34 @@ private struct ServiceBlockView: View {
 
     private var bodyRow: some View {
         HStack(alignment: .center, spacing: 16) {
-            // 左:5h 大百分比 + 小标签
+            // 左:主要额度大百分比 + 动态窗口标签
             VStack(alignment: .center, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text(fiveHourValueText)
+                    Text(primaryValueText)
                         .font(.system(size: 32, weight: .semibold))
                         .monospacedDigit()
                         .kerning(-0.8)
-                        .foregroundStyle(fiveHourColor)
+                        .foregroundStyle(primaryColor)
                         .lineLimit(1)
                     Text("%")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(fiveHourColor.opacity(0.75))
+                        .foregroundStyle(primaryColor.opacity(0.75))
                 }
                 .fixedSize()
 
-                Text("5-HOUR · 五小时")
+                Text(primaryLimitTitle)
                     .font(.system(size: 9, weight: .semibold))
                     .kerning(0.5)
                     .foregroundStyle(.quaternary)
             }
 
-            // 右:5h 进度条 + 两行(数值 / label)
+            // 右:主要额度进度条 + 两行(数值 / label)
             VStack(alignment: .leading, spacing: 8) {
-                ProgressBar(value: fiveHourRemaining / 100, tint: fiveHourColor, height: 7)
+                ProgressBar(value: primaryRemaining / 100, tint: primaryColor, height: 7)
 
                 VStack(spacing: 1) {
                     HStack(spacing: 0) {
-                        ResetTimeText(resetsAt: snapshot?.fiveHour?.resetsAt)
+                        ResetTimeText(resetsAt: snapshot?.primaryLimit?.window.resetsAt)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -453,25 +460,66 @@ private struct ServiceBlockView: View {
         }
     }
 
-    private var weeklyRow: some View {
-        HStack(spacing: 10) {
-            Text("WK")
+    private func compactLimitRow(_ limit: QuotaLimit) -> some View {
+        let remaining = limit.window.remainingPercent
+        let color = statusColor(remainingPercent: remaining, tint: tint)
+        return HStack(spacing: 10) {
+            Text(compactLimitLabel(limit))
                 .font(.system(size: 9, weight: .semibold))
                 .kerning(0.6)
                 .foregroundStyle(.quaternary)
-                .frame(width: 36, alignment: .leading)
+                .lineLimit(1)
+                .frame(width: 70, alignment: .leading)
 
-            ProgressBar(value: weeklyRemaining / 100, tint: weeklyColor, height: 2.5)
+            ProgressBar(value: remaining / 100, tint: color, height: 2.5)
 
-            Text(weeklyPercentText)
+            Text("\(Int(remaining.rounded()))%")
                 .font(.system(size: 10.5, weight: .medium))
                 .monospacedDigit()
-                .foregroundStyle(weeklyColor)
+                .foregroundStyle(color)
 
-            ResetTimeText(resetsAt: snapshot?.weekly?.resetsAt)
+            compactLimitStatus(limit)
+        }
+    }
+
+    @ViewBuilder
+    private func compactLimitStatus(_ limit: QuotaLimit) -> some View {
+        if limit.kind == .modelWeekly,
+           limit.window.usedPercent == 0,
+           limit.window.resetsAt == nil
+        {
+            Text(tr("Unused", "尚未使用"))
+                .font(.system(size: 10.5))
+                .foregroundStyle(.quaternary)
+        } else if let resetsAt = limit.window.resetsAt {
+            ResetTimeText(resetsAt: resetsAt)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.quaternary)
+        } else {
+            Text(tr("Unknown", "未知"))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.quaternary)
         }
+    }
+
+    private func compactLimitLabel(_ limit: QuotaLimit) -> String {
+        switch limit.kind {
+        case .fiveHour:
+            return "5HOUR"
+        case .weekly:
+            return app == .claude ? "ALL" : "WEEKLY"
+        case .modelWeekly:
+            return normalizedModelLabel(limit.displayName) ?? "MODEL"
+        case .unknown:
+            return normalizedModelLabel(limit.displayName) ?? "CURRENT"
+        }
+    }
+
+    private func normalizedModelLabel(_ name: String?) -> String? {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty
+        else { return nil }
+        return name.caseInsensitiveCompare("Fable") == .orderedSame ? "Fable" : name
     }
 
     private func geminiRow(_ gemini: QuotaWindow) -> some View {
@@ -482,7 +530,7 @@ private struct ServiceBlockView: View {
                 .font(.system(size: 9, weight: .semibold))
                 .kerning(0.6)
                 .foregroundStyle(.quaternary)
-                .frame(width: 36, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
 
             ProgressBar(value: remaining / 100, tint: color, height: 2.5)
 
@@ -505,7 +553,7 @@ private struct ServiceBlockView: View {
                 .font(.system(size: 9, weight: .semibold))
                 .kerning(0.6)
                 .foregroundStyle(.quaternary)
-                .frame(width: 36, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
 
             ProgressBar(value: remaining / 100, tint: color, height: 2.5)
 
@@ -534,32 +582,35 @@ private struct ServiceBlockView: View {
 
     // MARK: Derived data
 
-    private var fiveHourRemaining: Double {
-        snapshot?.fiveHour?.remainingPercent ?? 0
+    private var primaryRemaining: Double {
+        snapshot?.primaryWindow?.remainingPercent ?? 0
     }
 
-    private var weeklyRemaining: Double {
-        snapshot?.weekly?.remainingPercent ?? 0
+    private var primaryColor: Color {
+        guard snapshot?.primaryLimit != nil else { return .secondary }
+        return statusColor(remainingPercent: primaryRemaining, tint: tint)
     }
 
-    private var fiveHourColor: Color {
-        guard snapshot?.fiveHour != nil else { return .secondary }
-        return statusColor(remainingPercent: fiveHourRemaining, tint: tint)
+    private var visibleSecondaryLimit: QuotaLimit? {
+        guard let secondary = snapshot?.secondaryLimit,
+              secondary.id != snapshot?.primaryLimit?.id
+        else { return nil }
+        return secondary
     }
 
-    private var weeklyColor: Color {
-        guard snapshot?.weekly != nil else { return .secondary }
-        return statusColor(remainingPercent: weeklyRemaining, tint: tint)
-    }
-
-    private var fiveHourValueText: String {
-        guard let window = snapshot?.fiveHour else { return "--" }
+    private var primaryValueText: String {
+        guard let window = snapshot?.primaryWindow else { return "--" }
         return "\(Int(window.remainingPercent.rounded()))"
     }
 
-    private var weeklyPercentText: String {
-        guard let window = snapshot?.weekly else { return "--%" }
-        return "\(Int(window.remainingPercent.rounded()))%"
+    private var primaryLimitTitle: String {
+        guard let limit = snapshot?.primaryLimit else { return "CURRENT" }
+        switch limit.kind {
+        case .fiveHour: return "5HOUR"
+        case .weekly: return "WEEKLY"
+        case .modelWeekly: return normalizedModelLabel(limit.displayName) ?? "MODEL"
+        case .unknown: return normalizedModelLabel(limit.displayName) ?? "CURRENT"
+        }
     }
 
     private var showsCost: Bool {

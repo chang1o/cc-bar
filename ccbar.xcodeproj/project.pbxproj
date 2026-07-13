@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B300000000000001AAAA /* QuotaParsingTests.swift */; };
 		4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4931AC522FC02A4200EE598C /* Assets.xcassets */; };
 		4931AC622FC02A4200EE598C /* MenuBarLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */; };
 		4931AC632FC02A4200EE598C /* CCBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC412FC02A4200EE598C /* CCBarApp.swift */; };
@@ -32,7 +33,6 @@
 		49C1B127000000000001AABB /* ClaudeDelegatedRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */; };
 		49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */; };
 		49C1B129000000000001AABB /* AntigravityQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */; };
-		49C1B130000000000001AABB /* MenuBarLabelFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B130000000000001AAAA /* MenuBarLabelFormatter.swift */; };
 		49C1B131000000000001AABB /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B131000000000001AAAA /* Scheduler.swift */; };
 		49C1B132000000000001AABB /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B132000000000001AAAA /* L10n.swift */; };
 		49C1B140000000000001AABB /* codex.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B140000000000001AAAA /* codex.svg */; };
@@ -68,7 +68,19 @@
 		49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		49C1B307000000000001AAAA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4931AC282FC029A000EE598C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4931AC2F2FC029A000EE598C;
+			remoteInfo = ccbar;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		49C1B300000000000001AAAA /* QuotaParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaParsingTests.swift; sourceTree = "<group>"; };
+		49C1B301000000000001AAAA /* CCBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CCBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4931AC302FC029A000EE598C /* CCBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CCBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4931AC3E2FC02A4200EE598C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		4931AC3F2FC02A4200EE598C /* ccbar.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ccbar.xcodeproj; sourceTree = "<group>"; };
@@ -98,7 +110,6 @@
 		49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeDelegatedRefresh.swift; sourceTree = "<group>"; };
 		49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsClient.swift; sourceTree = "<group>"; };
 		49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityQuotaClient.swift; sourceTree = "<group>"; };
-		49C1B130000000000001AAAA /* MenuBarLabelFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarLabelFormatter.swift; sourceTree = "<group>"; };
 		49C1B131000000000001AAAA /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		49C1B132000000000001AAAA /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		49C1B140000000000001AAAA /* codex.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = codex.svg; sourceTree = "<group>"; };
@@ -136,6 +147,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		49C1B304000000000001AABB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		4931AC2D2FC029A000EE598C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -162,6 +180,7 @@
 				49C1B180000000000001AAAA /* Onboarding */,
 				4931AC532FC02A4200EE598C /* Resources */,
 				4931AC552FC02A4200EE598C /* Settings */,
+				49C1B302000000000001AAAA /* CCBarTests */,
 				4931AC312FC029A000EE598C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -170,6 +189,7 @@
 			isa = PBXGroup;
 			children = (
 				4931AC302FC029A000EE598C /* CCBar.app */,
+				49C1B301000000000001AAAA /* CCBarTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -193,7 +213,6 @@
 			isa = PBXGroup;
 			children = (
 				4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */,
-				49C1B130000000000001AAAA /* MenuBarLabelFormatter.swift */,
 				4931AC502FC02A4200EE598C /* PopoverRootView.swift */,
 				49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */,
 			);
@@ -349,9 +368,37 @@
 			path = Helpers;
 			sourceTree = "<group>";
 		};
+		49C1B302000000000001AAAA /* CCBarTests */ = {
+			isa = PBXGroup;
+			children = (
+				49C1B300000000000001AAAA /* QuotaParsingTests.swift */,
+			);
+			path = CCBarTests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		49C1B306000000000001AAAA /* CCBarTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 49C1B30B000000000001AAAA /* Build configuration list for PBXNativeTarget "CCBarTests" */;
+			buildPhases = (
+				49C1B303000000000001AABB /* Sources */,
+				49C1B304000000000001AABB /* Frameworks */,
+				49C1B305000000000001AABB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				49C1B308000000000001AAAA /* PBXTargetDependency */,
+			);
+			name = CCBarTests;
+			packageProductDependencies = (
+			);
+			productName = CCBarTests;
+			productReference = 49C1B301000000000001AAAA /* CCBarTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		4931AC2F2FC029A000EE598C /* ccbar */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 4931AC3B2FC029A100EE598C /* Build configuration list for PBXNativeTarget "ccbar" */;
@@ -385,6 +432,10 @@
 					4931AC2F2FC029A000EE598C = {
 						CreatedOnToolsVersion = 26.5;
 					};
+					49C1B306000000000001AAAA = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 4931AC2F2FC029A000EE598C;
+					};
 				};
 			};
 			buildConfigurationList = 4931AC2B2FC029A000EE598C /* Build configuration list for PBXProject "ccbar" */;
@@ -408,11 +459,19 @@
 			projectRoot = "";
 			targets = (
 				4931AC2F2FC029A000EE598C /* ccbar */,
+				49C1B306000000000001AAAA /* CCBarTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		49C1B305000000000001AABB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		4931AC2E2FC029A000EE598C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -450,6 +509,14 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		49C1B303000000000001AABB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		4931AC2C2FC029A000EE598C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -476,7 +543,6 @@
 				49C1B125000000000001AABB /* ClaudeTokenRefresher.swift in Sources */,
 				49C1B126000000000001AABB /* ServiceStatusClient.swift in Sources */,
 				49C1B127000000000001AABB /* ClaudeDelegatedRefresh.swift in Sources */,
-				49C1B130000000000001AABB /* MenuBarLabelFormatter.swift in Sources */,
 				49C1B131000000000001AABB /* Scheduler.swift in Sources */,
 				49C1B132000000000001AABB /* L10n.swift in Sources */,
 				49C1B107000000000001AABB /* ScanCache.swift in Sources */,
@@ -514,7 +580,65 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		49C1B308000000000001AAAA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4931AC2F2FC029A000EE598C /* ccbar */;
+			targetProxy = 49C1B307000000000001AAAA /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		49C1B309000000000001AAAA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 324F7B2X9T;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CCBar.app/Contents/MacOS/CCBar";
+			};
+			name = Debug;
+		};
+		49C1B30A000000000001AAAA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 324F7B2X9T;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CCBar.app/Contents/MacOS/CCBar";
+			};
+			name = Release;
+		};
 		4931AC392FC029A100EE598C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -708,6 +832,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		49C1B30B000000000001AAAA /* Build configuration list for PBXNativeTarget "CCBarTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				49C1B309000000000001AAAA /* Debug */,
+				49C1B30A000000000001AAAA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		4931AC2B2FC029A000EE598C /* Build configuration list for PBXProject "ccbar" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
