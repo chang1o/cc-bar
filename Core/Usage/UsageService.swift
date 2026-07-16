@@ -40,6 +40,10 @@ final class UsageService {
             loadedRollupGeneration = nil
             lastScanAt = nil
         }
+        // 个人历史用量一次性补录：见 ImportedUsageBackfill 注释。每次启动都重新按天去重合并，
+        // 不依赖也不影响上面的常规扫描缓存，文件不存在时是纯 no-op。
+        let existingClaudeDays = Set(aggregator.snapshot().filter { $0.app == .claude }.map(\.day))
+        aggregator.ingest(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
         publishTotals()
         // 远端价格目录后台刷新：非阻塞，isDue 内部判断是否真的需要发请求，刷新结果由下次扫描自然拾取。
         PricingCatalogStore.shared.refreshIfNeeded()

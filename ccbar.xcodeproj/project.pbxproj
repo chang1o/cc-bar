@@ -21,6 +21,7 @@
 		49C1B105000000000001AABB /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B105000000000001AAAA /* Settings.swift */; };
 		49C1B106000000000001AABB /* QuotaCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B106000000000001AAAA /* QuotaCache.swift */; };
 		49C1B107000000000001AABB /* ScanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B107000000000001AAAA /* ScanCache.swift */; };
+		49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */; };
 		49C1B108000000000001AABB /* QuotaHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B108000000000001AAAA /* QuotaHistoryStore.swift */; };
 		49C1B120000000000001AABB /* QuotaModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B120000000000001AAAA /* QuotaModels.swift */; };
 		49C1B121000000000001AABB /* CodexTokenRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B121000000000001AAAA /* CodexTokenRefresher.swift */; };
@@ -134,6 +135,7 @@
 		49C1B166000000000001AAAA /* ConversationAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationAggregator.swift; sourceTree = "<group>"; };
 		49C1B167000000000001AAAA /* ConversationTitleIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTitleIndex.swift; sourceTree = "<group>"; };
 		49C1B168000000000001AAAA /* ConversationRollupCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRollupCache.swift; sourceTree = "<group>"; };
+		49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedUsageBackfill.swift; sourceTree = "<group>"; };
 		49C1B171000000000001AAAA /* FloatingPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanel.swift; sourceTree = "<group>"; };
 		49C1B172000000000001AAAA /* FloatingContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingContentView.swift; sourceTree = "<group>"; };
 		49C1B173000000000001AAAA /* FloatingPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanelController.swift; sourceTree = "<group>"; };
@@ -268,6 +270,7 @@
 				49C1B108000000000001AAAA /* QuotaHistoryStore.swift */,
 				49C1B107000000000001AAAA /* ScanCache.swift */,
 				49C1B168000000000001AAAA /* ConversationRollupCache.swift */,
+				49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */,
 			);
 			path = Storage;
 			sourceTree = "<group>";
@@ -554,6 +557,7 @@
 				49C1B131000000000001AABB /* Scheduler.swift in Sources */,
 				49C1B132000000000001AABB /* L10n.swift in Sources */,
 				49C1B107000000000001AABB /* ScanCache.swift in Sources */,
+				49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */,
 				49C1B108000000000001AABB /* QuotaHistoryStore.swift in Sources */,
 				49C1B150000000000001AABB /* UsageModels.swift in Sources */,
 				49C1B151000000000001AABB /* Pricing.swift in Sources */,
