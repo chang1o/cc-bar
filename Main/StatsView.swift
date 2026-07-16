@@ -388,25 +388,31 @@ struct StatsView: View {
             KPICard(
                 english: "Total spend",
                 chinese: "总花费",
-                value: StatsFormatter.cost(currentTotalsAll.costUSD),
-                delta: deltaPercent(current: currentTotalsAll.costUSD.doubleValue,
-                                    previous: previousTotalsAll.costUSD.doubleValue),
+                value: StatsFormatter.tierCost(
+                    currentTotalsAll.costUSD,
+                    hasUnpricedUsage: currentTotalsAll.hasUnpricedUsage
+                ),
+                delta: costDelta(current: currentTotalsAll, previous: previousTotalsAll),
                 tint: nil
             )
             KPICard(
                 english: "Codex",
                 chinese: "OpenAI",
-                value: StatsFormatter.cost(currentTotals(.codex).costUSD),
-                delta: deltaPercent(current: currentTotals(.codex).costUSD.doubleValue,
-                                    previous: previousTotals(.codex).costUSD.doubleValue),
+                value: StatsFormatter.tierCost(
+                    currentTotals(.codex).costUSD,
+                    hasUnpricedUsage: currentTotals(.codex).hasUnpricedUsage
+                ),
+                delta: costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
                 tint: .codexAccent
             )
             KPICard(
                 english: "Claude Code",
                 chinese: "Anthropic",
-                value: StatsFormatter.cost(currentTotals(.claude).costUSD),
-                delta: deltaPercent(current: currentTotals(.claude).costUSD.doubleValue,
-                                    previous: previousTotals(.claude).costUSD.doubleValue),
+                value: StatsFormatter.tierCost(
+                    currentTotals(.claude).costUSD,
+                    hasUnpricedUsage: currentTotals(.claude).hasUnpricedUsage
+                ),
+                delta: costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
                 tint: .claudeAccent
             )
         }
@@ -416,8 +422,12 @@ struct StatsView: View {
 
     private var tokenBreakdownPanel: some View {
         Panel(title: "Token breakdown", chinese: "Token 拆分") {
-            // 隐藏 hero:总 Tokens 与 KPI 卡 1 重复;分项使用横排图例。
-            TokenBreakdownView(totals: currentTotalsAll, showsHero: false)
+            VStack(alignment: .leading, spacing: 12) {
+                // 隐藏 hero:总 Tokens 与 KPI 卡 1 重复;分项使用横排图例。
+                TokenBreakdownView(totals: currentTotalsAll, showsHero: false)
+                Divider()
+                FastUsageSummaryView(breakdown: currentSpeedBreakdown)
+            }
         }
     }
 
@@ -509,7 +519,8 @@ struct StatsView: View {
                     tint: .codexAccent,
                     value: currentTotals(.codex).costUSD,
                     totalValue: currentTotalsAll.costUSD,
-                    totals: currentTotals(.codex)
+                    totals: currentTotals(.codex),
+                    speed: currentSpeedBreakdown(.codex)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 ByServiceRow(
@@ -518,7 +529,8 @@ struct StatsView: View {
                     tint: .claudeAccent,
                     value: currentTotals(.claude).costUSD,
                     totalValue: currentTotalsAll.costUSD,
-                    totals: currentTotals(.claude)
+                    totals: currentTotals(.claude),
+                    speed: currentSpeedBreakdown(.claude)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -681,11 +693,17 @@ struct StatsView: View {
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .foregroundStyle(.primary)
                                 .monospacedDigit()
-                            Text(StatsFormatter.cost(row.totals.costUSD))
+                            Text(StatsFormatter.tierCost(
+                                row.totals.costUSD,
+                                hasUnpricedUsage: row.totals.hasUnpricedUsage
+                            ))
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .monospacedDigit()
                         }
                         TokenBreakdownInlineRow(totals: row.totals)
+                        if row.speed.fast.requestCount > 0 {
+                            FastUsageInlineRow(breakdown: row.speed)
+                        }
                     }
                     .padding(.leading, 12)
                 }
@@ -749,6 +767,18 @@ struct StatsView: View {
         return t
     }
 
+    private var currentSpeedBreakdown: UsageSpeedBreakdown {
+        var result = UsageSpeedBreakdown()
+        for bucket in filteredBuckets { result.add(bucket) }
+        return result
+    }
+
+    private func currentSpeedBreakdown(_ app: UsageApp) -> UsageSpeedBreakdown {
+        var result = UsageSpeedBreakdown()
+        for bucket in filteredBuckets where bucket.app == app { result.add(bucket) }
+        return result
+    }
+
     private var previousTotalsAll: UsageTotals {
         guard let bounds = previousRangeBounds else { return .zero }
         let buckets = appState.usageService.aggregator.snapshot()
@@ -775,6 +805,10 @@ struct StatsView: View {
         guard previousRangeBounds != nil else { return nil }
         guard previous > 0 else { return nil }
         return ((current - previous) / previous) * 100
+    }
+
+    private func costDelta(current: UsageTotals, previous: UsageTotals) -> Double? {
+        return deltaPercent(current: current.costUSD.doubleValue, previous: previous.costUSD.doubleValue)
     }
 
     private var dailySamples: [DailySample] {
@@ -826,14 +860,15 @@ struct StatsView: View {
     }
 
     private func modelRows(for app: UsageApp) -> [ModelRow] {
-        var byModel: [String: UsageTotals] = [:]
+        var byModel: [String: (totals: UsageTotals, speed: UsageSpeedBreakdown)] = [:]
         for b in filteredBuckets where b.app == app {
-            var t = byModel[b.model] ?? .zero
-            t.add(b)
-            byModel[b.model] = t
+            var item = byModel[b.model] ?? (.zero, UsageSpeedBreakdown())
+            item.totals.add(b)
+            item.speed.add(b)
+            byModel[b.model] = item
         }
         return byModel
-            .map { ModelRow(model: $0.key, totals: $0.value) }
+            .map { ModelRow(model: $0.key, totals: $0.value.totals, speed: $0.value.speed) }
             .sorted {
                 if $0.totals.costUSD == $1.totals.costUSD {
                     return $0.model < $1.model
@@ -913,12 +948,21 @@ private struct DailyTooltip: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            serviceRow(color: .codexAccent, label: "Codex", value: StatsFormatter.cost(sample.codexCost))
-            serviceRow(color: .claudeAccent, label: "Claude", value: StatsFormatter.cost(sample.claudeCost))
+            serviceRow(color: .codexAccent, label: "Codex", value: StatsFormatter.tierCost(
+                sample.codexCost,
+                hasUnpricedUsage: sample.codex.hasUnpricedUsage
+            ))
+            serviceRow(color: .claudeAccent, label: "Claude", value: StatsFormatter.tierCost(
+                sample.claudeCost,
+                hasUnpricedUsage: sample.claude.hasUnpricedUsage
+            ))
 
             Divider()
 
-            totalRow(label: tr("Total", "合计"), value: StatsFormatter.cost(sample.totalCost), emphasized: true)
+            totalRow(label: tr("Total", "合计"), value: StatsFormatter.tierCost(
+                sample.totalCost,
+                hasUnpricedUsage: sample.totalUsage.hasUnpricedUsage
+            ), emphasized: true)
             totalRow(label: "Tokens", value: StatsFormatter.compactToken(sample.totalTokens), emphasized: true)
 
             Divider()
@@ -1162,6 +1206,66 @@ private struct TokenBreakdownInlineRow: View {
     }
 }
 
+/// Overview 的 Fast 汇总：原始 Tokens 与计费等效 Tokens 分开展示，避免污染总 Tokens 口径。
+private struct FastUsageSummaryView: View {
+    let breakdown: UsageSpeedBreakdown
+
+    var body: some View {
+        HStack(spacing: 0) {
+            item(tr("Fast tokens", "Fast Tokens"), StatsFormatter.compactToken(breakdown.fast.totalTokens))
+            item(tr("Billing-equivalent tokens", "计费等效 Tokens"), StatsFormatter.billingEquivalentTokens(breakdown))
+            item(tr("Fast multiplier", "Fast 倍率"), StatsFormatter.fastMultiplier(breakdown))
+            item(tr("Fast estimated cost", "Fast 估算费用"), StatsFormatter.tierCost(
+                breakdown.fast.costUSD,
+                hasUnpricedUsage: breakdown.fastHasUnpricedCost
+            ))
+            item(tr("Fast share", "Fast 占比"), fastShare)
+        }
+    }
+
+    private var fastShare: String {
+        let total = breakdown.standard.totalTokens + breakdown.fast.totalTokens + breakdown.unknown.totalTokens
+        guard total > 0 else { return "0%" }
+        return "\(Int((Double(breakdown.fast.totalTokens) / Double(total) * 100).rounded()))%"
+    }
+
+    private func item(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 12.5, weight: .semibold))
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct FastUsageInlineRow: View {
+    let breakdown: UsageSpeedBreakdown
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 8.5, weight: .semibold))
+            Text("Fast \(StatsFormatter.compactToken(breakdown.fast.totalTokens))")
+            Text("·")
+            Text("\(tr("billing equivalent", "计费等效")) \(StatsFormatter.billingEquivalentTokens(breakdown))")
+            Text("·")
+            Text(StatsFormatter.fastMultiplier(breakdown))
+            Text("·")
+            Text(StatsFormatter.tierCost(
+                breakdown.fast.costUSD,
+                hasUnpricedUsage: breakdown.fastHasUnpricedCost
+            ))
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 10.5, design: .monospaced))
+        .foregroundStyle(.secondary)
+    }
+}
+
 // MARK: - By service row
 
 private struct ByServiceRow: View {
@@ -1171,6 +1275,7 @@ private struct ByServiceRow: View {
     let value: Decimal
     let totalValue: Decimal
     let totals: UsageTotals
+    let speed: UsageSpeedBreakdown
 
     var body: some View {
         // 花费金额不再展示:与 KPI 行的 Codex / Claude Code 卡完全重复,此处保留占比 + 量。
@@ -1199,6 +1304,10 @@ private struct ByServiceRow: View {
                 .padding(.leading, 16)
             TokenBreakdownInlineRow(totals: totals)
                 .padding(.leading, 16)
+            if speed.fast.requestCount > 0 {
+                FastUsageInlineRow(breakdown: speed)
+                    .padding(.leading, 16)
+            }
         }
         .padding(.vertical, 8)
     }
@@ -1469,6 +1578,7 @@ private struct DailySample: Identifiable {
         t.cacheReadTokens = codex.cacheReadTokens + claude.cacheReadTokens
         t.cacheCreationTokens = codex.cacheCreationTokens + claude.cacheCreationTokens
         t.costUSD = totalCost
+        t.hasUnpricedUsage = codex.hasUnpricedUsage || claude.hasUnpricedUsage
         return t
     }
 }
@@ -1477,6 +1587,7 @@ private struct ModelRow: Identifiable {
     var id: String { model }
     let model: String
     let totals: UsageTotals
+    let speed: UsageSpeedBreakdown
 }
 
 private struct QuotaTimelineSection: Identifiable {
@@ -1517,6 +1628,33 @@ enum StatsFormatter {
         return "$\(f.string(from: ns) ?? "0.0000")"
     }
 
+    @MainActor
+    static func tierCost(_ value: Decimal, hasUnpricedUsage _: Bool) -> String {
+        return cost(value)
+    }
+
+    @MainActor
+    static func tierCostPrecise(_ value: Decimal, hasUnpricedUsage _: Bool) -> String {
+        return costPrecise(value)
+    }
+
+    @MainActor
+    static func billingEquivalentTokens(_ breakdown: UsageSpeedBreakdown) -> String {
+        compactToken(breakdown.fastBillingEquivalentTokens)
+    }
+
+    @MainActor
+    static func fastMultiplier(_ breakdown: UsageSpeedBreakdown) -> String {
+        guard !breakdown.hasUnpricedFastEquivalent else { return "—" }
+        guard let minimum = breakdown.fastMinimumMultiplier,
+              let maximum = breakdown.fastMaximumMultiplier else {
+            return "—"
+        }
+        return minimum == maximum
+            ? "\(minimum.asPlainString)×"
+            : "\(minimum.asPlainString)–\(maximum.asPlainString)×"
+    }
+
     static func token(_ value: Int) -> String {
         let f = NumberFormatter()
         f.numberStyle = .decimal
@@ -1552,6 +1690,13 @@ enum StatsFormatter {
             }
             return "\(value)"
         }
+    }
+
+    @MainActor
+    static func compactToken(_ value: Decimal) -> String {
+        let rounded = NSDecimalNumber(decimal: value).doubleValue.rounded()
+        if rounded >= Double(Int.max) { return "—" }
+        return compactToken(Int(rounded))
     }
 
     /// 保留两位小数,去掉末尾多余的 0(如 6772.30 → 6772.3,1234.00 → 1234)。

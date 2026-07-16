@@ -348,6 +348,7 @@ private struct ConversationListRow: View {
                     .help(projectHelp)
                 Text("·")
                 Text(summary.models.joined(separator: ", ")).lineLimit(1)
+                UsageSpeedBadge(summary: summary.speed.summary)
             }
             .font(.system(size: 10.5))
             .foregroundStyle(.secondary)
@@ -393,6 +394,7 @@ private struct ConversationDetailView: View {
                     .padding(14)
                     .ccPanel(cornerRadius: 10)
                 tokenDetails
+                speedDetails
                 costDetails
                 modelDetails
             }
@@ -410,6 +412,7 @@ private struct ConversationDetailView: View {
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(Color.secondary.opacity(0.12), in: Capsule())
+                UsageSpeedBadge(summary: detail.speed.summary)
                 Spacer()
             }
             Text(detail.info.title ?? tr("Untitled", "（无标题）"))
@@ -432,9 +435,9 @@ private struct ConversationDetailView: View {
     private var tokenDetails: some View {
         DetailPanel(title: tr("Token details", "Token 明细")) {
             DetailGrid(items: [
-                (tr("Input", "输入"), StatsFormatter.token(detail.totals.inputTokens)),
-                (tr("Output", "输出"), StatsFormatter.token(detail.totals.outputTokens)),
-                (tr("Cache read", "缓存读取"), StatsFormatter.token(detail.totals.cacheReadTokens)),
+                (tr("Input", "输入"), StatsFormatter.compactToken(detail.totals.inputTokens)),
+                (tr("Output", "输出"), StatsFormatter.compactToken(detail.totals.outputTokens)),
+                (tr("Cache read", "缓存读取"), StatsFormatter.compactToken(detail.totals.cacheReadTokens)),
                 (tr("Cache write", "缓存写入"), cacheCreationText),
                 (tr("Requests", "请求数"), StatsFormatter.token(detail.totals.requestCount)),
                 (tr("Estimated cost", "API 等值估算费用"), costLabel(detail.costs))
@@ -445,11 +448,46 @@ private struct ConversationDetailView: View {
     private var costDetails: some View {
         DetailPanel(title: tr("Estimated cost breakdown", "估算费用构成")) {
             DetailGrid(items: [
-                (tr("Input", "输入"), StatsFormatter.costPrecise(detail.costs.input)),
-                (tr("Output", "输出"), StatsFormatter.costPrecise(detail.costs.output)),
-                (tr("Cache read", "缓存读取"), StatsFormatter.costPrecise(detail.costs.cacheRead)),
-                (tr("Cache write", "缓存写入"), detail.info.cacheCreationAvailable ? StatsFormatter.costPrecise(detail.costs.cacheCreation) : "N/A"),
+                (tr("Standard cost", "Standard 费用"), StatsFormatter.tierCost(
+                    detail.speed.standard.costUSD,
+                    hasUnpricedUsage: detail.speed.standardHasUnpricedCost
+                )),
+                (tr("Fast estimated cost", "Fast 估算费用"), StatsFormatter.tierCost(
+                    detail.speed.fast.costUSD,
+                    hasUnpricedUsage: detail.speed.fastHasUnpricedCost
+                )),
+                (tr("Input", "输入"), StatsFormatter.tierCostPrecise(
+                    detail.costs.input,
+                    hasUnpricedUsage: detail.costs.hasUnpricedUsage
+                )),
+                (tr("Output", "输出"), StatsFormatter.tierCostPrecise(
+                    detail.costs.output,
+                    hasUnpricedUsage: detail.costs.hasUnpricedUsage
+                )),
+                (tr("Cache read", "缓存读取"), StatsFormatter.tierCostPrecise(
+                    detail.costs.cacheRead,
+                    hasUnpricedUsage: detail.costs.hasUnpricedUsage
+                )),
+                (tr("Cache write", "缓存写入"), detail.info.cacheCreationAvailable ? StatsFormatter.tierCostPrecise(
+                    detail.costs.cacheCreation,
+                    hasUnpricedUsage: detail.costs.hasUnpricedUsage
+                ) : "N/A"),
                 (tr("Total", "合计"), costLabel(detail.costs))
+            ])
+        }
+    }
+
+    private var speedDetails: some View {
+        DetailPanel(title: tr("Speed usage", "速度档位用量")) {
+            DetailGrid(items: [
+                (tr("Standard tokens", "Standard Tokens"), StatsFormatter.compactToken(detail.speed.standard.totalTokens)),
+                (tr("Fast tokens", "Fast Tokens"), StatsFormatter.compactToken(detail.speed.fast.totalTokens)),
+                (tr("Billing-equivalent tokens", "计费等效 Tokens"), StatsFormatter.billingEquivalentTokens(detail.speed)),
+                (tr("Fast multiplier", "Fast 倍率"), StatsFormatter.fastMultiplier(detail.speed)),
+                (tr("Unrecognized tokens", "未识别 Tokens"), StatsFormatter.compactToken(detail.speed.unknown.totalTokens)),
+                (tr("Standard requests", "Standard 请求"), StatsFormatter.token(detail.speed.standard.requestCount)),
+                (tr("Fast requests", "Fast 请求"), StatsFormatter.token(detail.speed.fast.requestCount)),
+                (tr("Unrecognized requests", "未识别请求"), StatsFormatter.token(detail.speed.unknown.requestCount))
             ])
         }
     }
@@ -461,6 +499,7 @@ private struct ConversationDetailView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(item.model).fontWeight(.medium)
+                            UsageSpeedBadge(summary: item.speed.summary)
                             Spacer()
                             Text("\(StatsFormatter.compactToken(item.totals.totalTokens)) Tokens")
                             Text(costLabel(item.costs)).fontWeight(.semibold)
@@ -468,6 +507,11 @@ private struct ConversationDetailView: View {
                         Text("in \(StatsFormatter.compactToken(item.totals.inputTokens))  ·  out \(StatsFormatter.compactToken(item.totals.outputTokens))  ·  cache \(StatsFormatter.compactToken(item.totals.cacheReadTokens))")
                             .font(.system(size: 10.5, design: .monospaced))
                             .foregroundStyle(.secondary)
+                        if item.speed.fast.requestCount > 0 {
+                            Text("Fast \(StatsFormatter.compactToken(item.speed.fast.totalTokens))  ·  \(tr("billing equivalent", "计费等效")) \(StatsFormatter.billingEquivalentTokens(item.speed))  ·  \(StatsFormatter.fastMultiplier(item.speed))  ·  \(StatsFormatter.tierCost(item.speed.fast.costUSD, hasUnpricedUsage: item.speed.fastHasUnpricedCost))")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     if item.id != detail.models.last?.id { Divider() }
                 }
@@ -476,7 +520,7 @@ private struct ConversationDetailView: View {
     }
 
     private var cacheCreationText: String {
-        detail.info.cacheCreationAvailable ? StatsFormatter.token(detail.totals.cacheCreationTokens) : "N/A"
+        detail.info.cacheCreationAvailable ? StatsFormatter.compactToken(detail.totals.cacheCreationTokens) : "N/A"
     }
 
     private var projectText: String {
@@ -512,6 +556,31 @@ private struct ConversationDetailView: View {
     }
 }
 
+private struct UsageSpeedBadge: View {
+    let summary: UsageSpeedSummary
+
+    @ViewBuilder
+    var body: some View {
+        switch summary {
+        case .fast:
+            badge(tr("Fast", "Fast"), icon: "bolt.fill")
+        case .mixed:
+            badge(tr("Mixed", "混合"), icon: "arrow.left.arrow.right")
+        case .standard, .unknown:
+            EmptyView()
+        }
+    }
+
+    private func badge(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.11), in: Capsule())
+    }
+}
+
 private struct DetailPanel<Content: View>: View {
     let title: String
     @ViewBuilder var content: () -> Content
@@ -541,8 +610,5 @@ private struct DetailGrid: View {
 }
 
 private func costLabel(_ costs: ConversationCostTotals) -> String {
-    if costs.hasUnpricedUsage {
-        return costs.total == 0 ? tr("Unpriced", "未定价") : "\(StatsFormatter.cost(costs.total)) + \(tr("unpriced", "未定价"))"
-    }
     return StatsFormatter.cost(costs.total)
 }

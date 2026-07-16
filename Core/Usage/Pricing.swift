@@ -60,7 +60,6 @@ nonisolated enum Pricing {
         "claude-haiku-4":    .init(input: 0.8, output: 4,   cacheRead: 0.08, cacheCreation: 1.0),
 
         // —— Codex / GPT-5 系（input 含 cache_read，调用侧已扣 billable）。
-        // 注：实际 5.5 在 >272k context 有阶梯价；本表采用 cc-switch 一致的「单档」价。
         "gpt-5":             .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
         "gpt-5-mini":        .init(input: 0.25, output: 2,   cacheRead: 0.025, cacheCreation: 0),
         "gpt-5-nano":        .init(input: 0.05, output: 0.40, cacheRead: 0.005, cacheCreation: 0),
@@ -73,7 +72,7 @@ nonisolated enum Pricing {
         "gpt-5.4-codex":     .init(input: 2.50, output: 15,  cacheRead: 0.25,  cacheCreation: 0),
         "gpt-5.5":           .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "gpt-5.5-codex":     .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
-        "gpt-5.5-pro":       .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
+        "gpt-5.5-pro":       .init(input: 30,   output: 180, cacheRead: 30,    cacheCreation: 0),
         "codex-mini-latest": .init(input: 1.50, output: 6,   cacheRead: 0.375, cacheCreation: 0),
 
         // —— DeepSeek 系列（与 cc-switch seed_model_pricing 对齐）——
@@ -89,7 +88,49 @@ nonisolated enum Pricing {
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
     ]
 
-    /// OpenAI Standard API 的 GPT-5.6 上下文阶梯价（USD / 百万 token）。
+    /// Fast / Priority 的显式价格表。远端 LiteLLM / models.dev 目录没有服务档位维度，不能用于覆盖这些价格。
+    private static let codexFastPrices: [String: ModelPrice] = [
+        "gpt-5.6":       .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
+        "gpt-5.6-sol":   .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
+        "gpt-5.6-terra": .init(input: 5,    output: 30,  cacheRead: 0.5,  cacheCreation: 6.25),
+        "gpt-5.6-luna":  .init(input: 2,    output: 12,  cacheRead: 0.2,  cacheCreation: 2.5),
+        "gpt-5.5":       .init(input: 12.5, output: 75,  cacheRead: 1.25, cacheCreation: 0),
+        "gpt-5.5-codex": .init(input: 12.5, output: 75,  cacheRead: 1.25, cacheCreation: 0),
+        "gpt-5.4":       .init(input: 5,    output: 30,  cacheRead: 0.5,  cacheCreation: 0),
+        "gpt-5.4-codex": .init(input: 5,    output: 30,  cacheRead: 0.5,  cacheCreation: 0)
+    ]
+
+    private static let claudeFastPrices: [String: ModelPrice] = [
+        "claude-opus-4-8": .init(input: 10, output: 50,  cacheRead: 1, cacheCreation: 12.5),
+        // 仅用于 2026-07-24 移除 Fast 前产生的历史日志计价。
+        "claude-opus-4-7": .init(input: 30, output: 150, cacheRead: 3, cacheCreation: 37.5),
+        // 仅用于 2026-06-29 停止支持 Fast 前产生的历史日志计价。
+        "claude-opus-4-6": .init(input: 30, output: 150, cacheRead: 3, cacheCreation: 37.5)
+    ]
+
+    /// Fast 的计费等效 Token 倍率。Codex 使用 ChatGPT credit 倍率；Claude 使用 Fast/Standard API 价比。
+    private static let codexFastMultipliers: [String: Decimal] = [
+        "gpt-5.6": 2.5,
+        "gpt-5.6-sol": 2.5,
+        "gpt-5.6-terra": 2.5,
+        "gpt-5.6-luna": 2.5,
+        "gpt-5.5": 2.5,
+        "gpt-5.5-codex": 2.5,
+        "gpt-5.4": 2,
+        "gpt-5.4-codex": 2
+    ]
+
+    private static let claudeFastMultipliers: [String: Decimal] = [
+        "claude-opus-4-8": 2,
+        "claude-opus-4-7": 6,
+        "claude-opus-4-6": 6
+    ]
+
+    /// Anthropic 1 小时 prompt cache 写入按当前档位基础输入价的 2 倍计费。
+    /// 5 分钟写入继续使用各模型 `ModelPrice.cacheCreation`（基础输入价的 1.25 倍）。
+    private static let claudeCacheCreation1hMultiplier: Decimal = 2
+
+    /// OpenAI Standard API 的 GPT-5.6 / GPT-5.5 上下文阶梯价（USD / 百万 token）。
     /// 完整输入严格超过 272K 时，该次请求的输入、缓存读写和输出全部使用长上下文费率。
     /// `gpt-5.6` 是 Sol 的别名；Pro 是 reasoning.mode，不是独立 model slug。
     private static let contextPriceTiers: [String: ContextPriceTiers] = [
@@ -112,7 +153,22 @@ nonisolated enum Pricing {
             longContextThreshold: 272_000,
             shortContext: .init(input: 1, output: 6, cacheRead: 0.1, cacheCreation: 1.25),
             longContext: .init(input: 2, output: 9, cacheRead: 0.2, cacheCreation: 2.5)
+        ),
+        "gpt-5.5": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 5, output: 30, cacheRead: 0.50, cacheCreation: 0),
+            longContext: .init(input: 10, output: 45, cacheRead: 1, cacheCreation: 0)
+        ),
+        "gpt-5.5-codex": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 5, output: 30, cacheRead: 0.50, cacheCreation: 0),
+            longContext: .init(input: 10, output: 45, cacheRead: 1, cacheCreation: 0)
         )
+    ]
+
+    /// 已审计的固定本地价；即使远端目录返回同名模型，也不能覆盖。
+    private static let fixedLocalOverrideKeys: Set<String> = [
+        "gpt-5.5-pro"
     ]
 
     /// 少数模型中途涨价/降价的时间点覆盖；这里的每个 key 必须同时在 `table` 提供最早
@@ -131,20 +187,26 @@ nonisolated enum Pricing {
         return calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
-    /// A 类模型：受本地特殊规则（阶梯价 / 分段生效价）管辖的 key。远端价格目录对这些 key 零参与——
+    /// A 类模型：受本地特殊规则（阶梯价 / 分段生效价 / 固定价）管辖的 key。远端价格目录对这些 key 零参与——
     /// 一旦让远端「今天的单一价」覆盖进来，272K 阶梯和分段计价会被破坏、历史计价错乱。
     private static let localOverrideKeys: Set<String> = {
         precondition(
             timedOverrides.keys.allSatisfy { table[$0] != nil },
             "timedOverrides 中的模型必须在 Pricing.table 中提供基础价"
         )
-        return Set(contextPriceTiers.keys).union(timedOverrides.keys)
+        precondition(
+            fixedLocalOverrideKeys.allSatisfy { table[$0] != nil },
+            "fixedLocalOverrideKeys 中的模型必须在 Pricing.table 中提供固定价"
+        )
+        return Set(contextPriceTiers.keys)
+            .union(timedOverrides.keys)
+            .union(fixedLocalOverrideKeys)
     }()
 
     /// 取某模型在 `date` 这天应使用的价格。
     /// A 类（`localOverrideKeys`）：走本地阶梯价 / 分段生效价，远端价格目录零参与。
     /// B 类（其余）：远端价格目录优先，命中不到才回落内置 `table`；两者都没有 → nil（未定价）。
-    private static func price(for key: String, at date: Date, inputTotal: Int) -> ModelPrice? {
+    private static func standardPrice(for key: String, at date: Date, inputTotal: Int) -> ModelPrice? {
         if let tiers = contextPriceTiers[key] {
             return tiers.rates(for: inputTotal)
         }
@@ -155,7 +217,34 @@ nonisolated enum Pricing {
             }
             return chosen
         }
+        if fixedLocalOverrideKeys.contains(key) {
+            return table[key]
+        }
         return PricingCatalogStore.shared.rate(for: key) ?? table[key]
+    }
+
+    private static func price(
+        for key: String,
+        app: UsageApp,
+        speed: UsageSpeed,
+        at date: Date,
+        inputTotal: Int
+    ) -> ModelPrice? {
+        switch speed {
+        case .standard:
+            return standardPrice(for: key, at: date, inputTotal: inputTotal)
+        case .unknown:
+            return nil
+        case .fast:
+            switch app {
+            case .codex:
+                // OpenAI Priority 官方价格明确排除 >272K 长上下文；不能用 Standard 长上下文价猜测。
+                guard inputTotal <= 272_000 else { return nil }
+                return codexFastPrices[key]
+            case .claude:
+                return claudeFastPrices[key]
+            }
+        }
     }
 
     /// 归一化模型名：去 `openai/` 前缀；剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；
@@ -189,25 +278,32 @@ nonisolated enum Pricing {
     /// - Parameters:
     ///   - app: 用于隐含的 cache_read 语义；Codex 含、Claude 不含（调用方传 input 时已自处理）。
     ///   - at: 该条用量记录实际发生的时间，仅在模型存在 `timedOverrides` 时才会影响取价（如 Sonnet 5）。
-    ///   - input/output/cacheRead/cacheCreation: 已拆分的四类 token，分别乘对应费率。
-    ///   - inputTotal: 该请求完整输入 token；GPT-5.6 用它判断长上下文，缺省时由前三类输入相加。
+    ///   - input/output/cacheRead/cacheCreation: 已拆分的四类 token；Claude 的 `cacheCreation` 表示 5m 写入。
+    ///   - cacheCreation1h: Claude 1h 缓存写入；Codex 不使用，缺省为 0。
+    ///   - inputTotal: 该请求完整输入 token；GPT-5.6 / GPT-5.5 用它判断长上下文，缺省时由全部输入侧 token 相加。
     /// - Returns: 命中价格返回计算结果（含真实 $0）；命中不到任何价格源时返回 `nil`（未定价，
     ///   区别于真实 $0，调用方不应把 nil 当 0 计入金额汇总——`UsageAggregator.ingest` 已按此处理）。
     static func cost(
+        app: UsageApp,
         model: String,
+        speed: UsageSpeed,
         input: Int,
         output: Int,
         cacheRead: Int,
         cacheCreation: Int,
+        cacheCreation1h: Int = 0,
         at date: Date,
         inputTotal: Int? = nil
     ) -> Decimal? {
         costBreakdown(
+            app: app,
             model: model,
+            speed: speed,
             input: input,
             output: output,
             cacheRead: cacheRead,
             cacheCreation: cacheCreation,
+            cacheCreation1h: cacheCreation1h,
             at: date,
             inputTotal: inputTotal
         )?.total
@@ -215,31 +311,63 @@ nonisolated enum Pricing {
 
     /// 计算单次调用的四项成本；模型未定价时返回 nil，不能折成真实 $0。
     static func costBreakdown(
+        app: UsageApp,
         model: String,
+        speed: UsageSpeed,
         input: Int,
         output: Int,
         cacheRead: Int,
         cacheCreation: Int,
+        cacheCreation1h: Int = 0,
         at date: Date,
         inputTotal: Int? = nil
     ) -> CostBreakdown? {
         let key = normalize(model: model)
-        let fullInput = max(0, inputTotal ?? (input + cacheRead + cacheCreation))
-        guard let p = price(for: key, at: date, inputTotal: fullInput) else { return nil }
+        let fullInput = max(0, inputTotal ?? (input + cacheRead + cacheCreation + cacheCreation1h))
+        guard let p = price(for: key, app: app, speed: speed, at: date, inputTotal: fullInput) else { return nil }
         let i = Decimal(input)     * p.input        / perMillion
         let o = Decimal(output)    * p.output       / perMillion
         let cr = Decimal(cacheRead) * p.cacheRead   / perMillion
-        let cc = Decimal(cacheCreation) * p.cacheCreation / perMillion
+        let cc5m = Decimal(cacheCreation) * p.cacheCreation / perMillion
+        let oneHourRate = app == .claude
+            ? p.input * claudeCacheCreation1hMultiplier
+            : p.cacheCreation
+        let cc1h = Decimal(cacheCreation1h) * oneHourRate / perMillion
+        let cc = cc5m + cc1h
         return CostBreakdown(input: i, output: o, cacheRead: cr, cacheCreation: cc)
     }
 
     /// 该模型是否已有可用价格（本地表 / 阶梯价 / 远端价格目录任一命中）。唯一权威接口，
     /// 供 UI 层区分「已定价（含真实 $0）/ 未定价」（目前尚无调用点，供后续统计 UI 使用）。
-    static func hasPrice(model: String) -> Bool {
+    static func hasPrice(
+        model: String,
+        app: UsageApp = .codex,
+        speed: UsageSpeed = .standard,
+        inputTotal: Int = 0
+    ) -> Bool {
         let key = normalize(model: model)
+        if speed != .standard {
+            return price(for: key, app: app, speed: speed, at: Date(), inputTotal: inputTotal) != nil
+        }
         if localOverrideKeys.contains(key) { return true }
         if table[key] != nil { return true }
         return PricingCatalogStore.shared.rate(for: key) != nil
+    }
+
+    /// 原始 Tokens 到 Fast 计费等效 Tokens 的换算倍率；未知或未收录的 Fast 模型返回 nil。
+    static func billingEquivalentMultiplier(app: UsageApp, model: String, speed: UsageSpeed) -> Decimal? {
+        switch speed {
+        case .standard:
+            return 1
+        case .unknown:
+            return nil
+        case .fast:
+            let key = normalize(model: model)
+            switch app {
+            case .codex: return codexFastMultipliers[key]
+            case .claude: return claudeFastMultipliers[key]
+            }
+        }
     }
 
     /// 价格表内容指纹（SHA-256，确定性）。
@@ -268,11 +396,32 @@ nonisolated enum Pricing {
             }.joined(separator: ",")
             return "\(key)@\(parts)"
         }.joined(separator: ";")
+        let fastPriceBody = [
+            fingerprintBody(codexFastPrices, prefix: "codex"),
+            fingerprintBody(claudeFastPrices, prefix: "claude")
+        ].joined(separator: ";")
+        let fastMultiplierBody = [
+            fingerprintBody(codexFastMultipliers, prefix: "codex"),
+            fingerprintBody(claudeFastMultipliers, prefix: "claude")
+        ].joined(separator: ";")
+        let cacheRuleBody = "claude-cache-creation-1h:\(claudeCacheCreation1hMultiplier)"
+        let fixedOverrideBody = fixedLocalOverrideKeys.sorted().joined(separator: ";")
         let remoteBody = knownModels.subtracting(localOverrideKeys).sorted().compactMap { key -> String? in
             guard let rate = PricingCatalogStore.shared.rate(for: key) else { return nil }
             return "\(key):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
         }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)|\(remoteBody)".utf8))
+        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)|\(fixedOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func fingerprintBody(_ values: [String: ModelPrice], prefix: String) -> String {
+        values.keys.sorted().map { key in
+            let p = values[key]!
+            return "\(prefix):\(key):\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
+        }.joined(separator: ";")
+    }
+
+    private static func fingerprintBody(_ values: [String: Decimal], prefix: String) -> String {
+        values.keys.sorted().map { "\(prefix):\($0):\(values[$0]!)" }.joined(separator: ";")
     }
 }

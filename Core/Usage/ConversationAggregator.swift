@@ -16,6 +16,7 @@ final class ConversationAggregator {
         let conversationKey: String
         let day: Date
         let model: String
+        let speed: UsageSpeed
     }
 
     private struct ProjectAccumulator {
@@ -29,7 +30,7 @@ final class ConversationAggregator {
     func load(infos: [ConversationInfo], buckets: [ConversationUsageBucket]) {
         self.infos = Dictionary(uniqueKeysWithValues: infos.map { ($0.key, $0) })
         self.buckets = Dictionary(uniqueKeysWithValues: buckets.map {
-            (BucketKey(conversationKey: $0.conversationKey, day: $0.day, model: $0.model), $0)
+            (BucketKey(conversationKey: $0.conversationKey, day: $0.day, model: $0.model, speed: $0.speed), $0)
         })
         markChanged()
     }
@@ -48,7 +49,8 @@ final class ConversationAggregator {
             let key = BucketKey(
                 conversationKey: entry.conversationKey,
                 day: entry.day,
-                model: entry.model
+                model: entry.model,
+                speed: entry.speed
             )
             let breakdown = entry.costBreakdown
             if var bucket = buckets[key] {
@@ -72,6 +74,7 @@ final class ConversationAggregator {
                     app: entry.app,
                     day: entry.day,
                     model: entry.model,
+                    speed: entry.speed,
                     firstAt: entry.timestamp,
                     lastAt: entry.timestamp,
                     inputTokens: entry.inputTokens,
@@ -137,6 +140,7 @@ final class ConversationAggregator {
                 info: info,
                 totals: item.totals,
                 costs: item.costs,
+                speed: item.speed,
                 models: modelNames.sorted(),
                 rangeLastAt: rangeLastAt
             )
@@ -215,13 +219,19 @@ final class ConversationAggregator {
         var models: [ConversationModelSummary] = []
         for (model, modelBuckets) in perModel {
             let item = aggregate(modelBuckets)
-            models.append(ConversationModelSummary(model: model, totals: item.totals, costs: item.costs))
+            models.append(ConversationModelSummary(model: model, totals: item.totals, costs: item.costs, speed: item.speed))
         }
         models.sort { lhs, rhs in
             if lhs.costs.total == rhs.costs.total { return lhs.model < rhs.model }
             return lhs.costs.total > rhs.costs.total
         }
-        let detail = ConversationDetail(info: info, totals: overall.totals, costs: overall.costs, models: models)
+        let detail = ConversationDetail(
+            info: info,
+            totals: overall.totals,
+            costs: overall.costs,
+            speed: overall.speed,
+            models: models
+        )
         cachedDetail = (revision, key, detail)
         return detail
     }
@@ -270,9 +280,14 @@ final class ConversationAggregator {
         }
     }
 
-    private func aggregate(_ values: [ConversationUsageBucket]) -> (totals: UsageTotals, costs: ConversationCostTotals) {
+    private func aggregate(_ values: [ConversationUsageBucket]) -> (
+        totals: UsageTotals,
+        costs: ConversationCostTotals,
+        speed: UsageSpeedBreakdown
+    ) {
         var totals = UsageTotals.zero
         var costs = ConversationCostTotals()
+        var speed = UsageSpeedBreakdown()
         for value in values {
             totals.inputTokens += value.inputTokens
             totals.outputTokens += value.outputTokens
@@ -280,13 +295,29 @@ final class ConversationAggregator {
             totals.cacheCreationTokens += value.cacheCreationTokens
             totals.costUSD += value.costUSD
             totals.requestCount += value.requestCount
+            totals.hasUnpricedUsage = totals.hasUnpricedUsage || value.hasUnpricedUsage
             costs.input += value.inputCostUSD
             costs.output += value.outputCostUSD
             costs.cacheRead += value.cacheReadCostUSD
             costs.cacheCreation += value.cacheCreationCostUSD
             costs.hasUnpricedUsage = costs.hasUnpricedUsage || value.hasUnpricedUsage
+
+            var bucketTotals = UsageTotals.zero
+            bucketTotals.inputTokens = value.inputTokens
+            bucketTotals.outputTokens = value.outputTokens
+            bucketTotals.cacheReadTokens = value.cacheReadTokens
+            bucketTotals.cacheCreationTokens = value.cacheCreationTokens
+            bucketTotals.costUSD = value.costUSD
+            bucketTotals.requestCount = value.requestCount
+            speed.add(
+                speed: value.speed,
+                totals: bucketTotals,
+                app: value.app,
+                model: value.model,
+                hasUnpricedCost: value.hasUnpricedUsage
+            )
         }
-        return (totals, costs)
+        return (totals, costs, speed)
     }
 
     private func markChanged() {

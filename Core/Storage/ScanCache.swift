@@ -6,6 +6,10 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var offset: UInt64         // 已扫到的字节数
     /// Codex 用：当前会话最近一次 `turn_context` 里的模型，用于给后续 token_count 打标签。
     var lastModel: String?
+    /// Codex 用：最近一次 thread_settings_applied 的速度档位，用于增量续扫时给后续 token_count 打标签。
+    var lastServiceTier: UsageSpeed?
+    /// Codex 用：最近一次累计 total_token_usage 的稳定签名，过滤切换设置时重复发出的旧 token_count。
+    var lastCodexTotalUsageSignature: String?
     /// 对话元数据：Codex 用于跨 active/archive 复用 watermark；Claude 用于未变化文件的轻量项目重解析。
     var conversationID: String?
     var conversationCwd: String?
@@ -16,8 +20,8 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
 
 nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
-    /// v7: 三份用量缓存共享 generationID，防止部分写入后 watermark 与聚合桶错代。
-    static let currentVersion: Int = 7
+    /// v9: Claude 流式半成品不再入账；旧 seen / rollup 可能已污染，必须全量重建。
+    static let currentVersion: Int = 9
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即视为缓存失效、全量重扫重算。
@@ -91,8 +95,8 @@ enum ScanCache {
 /// 聚合结果磁盘缓存，启动后立刻 UI 有数。
 nonisolated struct UsageRollupPayload: Sendable, Codable {
     /// version 管「结构变更」；价格变更由 pricingFingerprint 接管。
-    /// v6: 与 scan-state / conversation-rollup 共享 generationID。
-    static let currentVersion: Int = 6
+    /// v8: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
+    static let currentVersion: Int = 8
     var version: Int = UsageRollupPayload.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即丢弃，全量重扫重建。

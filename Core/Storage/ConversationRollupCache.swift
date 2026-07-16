@@ -1,7 +1,8 @@
 import Foundation
 
 nonisolated struct ConversationRollupPayload: Sendable, Codable {
-    static let currentVersion = 3
+    /// v5: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
+    static let currentVersion = 5
     var version = Self.currentVersion
     var generationID = ""
     var pricingFingerprint = ""

@@ -75,12 +75,13 @@ nonisolated struct ConversationInfo: Sendable, Codable, Equatable, Identifiable 
     var id: String { key }
 }
 
-/// (对话, 天, 模型) 聚合桶；列表按范围过滤，详情聚合该对话全部桶。
+/// (对话, 天, 模型, speed) 聚合桶；列表按范围过滤，详情聚合该对话全部桶。
 nonisolated struct ConversationUsageBucket: Sendable, Codable, Equatable {
     var conversationKey: String
     var app: UsageApp
     var day: Date
     var model: String
+    var speed: UsageSpeed
     var firstAt: Date
     var lastAt: Date
     var inputTokens: Int
@@ -96,7 +97,7 @@ nonisolated struct ConversationUsageBucket: Sendable, Codable, Equatable {
     var hasUnpricedUsage: Bool
 
     enum CodingKeys: String, CodingKey {
-        case conversationKey, app, day, model, firstAt, lastAt
+        case conversationKey, app, day, model, speed, firstAt, lastAt
         case inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, requestCount
         case costUSD, inputCostUSD, outputCostUSD, cacheReadCostUSD, cacheCreationCostUSD
         case hasUnpricedUsage
@@ -107,6 +108,7 @@ nonisolated struct ConversationUsageBucket: Sendable, Codable, Equatable {
         app: UsageApp,
         day: Date,
         model: String,
+        speed: UsageSpeed,
         firstAt: Date,
         lastAt: Date,
         inputTokens: Int,
@@ -125,6 +127,7 @@ nonisolated struct ConversationUsageBucket: Sendable, Codable, Equatable {
         self.app = app
         self.day = day
         self.model = model
+        self.speed = speed
         self.firstAt = firstAt
         self.lastAt = lastAt
         self.inputTokens = inputTokens
@@ -146,6 +149,7 @@ nonisolated struct ConversationUsageBucket: Sendable, Codable, Equatable {
         app = try c.decode(UsageApp.self, forKey: .app)
         day = try c.decode(Date.self, forKey: .day)
         model = try c.decode(String.self, forKey: .model)
+        speed = try c.decode(UsageSpeed.self, forKey: .speed)
         firstAt = try c.decode(Date.self, forKey: .firstAt)
         lastAt = try c.decode(Date.self, forKey: .lastAt)
         inputTokens = try c.decode(Int.self, forKey: .inputTokens)
@@ -167,6 +171,7 @@ nonisolated struct ConversationUsageBucket: Sendable, Codable, Equatable {
         try c.encode(app, forKey: .app)
         try c.encode(day, forKey: .day)
         try c.encode(model, forKey: .model)
+        try c.encode(speed, forKey: .speed)
         try c.encode(firstAt, forKey: .firstAt)
         try c.encode(lastAt, forKey: .lastAt)
         try c.encode(inputTokens, forKey: .inputTokens)
@@ -197,6 +202,7 @@ nonisolated struct ConversationSummary: Sendable, Equatable, Identifiable {
     var info: ConversationInfo
     var totals: UsageTotals
     var costs: ConversationCostTotals
+    var speed: UsageSpeedBreakdown
     var models: [String]
     var rangeLastAt: Date
 
@@ -252,6 +258,7 @@ nonisolated struct ConversationModelSummary: Sendable, Equatable, Identifiable {
     var model: String
     var totals: UsageTotals
     var costs: ConversationCostTotals
+    var speed: UsageSpeedBreakdown
     var id: String { model }
 }
 
@@ -259,6 +266,7 @@ nonisolated struct ConversationDetail: Sendable, Equatable {
     var info: ConversationInfo
     var totals: UsageTotals
     var costs: ConversationCostTotals
+    var speed: UsageSpeedBreakdown
     var models: [ConversationModelSummary]
 }
 

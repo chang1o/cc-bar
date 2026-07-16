@@ -196,8 +196,8 @@ final class SettingsStore {
         // 刷新
         let qiRaw = defaults.string(forKey: Keys.quotaInterval) ?? QuotaIntervalChoice.m2.rawValue
         quotaInterval = QuotaIntervalChoice(rawValue: qiRaw) ?? .m2
-        let uiRaw = defaults.string(forKey: Keys.usageInterval) ?? UsageIntervalChoice.m2.rawValue
-        usageInterval = UsageIntervalChoice(rawValue: uiRaw) ?? .m2
+        let uiRaw = defaults.string(forKey: Keys.usageInterval) ?? UsageIntervalChoice.m5.rawValue
+        usageInterval = UsageIntervalChoice(rawValue: uiRaw) ?? .m5
         let rtdRaw = defaults.string(forKey: Keys.resetTimeDisplay) ?? ResetTimeDisplay.relative.rawValue
         resetTimeDisplay = ResetTimeDisplay(rawValue: rtdRaw) ?? .relative
         showServiceStatus = defaults.object(forKey: Keys.showServiceStatus) as? Bool ?? true

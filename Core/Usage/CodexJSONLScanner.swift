@@ -3,10 +3,16 @@ import Foundation
 /// 扫 `~/.codex/sessions/**/*.jsonl` + `~/.codex/archived_sessions/**/*.jsonl`。
 /// 关键事件：
 ///   - `type=turn_context`，`payload.model` 提供当前模型（剥前缀 / 日期后缀）。
+///   - `type=event_msg/payload.type=thread_settings_applied`，嵌套 `service_tier` 提供当前 Fast 档位。
 ///   - `type=event_msg`，`payload.type=token_count`，`payload.info.last_token_usage` 是本次调用的真实 token；
-///     使用 last_token_usage 直接累计，不再做累计 delta；info == null 时跳过。
+///     使用 last_token_usage 直接累计；累计 total_token_usage 未变化的设置回显事件跳过。
 /// Codex `input_tokens` 含 cache_read；GPT-5.6 若日志提供 `cache_write_tokens` 也需从普通输入扣掉。
 enum CodexJSONLScanner {
+    struct ThreadSettings: Sendable, Equatable {
+        var model: String?
+        var speed: UsageSpeed
+    }
+
     struct Result: Sendable {
         var entries: [UsageEntry]
         var conversationSeeds: [ConversationSeed]
@@ -21,6 +27,19 @@ enum CodexJSONLScanner {
             home.appendingPathComponent(".codex/sessions", isDirectory: true),
             home.appendingPathComponent(".codex/archived_sessions", isDirectory: true)
         ]
+        return scan(
+            previous: previous,
+            roots: roots,
+            indexedTitles: ConversationTitleIndex.codexTitles()
+        )
+    }
+
+    /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        roots: [URL],
+        indexedTitles: [String: String]
+    ) -> Result {
         var filesByID: [String: URL] = [:]
         for root in roots {
             for url in JSONLDirectoryEnumerator.files(at: root) {
@@ -35,7 +54,6 @@ enum CodexJSONLScanner {
             }
         }
         let files = Array(filesByID.values)
-        let indexedTitles = ConversationTitleIndex.codexTitles()
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []
@@ -74,8 +92,7 @@ enum CodexJSONLScanner {
                 continue
             }
             if state.offset > size {
-                state.offset = 0
-                state.lastModel = nil
+                resetForTruncation(&state)
             }
 
             guard let read = JSONLLineReader.read(url: url, fromOffset: state.offset) else {
@@ -84,6 +101,8 @@ enum CodexJSONLScanner {
             }
 
             var currentModel = state.lastModel
+            var currentSpeed = state.lastServiceTier ?? .standard
+            var lastTotalUsageSignature = state.lastCodexTotalUsageSignature
             var sessionID = state.conversationID ?? filenameID
             var sessionCwd = state.conversationCwd ?? ""
             var fallbackTitle = state.fallbackTitle
@@ -114,6 +133,13 @@ enum CodexJSONLScanner {
                     }
                     continue
                 }
+                if let settings = threadSettings(from: root) {
+                    if let model = settings.model {
+                        currentModel = model
+                    }
+                    currentSpeed = settings.speed
+                    continue
+                }
                 guard type == "event_msg",
                       let payload = root["payload"] as? [String: Any],
                       (payload["type"] as? String) == "token_count" else {
@@ -123,6 +149,8 @@ enum CodexJSONLScanner {
                       let last = info["last_token_usage"] as? [String: Any] else {
                     continue
                 }
+                let totalSignature = totalUsageSignature(info["total_token_usage"] as? [String: Any])
+                if totalSignature == lastTotalUsageSignature, totalSignature != nil { continue }
                 let inputTotal = (last["input_tokens"] as? Int) ?? 0
                 let cachedInput = (last["cached_input_tokens"] as? Int) ?? 0
                 let cacheWrite = cacheWriteTokens(in: last)
@@ -139,8 +167,11 @@ enum CodexJSONLScanner {
                 }
                 let model = currentModel ?? "unknown"
                 guard let resolvedID = sessionID else { continue }
+                if let totalSignature { lastTotalUsageSignature = totalSignature }
                 let cost = Pricing.costBreakdown(
+                    app: .codex,
                     model: model,
+                    speed: currentSpeed,
                     input: billableInput,
                     output: output,
                     cacheRead: cachedInput,
@@ -155,6 +186,7 @@ enum CodexJSONLScanner {
                     app: .codex,
                     conversationKey: "codex:\(resolvedID)",
                     model: Pricing.normalize(model: model),
+                    speed: currentSpeed,
                     day: UsageDay.startOfDay(for: ts),
                     timestamp: ts,
                     inputTokens: billableInput,
@@ -169,6 +201,8 @@ enum CodexJSONLScanner {
             state.mtime = mtime
             state.offset = read.newOffset
             state.lastModel = currentModel
+            state.lastServiceTier = currentSpeed
+            state.lastCodexTotalUsageSignature = lastTotalUsageSignature
             state.conversationID = sessionID
             state.conversationCwd = sessionCwd
             state.fallbackTitle = fallbackTitle
@@ -218,5 +252,52 @@ enum CodexJSONLScanner {
             }
         }
         return 0
+    }
+
+    /// 保持为 internal，供脱敏 JSONL fixture 单测验证设置切换与未知值处理。
+    nonisolated static func speed(fromServiceTier value: String?) -> UsageSpeed {
+        switch value?.lowercased() {
+        case "priority", "fast": return .fast
+        case "default": return .standard
+        default: return .unknown
+        }
+    }
+
+    /// 解析 Codex 实际 JSONL 的嵌套设置事件；未知档位仍返回设置对象并标成 unknown。
+    nonisolated static func threadSettings(from root: [String: Any]) -> ThreadSettings? {
+        guard (root["type"] as? String) == "event_msg",
+              let payload = root["payload"] as? [String: Any],
+              (payload["type"] as? String) == "thread_settings_applied",
+              let settings = payload["thread_settings"] as? [String: Any] else {
+            return nil
+        }
+        return ThreadSettings(
+            model: settings["model"] as? String,
+            speed: speed(fromServiceTier: settings["service_tier"] as? String)
+        )
+    }
+
+    /// 累计用量的稳定签名。Codex 切换线程设置时可能原样回显上一条 token_count；累计值相同即不是新请求。
+    nonisolated static func totalUsageSignature(_ usage: [String: Any]?) -> String? {
+        guard let usage else { return nil }
+        let keys = [
+            "input_tokens",
+            "cached_input_tokens",
+            "cache_write_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+            "total_tokens"
+        ]
+        let values = keys.map { String((usage[$0] as? Int) ?? 0) }
+        guard values.contains(where: { $0 != "0" }) else { return nil }
+        return values.joined(separator: ":")
+    }
+
+    /// 文件被截断后，offset 与依赖前文的 Codex 解析上下文必须一起重置。
+    nonisolated static func resetForTruncation(_ state: inout ScanFileState) {
+        state.offset = 0
+        state.lastModel = nil
+        state.lastServiceTier = nil
+        state.lastCodexTotalUsageSignature = nil
     }
 }

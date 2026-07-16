@@ -15,12 +15,26 @@ enum ClaudeJSONLScanner {
     nonisolated static func scan(previous: [String: ScanFileState], seenMessageIds: [String]) -> Result {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let root = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        return scan(
+            previous: previous,
+            seenMessageIds: seenMessageIds,
+            root: root,
+            conversationIndex: ConversationTitleIndex.claudeIndex()
+        )
+    }
+
+    /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        seenMessageIds: [String],
+        root: URL,
+        conversationIndex: ConversationTitleIndex.ClaudeIndex
+    ) -> Result {
         let files = JSONLDirectoryEnumerator.files(at: root)
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []
         var linesParsed = 0
-        let conversationIndex = ConversationTitleIndex.claudeIndex()
         var seeds: [String: ConversationSeed] = [:]
         var projectCandidates: [String: [ProjectCandidate]] = [:]
         // 跨文件全局去重：同一 message.id 在 sidechain / subagent 文件中会反复出现。
@@ -136,30 +150,31 @@ enum ClaudeJSONLScanner {
                     seeds[conversationKey] = discoveredSeed
                 }
                 if seen.contains(parsed.messageId) { continue }
-                if let existing = candidates[parsed.messageId] {
-                    let prefer = (parsed.stopReason != nil && existing.stopReason == nil)
-                        || (parsed.outputTokens > existing.outputTokens && existing.stopReason == nil)
-                    if prefer { candidates[parsed.messageId] = parsed }
-                } else {
-                    candidates[parsed.messageId] = parsed
-                }
+                mergeCandidate(parsed, into: &candidates)
             }
 
             for (id, p) in candidates {
+                // 流式中间行可能暂时没有 speed / stop_reason。此时既不能入账，也不能把
+                // message.id 放进全局 seen；等待后续完整行追加后再由下一次增量扫描接收。
+                guard isComplete(p) else { continue }
                 seen.insert(id)
                 let day = UsageDay.startOfDay(for: p.timestamp)
                 let cost = Pricing.costBreakdown(
+                    app: .claude,
                     model: p.model,
+                    speed: p.speed,
                     input: p.inputTokens,
                     output: p.outputTokens,
                     cacheRead: p.cacheReadTokens,
-                    cacheCreation: p.cacheCreationTokens,
+                    cacheCreation: p.cacheCreation5mTokens,
+                    cacheCreation1h: p.cacheCreation1hTokens,
                     at: p.timestamp
                 )
                 entries.append(UsageEntry(
                     app: .claude,
                     conversationKey: "claude:\(p.sessionID)",
                     model: Pricing.normalize(model: p.model),
+                    speed: p.speed,
                     day: day,
                     timestamp: p.timestamp,
                     inputTokens: p.inputTokens,
@@ -226,19 +241,29 @@ enum ClaudeJSONLScanner {
         return Result(entries: entries, conversationSeeds: Array(seeds.values), newState: newState, newSeenIds: cappedSeen, filesScanned: files.count, linesParsed: linesParsed)
     }
 
-    private struct ParsedAssistant {
+    /// 保持为 internal，供脱敏 JSONL fixture 单测验证日志字段兼容性。
+    struct ParsedAssistant {
         var messageId: String
         var sessionID: String
         var cwd: String
         var gitBranch: String?
         var isSidechain: Bool
         var model: String
+        var speed: UsageSpeed
         var timestamp: Date
         var inputTokens: Int
         var outputTokens: Int
         var cacheReadTokens: Int
         var cacheCreationTokens: Int
+        var cacheCreation5mTokens: Int
+        var cacheCreation1hTokens: Int
         var stopReason: String?
+    }
+
+    struct CacheCreationUsage: Sendable, Equatable {
+        var totalTokens: Int
+        var fiveMinuteTokens: Int
+        var oneHourTokens: Int
     }
 
     private struct ProjectCandidate: Equatable {
@@ -247,7 +272,7 @@ enum ClaudeJSONLScanner {
         var container: String
     }
 
-    private nonisolated static func parseAssistantLine(_ line: String) -> ParsedAssistant? {
+    nonisolated static func parseAssistantLine(_ line: String) -> ParsedAssistant? {
         guard let data = line.data(using: .utf8) else { return nil }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         guard (root["type"] as? String) == "assistant" else { return nil }
@@ -259,8 +284,14 @@ enum ClaudeJSONLScanner {
         if outputTokens == 0 { return nil }
         let inputTokens = (usage["input_tokens"] as? Int) ?? 0
         let cacheRead = (usage["cache_read_input_tokens"] as? Int) ?? 0
-        let cacheCreation = (usage["cache_creation_input_tokens"] as? Int) ?? 0
+        let cacheCreation = cacheCreationUsage(in: usage)
         let model = (message["model"] as? String) ?? "unknown"
+        let speed: UsageSpeed
+        switch usage["speed"] as? String {
+        case "fast": speed = .fast
+        case "standard": speed = .standard
+        default: speed = .unknown
+        }
         let stopReason = message["stop_reason"] as? String
 
         let ts: Date
@@ -277,13 +308,62 @@ enum ClaudeJSONLScanner {
             gitBranch: root["gitBranch"] as? String,
             isSidechain: (root["isSidechain"] as? Bool) ?? false,
             model: model,
+            speed: speed,
             timestamp: ts,
             inputTokens: inputTokens,
             outputTokens: outputTokens,
             cacheReadTokens: cacheRead,
-            cacheCreationTokens: cacheCreation,
+            cacheCreationTokens: cacheCreation.totalTokens,
+            cacheCreation5mTokens: cacheCreation.fiveMinuteTokens,
+            cacheCreation1hTokens: cacheCreation.oneHourTokens,
             stopReason: stopReason
         )
+    }
+
+    /// `cache_creation_input_tokens` 是 UI/聚合使用的总口径；TTL 明细只影响计价。
+    /// 明细与合计不一致时保留合计，并把无法分类的剩余部分按价格更低的 5m 处理。
+    nonisolated static func cacheCreationUsage(in usage: [String: Any]) -> CacheCreationUsage {
+        let details = usage["cache_creation"] as? [String: Any]
+        let detailed5m = max(0, (details?["ephemeral_5m_input_tokens"] as? Int) ?? 0)
+        let detailed1h = max(0, (details?["ephemeral_1h_input_tokens"] as? Int) ?? 0)
+
+        if let aggregate = usage["cache_creation_input_tokens"] as? Int {
+            let total = max(0, aggregate)
+            guard details != nil else {
+                return CacheCreationUsage(totalTokens: total, fiveMinuteTokens: total, oneHourTokens: 0)
+            }
+            let oneHour = min(detailed1h, total)
+            return CacheCreationUsage(
+                totalTokens: total,
+                fiveMinuteTokens: total - oneHour,
+                oneHourTokens: oneHour
+            )
+        }
+
+        return CacheCreationUsage(
+            totalTokens: detailed5m + detailed1h,
+            fiveMinuteTokens: detailed5m,
+            oneHourTokens: detailed1h
+        )
+    }
+
+    /// 同一 message.id 的流式行只保留最终完成态；供扫描器与脱敏 fixture 单测共用。
+    nonisolated static func mergeCandidate(
+        _ parsed: ParsedAssistant,
+        into candidates: inout [String: ParsedAssistant]
+    ) {
+        if let existing = candidates[parsed.messageId] {
+            let prefer = (parsed.stopReason != nil && existing.stopReason == nil)
+                || (parsed.outputTokens > existing.outputTokens && existing.stopReason == nil)
+            if prefer { candidates[parsed.messageId] = parsed }
+        } else {
+            candidates[parsed.messageId] = parsed
+        }
+    }
+
+    /// Claude 只有带 stop_reason 的最终 assistant 行才代表一次完成的模型调用。
+    nonisolated static func isComplete(_ parsed: ParsedAssistant) -> Bool {
+        parsed.stopReason != nil
     }
 
     private nonisolated static func parseUserTitle(_ line: String) -> (sessionID: String, title: String)? {

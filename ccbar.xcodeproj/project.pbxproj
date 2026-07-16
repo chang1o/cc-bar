@@ -66,6 +66,8 @@
 		49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */; };
 		49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */; };
 		49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B300000000000001AAAA /* QuotaParsingTests.swift */; };
+		49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */; };
+		49C1B3F4000000000001AABB /* claude-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -144,6 +146,8 @@
 		49C1B200000000000001AAAA /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		49C1B300000000000001AAAA /* QuotaParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaParsingTests.swift; sourceTree = "<group>"; };
 		49C1B301000000000001AAAA /* CCBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CCBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "codex-fast-scan.jsonl"; sourceTree = "<group>"; };
+		49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "claude-fast-scan.jsonl"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -372,8 +376,18 @@
 			isa = PBXGroup;
 			children = (
 				49C1B300000000000001AAAA /* QuotaParsingTests.swift */,
+				49C1B3F2000000000001AAAA /* Fixtures */,
 			);
 			path = CCBarTests;
+			sourceTree = "<group>";
+		};
+		49C1B3F2000000000001AAAA /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */,
+				49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */,
+			);
+			path = Fixtures;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -480,6 +494,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */,
+				49C1B3F4000000000001AABB /* claude-fast-scan.jsonl in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -733,7 +749,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.20.0;
+				MARKETING_VERSION = 0.20.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
@@ -766,7 +782,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.20.0;
+				MARKETING_VERSION = 0.20.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// 按 (day, app, model) 聚合的内存表。
+/// 按 (day, app, model, speed) 聚合的内存表。
 ///
 /// 标记为 `@Observable`：`snapshot()` / `todayCost(...)` / `totals(...)` 在 SwiftUI
 /// body 内访问 `buckets` 时会自动登记依赖，扫描完成后 `ingest` 写回 `buckets`
@@ -15,39 +15,43 @@ final class UsageAggregator {
         let day: Date
         let app: UsageApp
         let model: String
+        let speed: UsageSpeed
     }
 
     func load(from snapshot: [UsageBucket]) {
         buckets.removeAll(keepingCapacity: true)
         for b in snapshot {
-            let key = BucketKey(day: b.day, app: b.app, model: b.model)
+            let key = BucketKey(day: b.day, app: b.app, model: b.model, speed: b.speed)
             buckets[key] = b
         }
     }
 
     func ingest(_ entries: [UsageEntry]) {
         for e in entries {
-            let key = BucketKey(day: e.day, app: e.app, model: e.model)
+            let key = BucketKey(day: e.day, app: e.app, model: e.model, speed: e.speed)
             if var b = buckets[key] {
                 b.inputTokens += e.inputTokens
                 b.outputTokens += e.outputTokens
                 b.cacheReadTokens += e.cacheReadTokens
                 b.cacheCreationTokens += e.cacheCreationTokens
-                // 未定价（nil）按 0 计入聚合；数值上不污染总成本，「未定价」本身由 Pricing.hasPrice(model:) 现查。
+                // 缺少可靠价格（nil）按 0 计入聚合；桶内标记仅保留给诊断，不影响 UI 数值展示。
                 b.costUSD += e.costUSD ?? 0
                 b.requestCount += e.requestCount
+                b.hasUnpricedUsage = b.hasUnpricedUsage || e.costUSD == nil
                 buckets[key] = b
             } else {
                 buckets[key] = UsageBucket(
                     app: e.app,
                     model: e.model,
+                    speed: e.speed,
                     day: e.day,
                     inputTokens: e.inputTokens,
                     outputTokens: e.outputTokens,
                     cacheReadTokens: e.cacheReadTokens,
                     cacheCreationTokens: e.cacheCreationTokens,
                     costUSD: e.costUSD ?? 0,
-                    requestCount: e.requestCount
+                    requestCount: e.requestCount,
+                    hasUnpricedUsage: e.costUSD == nil
                 )
             }
         }
