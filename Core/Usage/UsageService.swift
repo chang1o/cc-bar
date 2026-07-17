@@ -40,8 +40,8 @@ final class UsageService {
             loadedRollupGeneration = nil
             lastScanAt = nil
         }
-        // 个人历史用量一次性补录：见 ImportedUsageBackfill 注释。每次启动都重新按天去重合并，
-        // 不依赖也不影响上面的常规扫描缓存，文件不存在时是纯 no-op。
+        // 个人历史用量一次性补录：见 ImportedUsageBackfill 注释。这里先合并一次保证扫描前即可展示；
+        // runScan 每轮还会按同样规则重新合并，兜底缓存失效清空聚合器的情况。文件不存在时是纯 no-op。
         let existingClaudeDays = Set(aggregator.snapshot().filter { $0.app == .claude }.map(\.day))
         aggregator.ingest(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
         publishTotals()
@@ -148,6 +148,12 @@ final class UsageService {
             entries: claude.entries + codex.entries,
             seeds: claude.conversationSeeds + codex.conversationSeeds
         )
+
+        // 个人历史用量一次性补录：缓存失效路径会清空聚合器，若只在 bootstrap 合并，
+        // 这里落盘的 rollup / 指纹将不含补录模型，下次启动指纹比对再失效、补录被反复冲掉。
+        // 每轮扫描都按天去重重新合并，保证快照与指纹始终包含补录数据。
+        let existingClaudeDays = Set(aggregator.snapshot().filter { $0.app == .claude }.map(\.day))
+        aggregator.ingest(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
 
         // 没有真实用量或档案变化时沿用现有代次，只提交轻量 watermark。
         let buckets = aggregator.snapshot()
