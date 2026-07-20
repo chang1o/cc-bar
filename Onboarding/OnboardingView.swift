@@ -76,7 +76,7 @@ private struct WelcomeStep: View {
             AppIconBlock()
                 .padding(.bottom, 24)
 
-            Text(tr("Welcome to cc-bar", "欢迎使用 cc-bar"))
+            Text(tr("Welcome to CCBar", "欢迎使用 CCBar"))
                 .font(.system(size: 22, weight: .bold))
                 .kerning(-0.4)
 
@@ -104,6 +104,20 @@ private struct WelcomeStep: View {
 
 private struct AppIconBlock: View {
     var body: some View {
+        Group {
+            if let icon = NSApplication.shared.applicationIconImage {
+                Image(nsImage: icon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                fallback
+            }
+        }
+        .frame(width: 96, height: 96)
+        .shadow(color: .black.opacity(0.3), radius: 30, x: 0, y: 10)
+    }
+
+    private var fallback: some View {
         RoundedRectangle(cornerRadius: 22, style: .continuous)
             .fill(LinearGradient(
                 colors: [
@@ -114,13 +128,11 @@ private struct AppIconBlock: View {
                 startPoint: UnitPoint(x: 0, y: 0),
                 endPoint: UnitPoint(x: 1, y: 1)
             ))
-            .frame(width: 96, height: 96)
             .overlay(
                 Image(systemName: "gauge.medium")
                     .font(.system(size: 44, weight: .semibold))
                     .foregroundStyle(.white)
             )
-            .shadow(color: .black.opacity(0.3), radius: 30, x: 0, y: 10)
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
@@ -137,7 +149,9 @@ private struct DetectAccountsStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(tr("We found these accounts", "检测到以下账号,请勾选要显示的服务"))
+            Text(anyDetected
+                 ? tr("We found these accounts", "检测到以下账号")
+                 : tr("No accounts detected yet", "未检测到账号,可稍后在设置中查看"))
                 .font(.system(size: 18, weight: .bold))
                 .kerning(-0.3)
 
@@ -211,6 +225,10 @@ private struct DetectAccountsStep: View {
         case .installed, .running, .unavailable: true
         }
     }
+
+    private var anyDetected: Bool {
+        appState.codexAccount != nil || appState.claudeAccount != nil || antigravityDetected
+    }
 }
 
 private struct DetectedAccountRow: View {
@@ -237,7 +255,7 @@ private struct DetectedAccountRow: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
-                Text(email ?? tr("Not detected", "未识别"))
+                Text(email ?? tr("Not detected", "未检测到"))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                 Text(source)
@@ -263,21 +281,9 @@ private struct CheckmarkBox: View {
     let checked: Bool
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 3.5, style: .continuous)
-                .fill(checked ? Color.accentColor : Color.clear)
-                .frame(width: 13, height: 13)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.35), lineWidth: 1)
-                        .opacity(checked ? 0 : 1)
-                )
-            if checked {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-        }
+        Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(checked ? Color.accentColor : Color.secondary.opacity(0.35))
     }
 }
 
@@ -292,8 +298,8 @@ private struct ReadOnlyInfoCard: View {
                 Text(tr("Read-only access", "仅读取"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "cc-bar reads quota status locally. It never sends your credentials anywhere.",
-                    "cc-bar 仅本地读取额度,不会向任何地方发送你的凭据。"
+                    "CCBar reads quota status locally. It never sends your credentials anywhere.",
+                    "CCBar 仅本地读取额度,不会向任何地方发送你的凭据。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -334,13 +340,16 @@ private struct ConfigureStep: View {
                     HStack(spacing: 12) {
                         Toggle("Codex", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
                             .toggleStyle(.switch)
-                        Toggle("Claude", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
+                            .tint(.green)
+                        Toggle("Claude Code", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
                             .toggleStyle(.switch)
+                            .tint(.green)
                         Toggle("Antigravity", isOn: Binding(
                             get: { settings.menuBarShowAntigravity },
                             set: { settings.menuBarShowAntigravity = $0 }
                         ))
                         .toggleStyle(.switch)
+                        .tint(.green)
                     }
                 }
 
@@ -356,6 +365,7 @@ private struct ConfigureStep: View {
                         }
                     ))
                     .toggleStyle(.switch)
+                    .tint(.green)
                 }
             }
             .padding(.top, 18)

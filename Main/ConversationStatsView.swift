@@ -412,6 +412,10 @@ private struct ConversationDetailView: View {
                     .font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .help(tr(
+                        "This detail always shows the conversation's full history, regardless of the time range filter above.",
+                        "该详情展示该对话的全部时间数据,不受上方时间范围筛选影响。"
+                    ))
                 UsageSpeedBadge(summary: detail.speed.summary)
                 Spacer()
             }
@@ -537,7 +541,8 @@ private struct ConversationDetailView: View {
         if seconds < 60 { return tr("\(seconds) sec", "\(seconds) 秒") }
         if seconds < 3600 { return tr("\(seconds / 60) min", "\(seconds / 60) 分钟") }
         if seconds < 86400 { return tr("\(seconds / 3600) hr", "\(seconds / 3600) 小时") }
-        return tr("\(seconds / 86400) days", "\(seconds / 86400) 天")
+        let days = seconds / 86400
+        return tr(days == 1 ? "\(days) day" : "\(days) days", "\(days) 天")
     }
 
     private func metadataRow(_ label: String, _ value: String, copyable: Bool = false) -> some View {

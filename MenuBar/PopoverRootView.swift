@@ -350,10 +350,14 @@ private struct ServiceBlockView: View {
                 geminiWeeklyRow(geminiWk)
             }
             if let message = shortError(error) {
-                Text(message)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text(message)
+                        .font(.system(size: 11))
+                        .lineLimit(2)
+                }
+                .foregroundStyle(.orange)
             }
         }
         .padding(.horizontal, 16)
@@ -607,7 +611,7 @@ private struct ServiceBlockView: View {
         guard let limit = snapshot?.primaryLimit else { return "CURRENT" }
         switch limit.kind {
         case .fiveHour: return "5HOUR"
-        case .weekly: return "WEEKLY"
+        case .weekly: return app == .claude ? "ALL" : "WEEKLY"
         case .modelWeekly: return normalizedModelLabel(limit.displayName) ?? "MODEL"
         case .unknown: return normalizedModelLabel(limit.displayName) ?? "CURRENT"
         }

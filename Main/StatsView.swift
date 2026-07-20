@@ -122,7 +122,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         switch self {
         case .all: return "全部"
         case .codex: return "Codex"
-        case .claude: return "Anthropic"
+        case .claude: return "Claude Code"
         }
     }
 
@@ -383,7 +383,8 @@ struct StatsView: View {
                 value: StatsFormatter.compactToken(currentTotalsAll.totalTokens),
                 delta: deltaPercent(current: Double(currentTotalsAll.totalTokens),
                                     previous: Double(previousTotalsAll.totalTokens)),
-                tint: nil
+                tint: nil,
+                dimmed: false
             )
             KPICard(
                 english: "Total spend",
@@ -393,27 +394,34 @@ struct StatsView: View {
                     hasUnpricedUsage: currentTotalsAll.hasUnpricedUsage
                 ),
                 delta: costDelta(current: currentTotalsAll, previous: previousTotalsAll),
-                tint: nil
+                tint: nil,
+                dimmed: false
             )
             KPICard(
                 english: "Codex",
-                chinese: "OpenAI",
-                value: StatsFormatter.tierCost(
-                    currentTotals(.codex).costUSD,
-                    hasUnpricedUsage: currentTotals(.codex).hasUnpricedUsage
-                ),
-                delta: costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
-                tint: .codexAccent
+                chinese: "Codex",
+                value: serviceFilter == .claude
+                    ? "—"
+                    : StatsFormatter.tierCost(
+                        currentTotals(.codex).costUSD,
+                        hasUnpricedUsage: currentTotals(.codex).hasUnpricedUsage
+                    ),
+                delta: serviceFilter == .claude ? nil : costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
+                tint: .codexAccent,
+                dimmed: serviceFilter == .claude
             )
             KPICard(
                 english: "Claude Code",
-                chinese: "Anthropic",
-                value: StatsFormatter.tierCost(
-                    currentTotals(.claude).costUSD,
-                    hasUnpricedUsage: currentTotals(.claude).hasUnpricedUsage
-                ),
-                delta: costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
-                tint: .claudeAccent
+                chinese: "Claude Code",
+                value: serviceFilter == .codex
+                    ? "—"
+                    : StatsFormatter.tierCost(
+                        currentTotals(.claude).costUSD,
+                        hasUnpricedUsage: currentTotals(.claude).hasUnpricedUsage
+                    ),
+                delta: serviceFilter == .codex ? nil : costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
+                tint: .claudeAccent,
+                dimmed: serviceFilter == .codex
             )
         }
     }
@@ -425,8 +433,10 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 // 隐藏 hero:总 Tokens 与 KPI 卡 1 重复;分项使用横排图例。
                 TokenBreakdownView(totals: currentTotalsAll, showsHero: false)
-                Divider()
-                FastUsageSummaryView(breakdown: currentSpeedBreakdown)
+                if currentSpeedBreakdown.fast.requestCount > 0 {
+                    Divider()
+                    FastUsageSummaryView(breakdown: currentSpeedBreakdown)
+                }
             }
         }
     }
@@ -442,7 +452,7 @@ struct StatsView: View {
                         .foregroundStyle(.tertiary)
                 }
                 LegendChip(color: .codexAccent, label: "Codex")
-                LegendChip(color: .claudeAccent, label: "Claude")
+                LegendChip(color: .claudeAccent, label: "Claude Code")
             }
         )) {
             VStack(spacing: 6) {
@@ -549,7 +559,7 @@ struct StatsView: View {
                     Divider()
                 }
                 if serviceFilter != .codex {
-                    modelGroup(title: "Claude", tint: .claudeAccent, rows: modelRows(for: .claude))
+                    modelGroup(title: "Claude Code", tint: .claudeAccent, rows: modelRows(for: .claude))
                 }
             }
         }
@@ -560,7 +570,7 @@ struct StatsView: View {
     private var timelineHeader: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(tr("Today Primary Quota", "今日主要额度"))
+                Text(tr("Today's Primary Quota", "今日主要额度"))
                     .font(.system(size: 18, weight: .semibold))
                 Text(tr("Only quota changes are shown.", "仅展示额度发生变化的时间点。"))
                     .font(.system(size: 11.5))
@@ -952,7 +962,7 @@ private struct DailyTooltip: View {
                 sample.codexCost,
                 hasUnpricedUsage: sample.codex.hasUnpricedUsage
             ))
-            serviceRow(color: .claudeAccent, label: "Claude", value: StatsFormatter.tierCost(
+            serviceRow(color: .claudeAccent, label: "Claude Code", value: StatsFormatter.tierCost(
                 sample.claudeCost,
                 hasUnpricedUsage: sample.claude.hasUnpricedUsage
             ))
@@ -1017,6 +1027,7 @@ private struct KPICard: View {
     let value: String
     let delta: Double?
     let tint: Color?
+    let dimmed: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1034,7 +1045,7 @@ private struct KPICard: View {
                     .kerning(-0.5)
                     .monospacedDigit()
                     .foregroundStyle(tint ?? .primary)
-                if let delta {
+                if let delta, delta != 0 {
                     Text(formatDelta(delta))
                         .font(.system(size: 11, weight: .semibold))
                         .monospacedDigit()
@@ -1046,6 +1057,7 @@ private struct KPICard: View {
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .ccPanel(cornerRadius: 10)
+        .opacity(dimmed ? 0.35 : 1)
     }
 
     private func formatDelta(_ value: Double) -> String {

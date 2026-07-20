@@ -131,8 +131,11 @@ struct SettingsRootView: View {
             return
         }
         codexResetCreditsExpanded = true
-        // 已有缓存则直接复用,不重复联网。
-        guard codexResetCreditsState == nil else { return }
+        // 已有成功缓存则直接复用,不重复联网;失败态允许重新展开时重试。
+        switch codexResetCreditsState {
+        case nil, .failure: break
+        default: return
+        }
         codexResetCreditsState = .loading
         Task {
             let result = await appState.fetchCodexResetCredits()
@@ -174,7 +177,7 @@ struct SettingsRootView: View {
             ) {
                 Picker("", selection: Binding(get: { settings.menuBarWindow }, set: { settings.menuBarWindow = $0 })) {
                     Text(tr("Main", "主要")).tag(MenuBarWindowChoice.primary)
-                    Text("WK").tag(MenuBarWindowChoice.weekly)
+                    Text(tr("Weekly", "周额度")).tag(MenuBarWindowChoice.weekly)
                     Text(tr("Both", "都显示")).tag(MenuBarWindowChoice.both)
                 }
                 .labelsHidden()
@@ -426,7 +429,7 @@ struct SettingsRootView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text(tr("cc-bar \(shortVersion) · made with Liquid Glass",
+            Text(tr("CCBar \(shortVersion) · multi-service quota & local usage stats",
                     "CCBar \(shortVersion) · 多服务额度与本地用量统计"))
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
@@ -595,7 +598,7 @@ private struct AccountRow: View {
         case .running: return tr("Running · waiting for quota", "运行中 · 等待额度")
         case .installed: return tr("Installed · not running", "已安装 · 未运行")
         case .unavailable: return tr("Local service unavailable", "本地服务不可用")
-        case .notDetected: return tr("Not detected", "未识别")
+        case .notDetected: return tr("Not detected", "未检测到")
         }
     }
 
@@ -624,7 +627,7 @@ private struct AccountRow: View {
         case .running: tr("Running", "运行中")
         case .installed: tr("Not running", "未运行")
         case .unavailable: tr("Unavailable", "不可用")
-        case .notDetected: tr("Not detected", "未识别")
+        case .notDetected: tr("Not detected", "未检测到")
         }
     }
 }

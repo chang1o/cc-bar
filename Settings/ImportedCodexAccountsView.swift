@@ -106,8 +106,8 @@ struct ImportedCodexAccountsView: View {
         } message: {
             if let target = deleteTarget {
                 let name = rowTitle(target)
-                Text(tr("\u{201C}\(name)\u{201D} will be removed from cc-bar. The account itself is not affected.",
-                        "\u{201C}\(name)\u{201D} 将从 cc-bar 中移除，账号本身不受影响。"))
+                Text(tr("\u{201C}\(name)\u{201D} will be removed from CCBar. The account itself is not affected.",
+                        "\u{201C}\(name)\u{201D} 将从 CCBar 中移除，账号本身不受影响。"))
             }
         }
     }
@@ -216,7 +216,11 @@ struct ImportedCodexAccountsView: View {
             return
         }
         expandedResetCreditsId = account.id
-        guard resetCreditsById[account.id] == nil else { return }
+        // 已有成功缓存则直接复用,不重复联网;失败态允许重新展开时重试。
+        switch resetCreditsById[account.id] {
+        case nil, .failure: break
+        default: return
+        }
         Task {
             let result = await appState.fetchImportedCodexResetCredits(account: account)
             switch result {

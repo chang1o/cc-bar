@@ -36,7 +36,7 @@ struct OtherCodexAccountsSection: View {
 
     private func sectionHeader(count: Int) -> some View {
         HStack {
-            Text(tr("OTHER CODEX ACCOUNTS", "其他账号"))
+            Text(tr("OTHER CODEX ACCOUNTS", "其他 Codex 账号"))
                 .font(.system(size: 9.5, weight: .semibold))
                 .kerning(0.3)
                 .foregroundStyle(.tertiary)
@@ -158,10 +158,14 @@ private struct ImportedCodexRow: View {
                         .foregroundStyle(.secondary)
                 }
             } else if let err = error {
-                Text(shortError(err))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                    Text(shortError(err))
+                        .font(.system(size: 10.5))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.orange)
             } else {
                 Text("—")
                     .font(.system(size: 10.5))

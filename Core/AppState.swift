@@ -833,8 +833,8 @@ final class AppState {
         let alert = NSAlert()
         alert.messageText = tr("Allow Keychain Access", "允许访问 Keychain")
         alert.informativeText = tr(
-            "cc-bar reads the Claude credential stored in your macOS Keychain to query your quota. After you continue, macOS will ask for permission — choose \"Always Allow\".",
-            "cc-bar 需要读取 macOS 钥匙串里的 Claude 凭据来查询额度。点击「继续」后会弹出系统授权窗口,请选择「始终允许」。"
+            "CCBar reads the Claude credential stored in your macOS Keychain to query your quota. After you continue, macOS will ask for permission — choose \"Always Allow\".",
+            "CCBar 需要读取 macOS 钥匙串里的 Claude 凭据来查询额度。点击「继续」后会弹出系统授权窗口,请选择「始终允许」。"
         )
         alert.alertStyle = .informational
         alert.addButton(withTitle: tr("Continue", "继续"))
