@@ -88,3 +88,23 @@ xcodebuild -project ccbar.xcodeproj -scheme ccbar -configuration Debug -destinat
 - **产物固定输出到 `dist/CCBar.app.zip`**（`dist/` 已在 `.gitignore` 里，不进版本库）。脚本会先清空 `build/` 目录再重新构建。
 - 打包好的 zip 上传到 GitHub Release 即可分发；不要直接替换用户本机 `/Applications/CCBar.app`——那是覆盖用户正在使用的安装，属于有风险操作，要打包验证就在 `dist/` 里解压看，不要动 `/Applications`。
 - 完整背景说明见 [README.md](README.md#从源码构建) 和 [docs/打包发布.md](docs/打包发布.md)（该文档里的 Archive / Developer ID 流程只是给需要公证发布给别人用的场景保留的可选项，日常打包不要用）。
+
+### 标准发布流程（用户说「提交代码、版本号+1、构建打包」时）
+
+这是用户预先授权的固定三连指令，出现这句话（或明显同义的表述，如「发布一下」「发个新版本」）时按下面三步顺序执行，**不用逐步等确认**，完成后把结果（新版本号 + Actions/Release 链接）汇报给用户即可：
+
+1. **提交代码**：把当前工作区未提交的改动按仓库惯例的 commit message 风格提交（可用 `git-commit-messages` skill；无关改动分开提交，不要混在一起）。
+2. **版本号 +1**：修改 `ccbar.xcodeproj/project.pbxproj` 里两处 `MARKETING_VERSION`（Debug/Release 配置各一处，要同时改），patch 位 +1（如 `1.0.0` → `1.0.1`），除非用户明确要求升 minor/major。单独提交，message 形如 `chore: 版本号升至 vX.Y.Z`。
+3. **构建打包**：推送分支 + 打带 `v` 前缀的 tag 触发 [.github/workflows/release.yml](.github/workflows/release.yml)，在 GitHub 的 macOS runner 上自动跑 `scripts/build.sh` 并把 `dist/CCBar.app.zip` 挂到同名 GitHub Release：
+   ```bash
+   git push origin main
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+- **更新日志不用手写**：GitHub Release 的描述由 `generate_release_notes: true` 根据这个 tag 和上一个 tag 之间的所有 commit message 自动生成，仓库不单独维护 CHANGELOG.md。这意味着第 1 步的 commit message 质量直接决定更新日志质量，要写清楚改了什么、为什么。
+- **版本号从 `1.0.0` 重新起算**：仓库早期（`73ddff4` 之前）用过不带 `v` 前缀的 `0.x.y` 裸版本号 tag，那批是历史遗留，不再接续；新发布一律带 `v` 前缀，从 `v1.0.0` 开始。
+- tag 必须和已提交的 `MARKETING_VERSION` 一致，tag 本身不改版本号，只是给已提交好的版本打标记。
+- 打错 tag 可撤销：`git tag -d vX.Y.Z && git push origin :vX.Y.Z`。
+- 构建进度看仓库 Actions 页；完成后 Release 页会自动出现该 tag 的 Release 及产物。
+- 如果用户只是单独说「打个正式版」但没有前面两步的上下文（比如工作区本来就是干净的），照样按这三步走，第 1 步无改动则跳过、直接从第 2 步开始。

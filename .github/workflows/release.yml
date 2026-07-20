@@ -1,0 +1,24 @@
+name: Release
+
+# 推送 v 开头的 tag(如 v1.0.0)时自动构建并把 zip 挂到对应 GitHub Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # 创建 Release / 上传产物需要写权限
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建并打包(ad-hoc 签名,无需证书)
+        run: ./scripts/build.sh
+
+      - name: 上传到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CCBar.app.zip
+          generate_release_notes: true
