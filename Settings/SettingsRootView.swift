@@ -643,6 +643,7 @@ private enum AccountAvailability: Equatable {
 // MARK: - Bilingual display names for existing enums
 
 extension QuotaIntervalChoice {
+    @MainActor
     var bilingualDisplayName: String {
         switch self {
         case .m1: return tr("1 minute", "1 分钟")
@@ -655,6 +656,7 @@ extension QuotaIntervalChoice {
 }
 
 extension UsageIntervalChoice {
+    @MainActor
     var bilingualDisplayName: String {
         switch self {
         case .m1: return tr("1 minute", "1 分钟")

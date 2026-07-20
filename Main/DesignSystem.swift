@@ -408,6 +408,7 @@ enum CCRefreshState {
         }
     }
 
+    @MainActor
     var tooltip: String {
         switch self {
         case .live: return tr("Live", "在线")

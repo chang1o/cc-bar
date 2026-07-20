@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 private extension ConversationQuerySort {
+    @MainActor
     var label: String {
         switch self {
         case .recent: return tr("Recent", "最近")
