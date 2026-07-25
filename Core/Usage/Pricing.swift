@@ -44,6 +44,7 @@ nonisolated enum Pricing {
     static let table: [String: ModelPrice] = [
         // —— Claude 4.x 系（input 已不含 cache_read）——
         "claude-fable-5":    .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
+        "claude-opus-5":     .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-8":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-7":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-6":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
@@ -101,6 +102,7 @@ nonisolated enum Pricing {
     ]
 
     private static let claudeFastPrices: [String: ModelPrice] = [
+        "claude-opus-5":   .init(input: 10, output: 50,  cacheRead: 1, cacheCreation: 12.5),
         "claude-opus-4-8": .init(input: 10, output: 50,  cacheRead: 1, cacheCreation: 12.5),
         // 仅用于 2026-07-24 移除 Fast 前产生的历史日志计价。
         "claude-opus-4-7": .init(input: 30, output: 150, cacheRead: 3, cacheCreation: 37.5),
@@ -121,6 +123,7 @@ nonisolated enum Pricing {
     ]
 
     private static let claudeFastMultipliers: [String: Decimal] = [
+        "claude-opus-5": 2,
         "claude-opus-4-8": 2,
         "claude-opus-4-7": 6,
         "claude-opus-4-6": 6
