@@ -23,6 +23,20 @@ final class AppState {
     var importedCodexErrors: [String: String] = [:]
     var importedCodexRefreshStates: [String: QuotaRefreshState] = [:]
 
+    var ccpmCodexProfiles: [CCPMCodexProfile] = []
+    var ccpmCodexAccounts: [String: CodexAccount] = [:]
+    var ccpmCodexQuotas: [String: QuotaSnapshot] = [:]
+    var ccpmCodexSources: [String: QuotaSnapshotSource] = [:]
+    var ccpmCodexErrors: [String: String] = [:]
+    var ccpmCodexRefreshStates: [String: QuotaRefreshState] = [:]
+
+    var ccpmClaudeProfiles: [CCPMClaudeProfile] = []
+    var ccpmClaudeAccounts: [String: ClaudeAccount] = [:]
+    var ccpmClaudeQuotas: [String: QuotaSnapshot] = [:]
+    var ccpmClaudeSources: [String: QuotaSnapshotSource] = [:]
+    var ccpmClaudeErrors: [String: String] = [:]
+    var ccpmClaudeRefreshStates: [String: QuotaRefreshState] = [:]
+
     /// 主窗口当前 tab,允许 ⌘1 / ⌘, 等命令从外部驱动切换
     var mainTab: MainTab = .stats
 
@@ -72,6 +86,8 @@ final class AppState {
         loadQuotaCache()
         loadQuotaHistory()
         reloadImportedCodexAccounts()
+        reloadCCPMCodexProfiles()
+        reloadCCPMClaudeProfiles()
         usageService.bootstrap(appState: self)
         await loadCodex()
         maybeShowKeychainPrompt()
@@ -142,21 +158,44 @@ final class AppState {
     func refreshQuotas(reason: QuotaRefreshReason = .periodic) async {
         await loadCodex()
         await loadClaude()
-        await loadCodexQuota(reason: reason)
-        await loadClaudeQuota(reason: reason)
-        await loadAllImportedCodexQuotas(reason: reason)
+        reloadCCPMCodexProfiles()
+        reloadCCPMClaudeProfiles()
+        let settings = SettingsStore.shared
+        if settings.showCodex {
+            await loadCodexQuota(reason: reason)
+            await loadAllImportedCodexQuotas(reason: reason)
+            await loadAllCCPMCodexProfileQuotas(reason: reason)
+        }
+        if settings.showClaude {
+            await loadClaudeQuota(reason: reason)
+            await loadAllCCPMClaudeProfileQuotas(reason: reason)
+        }
         logQuotaSummary()
     }
 
     /// 拉取 OpenAI / Anthropic statuspage 状态。失败保留旧快照,不清空。
     /// 两个请求并发,任意一个失败不影响另一个。
     func refreshServiceStatus() async {
-        async let codex = Self.fetchServiceStatus(url: ServiceStatusClient.openAIStatusURL, tag: "openai")
-        async let claude = Self.fetchServiceStatus(url: ServiceStatusClient.anthropicStatusURL, tag: "anthropic")
+        let settings = SettingsStore.shared
+        async let codex = Self.fetchServiceStatusIfEnabled(
+            settings.showCodex,
+            url: ServiceStatusClient.openAIStatusURL,
+            tag: "openai"
+        )
+        async let claude = Self.fetchServiceStatusIfEnabled(
+            settings.showClaude,
+            url: ServiceStatusClient.anthropicStatusURL,
+            tag: "anthropic"
+        )
         let codexResult = await codex
         let claudeResult = await claude
         if let codexResult { codexServiceStatus = codexResult }
         if let claudeResult { claudeServiceStatus = claudeResult }
+    }
+
+    private static func fetchServiceStatusIfEnabled(_ enabled: Bool, url: URL, tag: String) async -> ServiceStatus? {
+        guard enabled else { return nil }
+        return await fetchServiceStatus(url: url, tag: tag)
     }
 
     private static func fetchServiceStatus(url: URL, tag: String) async -> ServiceStatus? {
@@ -226,6 +265,22 @@ final class AppState {
             state.lastSuccessAt = record.updatedAt
             state.source = .cache
             importedCodexRefreshStates[id] = state
+        }
+        for (id, record) in quotaCache.ccpmCodex ?? [:] {
+            ccpmCodexQuotas[id] = record.snapshot
+            ccpmCodexSources[id] = .cache
+            var state = QuotaRefreshState()
+            state.lastSuccessAt = record.updatedAt
+            state.source = .cache
+            ccpmCodexRefreshStates[id] = state
+        }
+        for (id, record) in quotaCache.ccpmClaude ?? [:] {
+            ccpmClaudeQuotas[id] = record.snapshot
+            ccpmClaudeSources[id] = .cache
+            var state = QuotaRefreshState()
+            state.lastSuccessAt = record.updatedAt
+            state.source = .cache
+            ccpmClaudeRefreshStates[id] = state
         }
     }
 
@@ -330,6 +385,168 @@ final class AppState {
         reloadImportedCodexAccounts()
     }
 
+    func reloadCCPMCodexProfiles() {
+        let previous = Dictionary(uniqueKeysWithValues: ccpmCodexProfiles.map { ($0.id, $0) })
+        let profiles = CCPMCodexProfileStore.loadProfiles()
+        let changed = Set(profiles.compactMap { profile -> String? in
+            guard let old = previous[profile.id],
+                  codexProfileIdentityChanged(previous: old, next: profile)
+            else { return nil }
+            return profile.id
+        })
+        ccpmCodexProfiles = profiles
+
+        let alive = Set(profiles.map(\.id)).subtracting(changed)
+        ccpmCodexAccounts = ccpmCodexAccounts.filter { alive.contains($0.key) }
+        ccpmCodexQuotas = ccpmCodexQuotas.filter { alive.contains($0.key) }
+        ccpmCodexSources = ccpmCodexSources.filter { alive.contains($0.key) }
+        ccpmCodexErrors = ccpmCodexErrors.filter { alive.contains($0.key) }
+        ccpmCodexRefreshStates = ccpmCodexRefreshStates.filter { alive.contains($0.key) }
+        var cache = quotaCache.ccpmCodex ?? [:]
+        cache = cache.filter { alive.contains($0.key) }
+        quotaCache.ccpmCodex = cache.isEmpty ? nil : cache
+        saveQuotaCache()
+    }
+
+    var ccpmCodexProfilesForMonitoring: [CCPMCodexProfile] {
+        ccpmCodexProfiles
+            .filter { $0.authMethod == .oauth }
+            .sorted { lhs, rhs in
+                switch (lhs.lastUsed, rhs.lastUsed) {
+                case let (left?, right?) where left != right:
+                    return left > right
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                }
+            }
+    }
+
+    var hasCCPMCodexProfiles: Bool {
+        !ccpmCodexProfilesForMonitoring.isEmpty
+    }
+
+    func ccpmCodexQuota(for profile: CCPMCodexProfile) -> QuotaSnapshot? {
+        if ccpmCodexProfileMirrorsPrimary(profile) { return codexQuota }
+        if let imported = importedCodexAccount(matching: profile) {
+            return importedCodexQuota(for: imported)
+        }
+        return ccpmCodexQuotas[profile.id]
+    }
+
+    func ccpmCodexError(for profile: CCPMCodexProfile) -> String? {
+        if ccpmCodexProfileMirrorsPrimary(profile) { return codexQuotaError }
+        if let imported = importedCodexAccount(matching: profile) {
+            return importedCodexError(for: imported)
+        }
+        return ccpmCodexErrors[profile.id]
+    }
+
+    func ccpmCodexRefreshState(for profile: CCPMCodexProfile) -> QuotaRefreshState {
+        if ccpmCodexProfileMirrorsPrimary(profile) { return codexRefreshState }
+        if let imported = importedCodexAccount(matching: profile) {
+            return importedCodexRefreshState(for: imported)
+        }
+        return ccpmCodexRefreshStates[profile.id] ?? QuotaRefreshState()
+    }
+
+    func reloadCCPMClaudeProfiles() {
+        ccpmClaudeProfiles = CCPMClaudeProfileStore.loadProfiles()
+        let alive = Set(ccpmClaudeProfiles.map(\.id))
+        ccpmClaudeAccounts = ccpmClaudeAccounts.filter { alive.contains($0.key) }
+        ccpmClaudeQuotas = ccpmClaudeQuotas.filter { alive.contains($0.key) }
+        ccpmClaudeSources = ccpmClaudeSources.filter { alive.contains($0.key) }
+        ccpmClaudeErrors = ccpmClaudeErrors.filter { alive.contains($0.key) }
+        ccpmClaudeRefreshStates = ccpmClaudeRefreshStates.filter { alive.contains($0.key) }
+        var cache = quotaCache.ccpmClaude ?? [:]
+        cache = cache.filter { alive.contains($0.key) }
+        quotaCache.ccpmClaude = cache.isEmpty ? nil : cache
+        saveQuotaCache()
+    }
+
+    var ccpmClaudeProfilesForMonitoring: [CCPMClaudeProfile] {
+        ccpmClaudeProfiles
+            .filter { $0.authMethod == .oauth }
+            .sorted { lhs, rhs in
+                if lhs.isDefault != rhs.isDefault { return lhs.isDefault }
+                switch (lhs.lastUsed, rhs.lastUsed) {
+                case let (l?, r?) where l != r:
+                    return l > r
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                }
+            }
+    }
+
+    var hasCCPMClaudeProfiles: Bool {
+        !ccpmClaudeProfilesForMonitoring.isEmpty
+    }
+
+    func claudeMonitorQuota() -> QuotaSnapshot? {
+        if let aggregate = aggregateClaudeMonitorQuota() {
+            return aggregate
+        }
+        return nil
+    }
+
+    func claudeMonitorError() -> String? {
+        if let error = claudeQuotaError, !error.isEmpty {
+            return error
+        }
+        for profile in ccpmClaudeProfilesForMonitoring {
+            if let error = ccpmClaudeErrors[profile.id], !error.isEmpty {
+                return error
+            }
+        }
+        return nil
+    }
+
+    func ccpmClaudeQuota(for profile: CCPMClaudeProfile) -> QuotaSnapshot? {
+        ccpmClaudeQuotas[profile.id]
+    }
+
+    func ccpmClaudeError(for profile: CCPMClaudeProfile) -> String? {
+        ccpmClaudeErrors[profile.id]
+    }
+
+    func ccpmClaudeRefreshState(for profile: CCPMClaudeProfile) -> QuotaRefreshState {
+        ccpmClaudeRefreshStates[profile.id] ?? QuotaRefreshState()
+    }
+
+    private func aggregateClaudeMonitorQuota() -> QuotaSnapshot? {
+        var snapshots: [QuotaSnapshot] = []
+        if let claudeQuota {
+            snapshots.append(claudeQuota)
+        }
+        snapshots.append(contentsOf: ccpmClaudeProfilesForMonitoring.compactMap { ccpmClaudeQuotas[$0.id] })
+        guard !snapshots.isEmpty else { return nil }
+
+        return QuotaSnapshot(
+            app: .claude,
+            fiveHour: mostConstrainedWindow(snapshots.map(\.fiveHour)),
+            weekly: mostConstrainedWindow(snapshots.map(\.weekly)),
+            weeklyOpus: mostConstrainedWindow(snapshots.map(\.weeklyOpus)),
+            weeklySonnet: mostConstrainedWindow(snapshots.map(\.weeklySonnet)),
+            planType: nil,
+            fetchedAt: snapshots.map(\.fetchedAt).max() ?? Date()
+        )
+    }
+
+    private func mostConstrainedWindow(_ windows: [QuotaWindow?]) -> QuotaWindow? {
+        windows
+            .compactMap { $0 }
+            .min { lhs, rhs in
+                lhs.remainingPercent < rhs.remainingPercent
+            }
+    }
+
     func importedCodexQuota(for account: ImportedCodexAccount) -> QuotaSnapshot? {
         if importedCodexAccountMirrorsPrimary(account) { return codexQuota }
         return importedCodexQuotas[account.id]
@@ -347,6 +564,7 @@ final class AppState {
 
     /// 对所有 `visibleInPopover` 为 true 的导入账号并发拉一遍配额,并发上限 3。
     private func loadAllImportedCodexQuotas(reason: QuotaRefreshReason) async {
+        guard SettingsStore.shared.showCodex else { return }
         let visible = importedCodexAccounts.filter(\.visibleInPopover)
         guard !visible.isEmpty else { return }
         let maxConcurrent = 3
@@ -402,18 +620,13 @@ final class AppState {
     }
 
     private func importedCodexAccountMirrorsPrimary(_ account: ImportedCodexAccount) -> Bool {
-        guard let primary = codexAccount,
-              let primaryAccountId = nonEmpty(primary.accountId),
-              let importedAccountId = nonEmpty(account.chatgptAccountId),
-              primaryAccountId == importedAccountId
-        else { return false }
-
-        let primaryUserId = nonEmpty(primary.chatgptUserId)
-        let importedUserId = importedCodexUserId(from: account)
-        if let primaryUserId, let importedUserId {
-            return primaryUserId == importedUserId
-        }
-        return true
+        guard let primary = codexAccount else { return false }
+        return codexIdentityMatches(
+            accountId: account.chatgptAccountId,
+            userId: importedCodexUserId(from: account),
+            otherAccountId: primary.accountId,
+            otherUserId: primary.chatgptUserId
+        )
     }
 
     private func importedCodexUserId(from account: ImportedCodexAccount) -> String? {
@@ -464,6 +677,62 @@ final class AppState {
             return nil
         }
         return value
+    }
+
+    private func codexProfileIdentityChanged(
+        previous: CCPMCodexProfile,
+        next: CCPMCodexProfile
+    ) -> Bool {
+        guard let previousAccountId = nonEmpty(previous.accountId),
+              let nextAccountId = nonEmpty(next.accountId)
+        else { return false }
+        if previousAccountId != nextAccountId { return true }
+        if let previousUserId = nonEmpty(previous.chatgptUserId),
+           let nextUserId = nonEmpty(next.chatgptUserId) {
+            return previousUserId != nextUserId
+        }
+        return false
+    }
+
+    private func codexIdentityMatches(
+        accountId: String?,
+        userId: String?,
+        otherAccountId: String?,
+        otherUserId: String?
+    ) -> Bool {
+        guard let accountId = nonEmpty(accountId),
+              let otherAccountId = nonEmpty(otherAccountId),
+              accountId == otherAccountId
+        else { return false }
+
+        if let userId = nonEmpty(userId),
+           let otherUserId = nonEmpty(otherUserId) {
+            return userId == otherUserId
+        }
+        return true
+    }
+
+    private func ccpmCodexProfileMirrorsPrimary(_ profile: CCPMCodexProfile) -> Bool {
+        guard let primary = codexAccount else { return false }
+        return codexIdentityMatches(
+            accountId: profile.accountId,
+            userId: profile.chatgptUserId,
+            otherAccountId: primary.accountId,
+            otherUserId: primary.chatgptUserId
+        )
+    }
+
+    private func importedCodexAccount(matching profile: CCPMCodexProfile) -> ImportedCodexAccount? {
+        importedCodexAccounts
+            .filter(\.visibleInPopover)
+            .first { account in
+                codexIdentityMatches(
+                    accountId: profile.accountId,
+                    userId: profile.chatgptUserId,
+                    otherAccountId: account.chatgptAccountId,
+                    otherUserId: importedCodexUserId(from: account)
+                )
+            }
     }
 
     private func beginImportedCodexRefresh(id: String, reason: QuotaRefreshReason) -> Bool {
@@ -517,6 +786,297 @@ final class AppState {
         importedCodexRefreshStates[id] = state
     }
 
+    private func loadAllCCPMCodexProfileQuotas(reason: QuotaRefreshReason) async {
+        guard SettingsStore.shared.showCodex else { return }
+        let profiles = ccpmCodexProfilesForMonitoring
+        guard !profiles.isEmpty else { return }
+        let maxConcurrent = 3
+        var index = 0
+        while index < profiles.count {
+            let batch = Array(profiles[index..<min(index + maxConcurrent, profiles.count)])
+            await withTaskGroup(of: Void.self) { group in
+                for profile in batch {
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        await self.loadCCPMCodexProfileQuota(profile: profile, reason: reason)
+                    }
+                }
+            }
+            index += maxConcurrent
+        }
+    }
+
+    private func loadCCPMCodexProfileQuota(profile: CCPMCodexProfile, reason: QuotaRefreshReason) async {
+        if ccpmCodexProfileMirrorsPrimary(profile) {
+            mirrorPrimaryCodexQuota(toCCPMProfileId: profile.id)
+            return
+        }
+        if let imported = importedCodexAccount(matching: profile) {
+            mirrorImportedCodexQuota(imported, toCCPMProfileId: profile.id)
+            return
+        }
+
+        guard beginCCPMCodexRefresh(id: profile.id, reason: reason) else { return }
+        defer { ccpmCodexRefreshStates[profile.id]?.inFlight = false }
+
+        var account: CodexAccount
+        do {
+            account = try await Task.detached(priority: .utility) {
+                try CCPMCodexProfileStore.loadAccount(profile: profile)
+            }.value
+        } catch {
+            markCCPMCodexFailure(id: profile.id, message: "\(error)")
+            return
+        }
+
+        ccpmCodexAccounts[profile.id] = account
+        guard let accessToken = nonEmpty(account.accessToken) else {
+            markCCPMCodexFailure(id: profile.id, message: QuotaError.missingToken.description)
+            return
+        }
+
+        let refreshed = await CodexTokenRefresher.ensureFreshTokens(
+            currentAccessToken: accessToken,
+            refreshToken: account.refreshToken,
+            idToken: account.idToken,
+            writeBack: .codexAuthJSONAt(path: profile.authFilePath)
+        )
+        let activeToken: String
+        switch refreshed {
+        case .success(let tokens):
+            activeToken = tokens.accessToken
+            account.accessToken = tokens.accessToken
+            account.refreshToken = nonEmpty(tokens.refreshToken)
+            account.idToken = tokens.idToken
+            account.expiredGuess = false
+            ccpmCodexAccounts[profile.id] = account
+        case .failure(let error):
+            markCCPMCodexFailure(id: profile.id, message: error.description, error: error)
+            return
+        }
+
+        let result = await CodexQuotaClient.fetch(
+            accessToken: activeToken,
+            accountId: account.accountId
+        )
+        switch result {
+        case .success(let snapshot):
+            storeCCPMCodex(id: profile.id, snapshot: snapshot, source: .api)
+        case .failure(let error):
+            markCCPMCodexFailure(id: profile.id, message: error.description, error: error)
+        }
+    }
+
+    private func mirrorPrimaryCodexQuota(toCCPMProfileId id: String) {
+        ccpmCodexQuotas[id] = codexQuota
+        ccpmCodexSources[id] = codexQuotaSource
+        ccpmCodexErrors[id] = codexQuotaError
+        ccpmCodexRefreshStates[id] = codexRefreshState
+        if let snapshot = codexQuota, codexQuotaSource == .api {
+            recordCCPMCodexProfileQuotaHistory(
+                id: id,
+                snapshot: snapshot,
+                sampledAt: codexRefreshState.lastSuccessAt ?? Date()
+            )
+        }
+        removeCCPMCodexCache(id: id)
+    }
+
+    private func mirrorImportedCodexQuota(
+        _ account: ImportedCodexAccount,
+        toCCPMProfileId id: String
+    ) {
+        ccpmCodexQuotas[id] = importedCodexQuota(for: account)
+        ccpmCodexSources[id] = importedCodexSources[account.id]
+        ccpmCodexErrors[id] = importedCodexError(for: account)
+        ccpmCodexRefreshStates[id] = importedCodexRefreshState(for: account)
+        if let snapshot = importedCodexQuota(for: account),
+           importedCodexSources[account.id] == .api {
+            recordCCPMCodexProfileQuotaHistory(
+                id: id,
+                snapshot: snapshot,
+                sampledAt: importedCodexRefreshState(for: account).lastSuccessAt ?? Date()
+            )
+        }
+        removeCCPMCodexCache(id: id)
+    }
+
+    private func removeCCPMCodexCache(id: String) {
+        var cache = quotaCache.ccpmCodex ?? [:]
+        if cache.removeValue(forKey: id) != nil {
+            quotaCache.ccpmCodex = cache.isEmpty ? nil : cache
+            saveQuotaCache()
+        }
+    }
+
+    private func beginCCPMCodexRefresh(id: String, reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        var state = ccpmCodexRefreshStates[id] ?? QuotaRefreshState()
+        guard !state.inFlight else { return false }
+        if let backoffUntil = state.backoffUntil, backoffUntil > now {
+            state.lastError = backoffMessage(until: backoffUntil)
+            ccpmCodexRefreshStates[id] = state
+            ccpmCodexErrors[id] = state.lastError
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = state.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval {
+            return false
+        }
+        state.inFlight = true
+        state.lastAttemptAt = now
+        ccpmCodexRefreshStates[id] = state
+        return true
+    }
+
+    private func storeCCPMCodex(id: String, snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        ccpmCodexQuotas[id] = snapshot
+        ccpmCodexSources[id] = source
+        ccpmCodexErrors[id] = nil
+        var state = ccpmCodexRefreshStates[id] ?? QuotaRefreshState()
+        state.lastSuccessAt = updatedAt
+        state.lastError = nil
+        state.backoffUntil = nil
+        state.source = source
+        ccpmCodexRefreshStates[id] = state
+
+        var cache = quotaCache.ccpmCodex ?? [:]
+        cache[id] = QuotaCacheRecord(snapshot: snapshot, source: source, updatedAt: updatedAt)
+        quotaCache.ccpmCodex = cache
+        saveQuotaCache()
+        recordCCPMCodexProfileQuotaHistory(id: id, snapshot: snapshot, sampledAt: updatedAt)
+    }
+
+    private func markCCPMCodexFailure(id: String, message: String, error: QuotaError? = nil) {
+        ccpmCodexErrors[id] = message
+        var state = ccpmCodexRefreshStates[id] ?? QuotaRefreshState()
+        state.lastError = message
+        if error?.isRateLimited == true {
+            state.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+        ccpmCodexRefreshStates[id] = state
+    }
+
+    private func loadAllCCPMClaudeProfileQuotas(reason: QuotaRefreshReason) async {
+        guard SettingsStore.shared.showClaude else { return }
+        let profiles = ccpmClaudeProfiles.filter { $0.authMethod == .oauth }
+        guard !profiles.isEmpty else { return }
+        let maxConcurrent = 3
+        var index = 0
+        while index < profiles.count {
+            let batch = Array(profiles[index..<min(index + maxConcurrent, profiles.count)])
+            await withTaskGroup(of: Void.self) { group in
+                for profile in batch {
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        await self.loadCCPMClaudeProfileQuota(profile: profile, reason: reason)
+                    }
+                }
+            }
+            index += maxConcurrent
+        }
+    }
+
+    private func loadCCPMClaudeProfileQuota(profile: CCPMClaudeProfile, reason: QuotaRefreshReason) async {
+        guard beginCCPMClaudeRefresh(id: profile.id, reason: reason) else { return }
+        defer { ccpmClaudeRefreshStates[profile.id]?.inFlight = false }
+
+        let loaded: (ClaudeAccount, ClaudeCredentialStorage)
+        do {
+            loaded = try await Task.detached(priority: .utility) {
+                try CCPMClaudeProfileStore.loadAccount(profile: profile)
+            }.value
+        } catch {
+            markCCPMClaudeFailure(id: profile.id, message: "\(error)")
+            return
+        }
+
+        var account = loaded.0
+        let storage = loaded.1
+        ccpmClaudeAccounts[profile.id] = account
+        guard account.accessToken != nil else {
+            markCCPMClaudeFailure(id: profile.id, message: QuotaError.missingToken.description)
+            return
+        }
+
+        let refreshed = await ClaudeTokenRefresher.ensureFreshAccessToken(
+            account: &account,
+            storage: storage
+        )
+        let activeToken: String
+        switch refreshed {
+        case .success(let token):
+            activeToken = token
+            ccpmClaudeAccounts[profile.id] = account
+        case .failure(let err):
+            markCCPMClaudeFailure(id: profile.id, message: err.description, error: err)
+            return
+        }
+
+        let result = await ClaudeQuotaClient.fetch(accessToken: activeToken)
+        switch result {
+        case .success(let snapshot):
+            storeCCPMClaude(id: profile.id, snapshot: snapshot, source: .api)
+        case .failure(let err):
+            markCCPMClaudeFailure(id: profile.id, message: err.description, error: err)
+        }
+    }
+
+    private func beginCCPMClaudeRefresh(id: String, reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        var state = ccpmClaudeRefreshStates[id] ?? QuotaRefreshState()
+        guard !state.inFlight else { return false }
+        if let backoffUntil = state.backoffUntil, backoffUntil > now {
+            state.lastError = backoffMessage(until: backoffUntil)
+            ccpmClaudeRefreshStates[id] = state
+            ccpmClaudeErrors[id] = state.lastError
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = state.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        state.inFlight = true
+        state.lastAttemptAt = now
+        ccpmClaudeRefreshStates[id] = state
+        return true
+    }
+
+    private func storeCCPMClaude(id: String, snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        ccpmClaudeQuotas[id] = snapshot
+        ccpmClaudeSources[id] = source
+        ccpmClaudeErrors[id] = nil
+        var state = ccpmClaudeRefreshStates[id] ?? QuotaRefreshState()
+        state.lastSuccessAt = updatedAt
+        state.lastError = nil
+        if source == .api {
+            state.backoffUntil = nil
+        }
+        state.source = source
+        ccpmClaudeRefreshStates[id] = state
+
+        var cache = quotaCache.ccpmClaude ?? [:]
+        cache[id] = QuotaCacheRecord(snapshot: snapshot, source: source, updatedAt: updatedAt)
+        quotaCache.ccpmClaude = cache
+        saveQuotaCache()
+        recordCCPMClaudeProfileQuotaHistory(id: id, snapshot: snapshot, sampledAt: updatedAt)
+    }
+
+    private func markCCPMClaudeFailure(id: String, message: String, error: QuotaError? = nil) {
+        ccpmClaudeErrors[id] = message
+        var state = ccpmClaudeRefreshStates[id] ?? QuotaRefreshState()
+        state.lastError = message
+        if error?.isRateLimited == true {
+            state.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+        ccpmClaudeRefreshStates[id] = state
+    }
+
     private func saveQuotaCache() {
         do {
             try QuotaCache.save(quotaCache)
@@ -540,6 +1100,26 @@ final class AppState {
             accountKey: QuotaHistoryAccountKey.claudePrimary(),
             app: .claude,
             kind: .claudePrimary,
+            snapshot: snapshot,
+            sampledAt: sampledAt
+        )
+    }
+
+    private func recordCCPMCodexProfileQuotaHistory(id: String, snapshot: QuotaSnapshot, sampledAt: Date) {
+        recordQuotaHistory(
+            accountKey: QuotaHistoryAccountKey.codexCCPMProfile(id: id),
+            app: .codex,
+            kind: .codexCCPMProfile,
+            snapshot: snapshot,
+            sampledAt: sampledAt
+        )
+    }
+
+    private func recordCCPMClaudeProfileQuotaHistory(id: String, snapshot: QuotaSnapshot, sampledAt: Date) {
+        recordQuotaHistory(
+            accountKey: QuotaHistoryAccountKey.claudeCCPMProfile(id: id),
+            app: .claude,
+            kind: .claudeCCPMProfile,
             snapshot: snapshot,
             sampledAt: sampledAt
         )
@@ -670,6 +1250,7 @@ final class AppState {
     }
 
     private func loadCodexQuota(reason: QuotaRefreshReason) async {
+        guard SettingsStore.shared.showCodex else { return }
         guard beginCodexRefresh(reason: reason) else { return }
         defer { codexRefreshState.inFlight = false }
 
@@ -711,6 +1292,7 @@ final class AppState {
     }
 
     private func loadClaudeQuota(reason: QuotaRefreshReason) async {
+        guard SettingsStore.shared.showClaude else { return }
         guard beginClaudeRefresh(reason: reason) else { return }
         defer { claudeRefreshState.inFlight = false }
 
@@ -863,12 +1445,17 @@ final class AppState {
     }
 
     private func logQuotaSummary() {
-        if let q = codexQuota {
+        let settings = SettingsStore.shared
+        if !settings.showCodex {
+            print("[Quota 额度] Codex 已关闭: skipped")
+        } else if let q = codexQuota {
             print("[Quota 额度] Codex: source=\(codexQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
         } else {
             print("[Quota 额度] Codex 拉取失败: error=\(codexQuotaError ?? "unknown")")
         }
-        if let q = claudeQuota {
+        if !settings.showClaude {
+            print("[Quota 额度] Claude 已关闭: skipped")
+        } else if let q = claudeQuota {
             print("[Quota 额度] Claude: source=\(claudeQuotaSource?.rawValue ?? "—") \(format(q))")
             if let opus = q.weeklyOpus { print("       └─ weeklyOpus=\(format(window: opus))") }
             if let sonnet = q.weeklySonnet { print("       └─ weeklySonnet=\(format(window: sonnet))") }

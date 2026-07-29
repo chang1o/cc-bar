@@ -17,9 +17,16 @@ struct PopoverRootView: View {
         VStack(spacing: 0) {
             header
 
+            if let risk = quotaRisk {
+                riskBanner(risk)
+            }
+
             Divider()
 
-            content
+            ScrollView {
+                content
+            }
+            .frame(height: contentHeight)
         }
         .frame(width: 340)
     }
@@ -53,6 +60,17 @@ struct PopoverRootView: View {
                     .padding(.trailing, 4)
             }
 
+            Button(action: toggleMenuBarQuotaWindow) {
+                Text(menuBarQuotaWindow.shortLabel)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(PopoverIconButtonStyle())
+            .help(menuBarQuotaWindow == .fiveHour
+                ? tr("Show weekly quota", "显示周额度")
+                : tr("Show 5-hour quota", "显示 5 小时额度"))
+
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 13, weight: .medium))
@@ -65,15 +83,19 @@ struct PopoverRootView: View {
             // AppState.refreshNow() 内部已经做了 in-flight 去重,不会重复发请求。
             .help(tr("Refresh now", "立即刷新"))
 
-            Button { activateAndOpenMain() } label: {
-                Image(systemName: "chart.bar.xaxis")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+            Button { activateAndOpenMain(tab: .stats) } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.system(size: 12.5, weight: .medium))
+                    Text(tr("Stats", "统计"))
+                        .font(.system(size: 10.5, weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
             }
-            .buttonStyle(PopoverIconButtonStyle())
+            .buttonStyle(PopoverTextButtonStyle(width: 54))
             .help(tr("Open Statistics", "查看统计"))
 
-            Button { activateAndOpenMain() } label: {
+            Button { activateAndOpenMain(tab: .settings) } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -96,16 +118,33 @@ struct PopoverRootView: View {
 
     /// `now` 由 header 的 TimelineView 提供,让"Xs 前已刷新"实时滚动。
     private func headerSubtitle(now: Date) -> String {
+        let settings = SettingsStore.shared
+        let importedCodexLatest = settings.showCodex
+            ? appState.importedCodexRefreshStates.values.compactMap(\.lastSuccessAt).max()
+            : nil
+        let ccpmCodexLatest = settings.showCodex
+            ? appState.ccpmCodexRefreshStates.values.compactMap(\.lastSuccessAt).max()
+            : nil
+        let ccpmClaudeLatest = settings.showClaude
+            ? appState.ccpmClaudeRefreshStates.values.compactMap(\.lastSuccessAt).max()
+            : nil
         let latest = [
-            appState.codexRefreshState.lastSuccessAt,
-            appState.claudeRefreshState.lastSuccessAt
+            settings.showCodex ? appState.codexRefreshState.lastSuccessAt : nil,
+            settings.showClaude ? appState.claudeRefreshState.lastSuccessAt : nil,
+            importedCodexLatest,
+            ccpmCodexLatest,
+            ccpmClaudeLatest
         ].compactMap { $0 }.max()
 
         if let latest {
             let age = Self.relativeAge(from: latest, now: now)
             return tr("refreshed \(age) ago", "\(age) 前已刷新")
         }
-        if appState.codexQuotaError != nil || appState.claudeQuotaError != nil {
+        if (settings.showCodex && appState.codexQuotaError != nil)
+            || (settings.showCodex && appState.importedCodexErrors.values.contains(where: { !$0.isEmpty }))
+            || (settings.showCodex && appState.ccpmCodexErrors.values.contains(where: { !$0.isEmpty }))
+            || (settings.showClaude && appState.claudeQuotaError != nil)
+            || (settings.showClaude && appState.ccpmClaudeErrors.values.contains(where: { !$0.isEmpty })) {
             return tr("refresh failed", "刷新失败")
         }
         return tr("waiting…", "等待数据")
@@ -117,6 +156,8 @@ struct PopoverRootView: View {
     private var content: some View {
         let showCodex = SettingsStore.shared.showCodex
         let showClaude = SettingsStore.shared.showClaude
+        let hasAdditionalCodex = hasAdditionalCodexAccounts
+        let hasCCPMClaude = appState.hasCCPMClaudeProfiles
 
         if !showCodex && !showClaude {
             VStack(spacing: 6) {
@@ -132,43 +173,46 @@ struct PopoverRootView: View {
         } else {
             VStack(spacing: 0) {
                 if showCodex {
-                    ServiceBlockView(
-                        title: "Codex",
-                        subtitle: codexSubtitle,
-                        tint: .codexAccent,
-                        logoName: "codex",
-                        fallback: "C",
-                        snapshot: appState.codexQuota,
-                        error: appState.codexQuotaError,
-                        weekSpend: weekSpend(for: .codex),
-                        todayCost: appState.codexTodayCost,
-                        serviceStatus: SettingsStore.shared.showServiceStatus ? appState.codexServiceStatus : nil
-                    )
+                    if hasAdditionalCodex {
+                        CodexAccountsSection(primaryWindow: menuBarQuotaWindow)
+                    } else {
+                        ServiceBlockView(
+                            title: "Codex",
+                            subtitle: codexSubtitle,
+                            tint: .codexAccent,
+                            logoName: "codex",
+                            fallback: "C",
+                            primaryWindow: menuBarQuotaWindow,
+                            snapshot: appState.codexQuota,
+                            error: appState.codexQuotaError,
+                            weekSpend: weekSpend(for: .codex),
+                            todayCost: appState.codexTodayCost,
+                            serviceStatus: SettingsStore.shared.showServiceStatus ? appState.codexServiceStatus : nil
+                        )
+                    }
                 }
 
-                // 其他 Codex 账号分区（visible 为 0 时自动隐藏）
-                let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
-                if hasImported {
-                    Divider().padding(.horizontal, 16)
-                    OtherCodexAccountsSection()
-                }
-
-                if showClaude && (showCodex || hasImported) {
+                if showClaude && showCodex {
                     Divider().padding(.horizontal, 16)
                 }
                 if showClaude {
-                    ServiceBlockView(
-                        title: "Claude Code",
-                        subtitle: claudeSubtitle,
-                        tint: .claudeAccent,
-                        logoName: "claude",
-                        fallback: "K",
-                        snapshot: appState.claudeQuota,
-                        error: appState.claudeQuotaError,
-                        weekSpend: weekSpend(for: .claude),
-                        todayCost: appState.claudeTodayCost,
-                        serviceStatus: SettingsStore.shared.showServiceStatus ? appState.claudeServiceStatus : nil
-                    )
+                    if hasCCPMClaude {
+                        ClaudeAccountsSection(primaryWindow: menuBarQuotaWindow)
+                    } else {
+                        ServiceBlockView(
+                            title: "Claude Code",
+                            subtitle: claudeSubtitle,
+                            tint: .claudeAccent,
+                            logoName: "claude",
+                            fallback: "K",
+                            primaryWindow: menuBarQuotaWindow,
+                            snapshot: appState.claudeQuota,
+                            error: appState.claudeQuotaError,
+                            weekSpend: weekSpend(for: .claude),
+                            todayCost: appState.claudeTodayCost,
+                            serviceStatus: SettingsStore.shared.showServiceStatus ? appState.claudeServiceStatus : nil
+                        )
+                    }
                 }
             }
         }
@@ -206,6 +250,238 @@ struct PopoverRootView: View {
         return totals.costUSD
     }
 
+    private var menuBarQuotaWindow: MenuBarWindowChoice {
+        SettingsStore.shared.menuBarWindow
+    }
+
+    private var hasAdditionalCodexAccounts: Bool {
+        appState.importedCodexAccounts.contains(where: \.visibleInPopover)
+            || appState.hasCCPMCodexProfiles
+    }
+
+    private var maxContentHeight: CGFloat {
+        let available = NSScreen.main?.visibleFrame.height ?? 900
+        return min(680, max(320, available * 0.78))
+    }
+
+    private var contentHeight: CGFloat {
+        min(maxContentHeight, estimatedContentHeight)
+    }
+
+    private var estimatedContentHeight: CGFloat {
+        let settings = SettingsStore.shared
+        guard settings.showCodex || settings.showClaude else {
+            return Self.emptyContentHeight
+        }
+
+        var height: CGFloat = 0
+        var hasSection = false
+
+        func appendSection(_ sectionHeight: CGFloat) {
+            if hasSection { height += Self.dividerHeight }
+            height += sectionHeight
+            hasSection = true
+        }
+
+        if settings.showCodex {
+            if hasAdditionalCodexAccounts {
+                let count = monitoredCodexBlockCount
+                appendSection(Self.accountsSectionHeaderHeight
+                    + CGFloat(count) * Self.serviceBlockHeight
+                    + CGFloat(max(0, count - 1)) * Self.dividerHeight)
+            } else {
+                appendSection(Self.serviceBlockHeight)
+            }
+        }
+
+        if settings.showClaude {
+            if appState.hasCCPMClaudeProfiles {
+                let count = monitoredClaudeBlockCount
+                appendSection(Self.accountsSectionHeaderHeight
+                    + CGFloat(count) * Self.serviceBlockHeight
+                    + CGFloat(max(0, count - 1)) * Self.dividerHeight)
+            } else {
+                appendSection(Self.serviceBlockHeight)
+            }
+        }
+
+        return max(Self.emptyContentHeight, height)
+    }
+
+    private var monitoredCodexBlockCount: Int {
+        var count = appState.importedCodexAccounts.filter(\.visibleInPopover).count
+            + appState.ccpmCodexProfilesForMonitoring.count
+        if appState.codexAccount != nil
+            || appState.codexQuota != nil
+            || appState.codexQuotaError != nil
+            || appState.codexRefreshState.inFlight {
+            count += 1
+        }
+        return max(1, count)
+    }
+
+    private var monitoredClaudeBlockCount: Int {
+        var count = appState.ccpmClaudeProfilesForMonitoring.count
+        if appState.claudeAccount != nil
+            || appState.claudeQuota != nil
+            || appState.claudeQuotaError != nil
+            || appState.claudeRefreshState.inFlight {
+            count += 1
+        }
+        return max(1, count)
+    }
+
+    private static let emptyContentHeight: CGFloat = 96
+    private static let serviceBlockHeight: CGFloat = 142
+    private static let accountsSectionHeaderHeight: CGFloat = 28
+    private static let dividerHeight: CGFloat = 1
+
+    // MARK: Quota risk summary
+
+    private var quotaRisk: QuotaRiskItem? {
+        let settings = SettingsStore.shared
+        var candidates: [QuotaRiskItem] = []
+
+        if settings.showCodex {
+            appendRiskCandidates(
+                title: "Codex",
+                snapshot: appState.codexQuota,
+                tint: .codexAccent,
+                to: &candidates
+            )
+
+            for (idx, account) in appState.importedCodexAccounts.filter(\.visibleInPopover).enumerated() {
+                appendRiskCandidates(
+                    title: importedCodexRiskTitle(account, index: idx),
+                    snapshot: appState.importedCodexQuota(for: account),
+                    tint: .codexAccent,
+                    to: &candidates
+                )
+            }
+
+            for (idx, profile) in appState.ccpmCodexProfilesForMonitoring.enumerated() {
+                appendRiskCandidates(
+                    title: ccpmCodexRiskTitle(profile, index: idx),
+                    snapshot: appState.ccpmCodexQuota(for: profile),
+                    tint: .codexAccent,
+                    to: &candidates
+                )
+            }
+        }
+
+        if settings.showClaude {
+            appendRiskCandidates(
+                title: tr("Claude · Default", "Claude · 默认"),
+                snapshot: appState.claudeQuota,
+                tint: .claudeAccent,
+                to: &candidates
+            )
+
+            for (idx, profile) in appState.ccpmClaudeProfilesForMonitoring.enumerated() {
+                appendRiskCandidates(
+                    title: ccpmClaudeRiskTitle(profile, index: idx),
+                    snapshot: appState.ccpmClaudeQuota(for: profile),
+                    tint: .claudeAccent,
+                    to: &candidates
+                )
+            }
+        }
+
+        return candidates
+            .filter { $0.remainingPercent <= 20 }
+            .min { lhs, rhs in lhs.remainingPercent < rhs.remainingPercent }
+    }
+
+    private func appendRiskCandidates(
+        title: String,
+        snapshot: QuotaSnapshot?,
+        tint: Color,
+        to candidates: inout [QuotaRiskItem]
+    ) {
+        if let fiveHour = snapshot?.fiveHour {
+            candidates.append(QuotaRiskItem(title: title, windowLabel: "5H", window: fiveHour, tint: tint))
+        }
+        if let weekly = snapshot?.weekly {
+            candidates.append(QuotaRiskItem(title: title, windowLabel: "WK", window: weekly, tint: tint))
+        }
+    }
+
+    private func importedCodexRiskTitle(_ account: ImportedCodexAccount, index: Int) -> String {
+        if SettingsStore.shared.privacyMode {
+            return tr("Codex · Account \(index + 1)", "Codex · 账号 \(index + 1)")
+        }
+        if !account.alias.isEmpty { return "Codex · \(account.alias)" }
+        if let email = account.email, !email.isEmpty {
+            return "Codex · \(emailUsername(email))"
+        }
+        return "Codex · \(account.id)"
+    }
+
+    private func ccpmCodexRiskTitle(_ profile: CCPMCodexProfile, index: Int) -> String {
+        if SettingsStore.shared.privacyMode {
+            let offset = appState.importedCodexAccounts.filter(\.visibleInPopover).count
+            return tr("Codex · Account \(offset + index + 1)", "Codex · 账号 \(offset + index + 1)")
+        }
+        if let email = profile.email, !email.isEmpty {
+            return "Codex · \(emailUsername(email))"
+        }
+        return "Codex · \(profile.name)"
+    }
+
+    private func ccpmClaudeRiskTitle(_ profile: CCPMClaudeProfile, index: Int) -> String {
+        if SettingsStore.shared.privacyMode {
+            return tr("Claude · Profile \(index + 1)", "Claude · 账号 \(index + 1)")
+        }
+        if let displayName = profile.displayName, !displayName.isEmpty {
+            return "Claude · \(displayName)"
+        }
+        if let email = profile.email, !email.isEmpty {
+            return "Claude · \(emailUsername(email))"
+        }
+        return "Claude · \(profile.name)"
+    }
+
+    private func emailUsername(_ email: String) -> String {
+        email.components(separatedBy: "@").first ?? email
+    }
+
+    private func riskBanner(_ risk: QuotaRiskItem) -> some View {
+        let color = statusColor(remainingPercent: risk.remainingPercent, tint: risk.tint)
+        return HStack(spacing: 8) {
+            Image(systemName: risk.remainingPercent <= 0 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(color)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tr("Quota risk", "额度风险"))
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(color)
+                    .textCase(.uppercase)
+                Text("\(risk.title) · \(risk.windowLabel)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("\(Int(risk.remainingPercent.rounded()))%")
+                    .font(.system(size: 14, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(color)
+                Text(formatResetCompact(risk.window.resetsAt))
+                    .font(.system(size: 10))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(color.opacity(0.10))
+    }
+
     // MARK: Header state (live / stale / offline)
 
     private var headerState: CCRefreshState? {
@@ -214,9 +490,27 @@ struct PopoverRootView: View {
         let claude = appState.claudeRefreshState
         let codexLast = settings.showCodex ? codex.lastSuccessAt : nil
         let claudeLast = settings.showClaude ? claude.lastSuccessAt : nil
-        let latest = [codexLast, claudeLast].compactMap { $0 }.max()
+        let importedCodexLast = settings.showCodex
+            ? appState.importedCodexRefreshStates.values.compactMap(\.lastSuccessAt).max()
+            : nil
+        let ccpmCodexLast = settings.showCodex
+            ? appState.ccpmCodexRefreshStates.values.compactMap(\.lastSuccessAt).max()
+            : nil
+        let ccpmClaudeLast = settings.showClaude
+            ? appState.ccpmClaudeRefreshStates.values.compactMap(\.lastSuccessAt).max()
+            : nil
+        let latest = [
+            codexLast,
+            claudeLast,
+            importedCodexLast,
+            ccpmCodexLast,
+            ccpmClaudeLast
+        ].compactMap { $0 }.max()
         let hasError = (settings.showCodex && codex.lastError != nil)
+            || (settings.showCodex && appState.importedCodexRefreshStates.values.contains { $0.lastError != nil })
+            || (settings.showCodex && appState.ccpmCodexRefreshStates.values.contains { $0.lastError != nil })
             || (settings.showClaude && claude.lastError != nil)
+            || (settings.showClaude && appState.ccpmClaudeRefreshStates.values.contains { $0.lastError != nil })
 
         guard let latest else {
             return hasError ? .offline : nil
@@ -233,9 +527,21 @@ struct PopoverRootView: View {
 
     /// 菜单栏 App (`.accessory`) 默认不抢焦点,打开窗口后会被压在其他 App 后面;
     /// 先 `activate(ignoringOtherApps:)` 把进程置前,再 `openWindow` 才会出现在最前。
-    private func activateAndOpenMain() {
+    private func activateAndOpenMain(tab: MainTab) {
+        appState.mainTab = tab
         NSApp.activate(ignoringOtherApps: true)
         openWindow(id: "main")
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            appState.mainTab = tab
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows
+                .first { $0.title == "CCBar" }
+                .map { window in
+                    window.makeKeyAndOrderFront(nil)
+                    window.orderFrontRegardless()
+                }
+        }
     }
 
     // MARK: Refresh
@@ -248,6 +554,11 @@ struct PopoverRootView: View {
     private func refresh() {
         refreshRotation += 360
         Task { await appState.refreshNow() }
+    }
+
+    private func toggleMenuBarQuotaWindow() {
+        SettingsStore.shared.menuBarWindow = SettingsStore.shared.menuBarWindow.toggledForMenuBar
+        FloatingPanelController.shared.sync()
     }
 
     // MARK: Helpers
@@ -276,17 +587,54 @@ struct PopoverRootView: View {
     }
 }
 
+private struct QuotaRiskItem {
+    let title: String
+    let windowLabel: String
+    let window: QuotaWindow
+    let tint: Color
+
+    var remainingPercent: Double {
+        window.remainingPercent
+    }
+}
+
 // MARK: - ServiceBlockView
 
-private struct ServiceBlockView: View {
+struct ServiceAccountsSectionHeader: View {
+    let title: String
+    let chineseTitle: String
+    let count: Int
+
+    var body: some View {
+        HStack {
+            Text(tr(title, chineseTitle))
+                .font(.system(size: 9.5, weight: .semibold))
+                .kerning(0.3)
+                .foregroundStyle(.tertiary)
+
+            Spacer()
+
+            Text("all · \(count)")
+                .font(.system(size: 9.5, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(.quaternary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+}
+
+struct ServiceBlockView: View {
     let title: String
     let subtitle: String
     let tint: Color
     let logoName: String
     let fallback: String
+    let primaryWindow: MenuBarWindowChoice
     let snapshot: QuotaSnapshot?
     let error: String?
-    let weekSpend: Decimal
+    let weekSpend: Decimal?
     let todayCost: Decimal?
     let serviceStatus: ServiceStatus?
 
@@ -294,7 +642,7 @@ private struct ServiceBlockView: View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
             bodyRow
-            weeklyRow
+            secondaryRow
             if let message = shortError(error) {
                 Text(message)
                     .font(.system(size: 11))
@@ -345,34 +693,32 @@ private struct ServiceBlockView: View {
 
     private var bodyRow: some View {
         HStack(alignment: .center, spacing: 16) {
-            // 左:5h 大百分比 + 小标签
             VStack(alignment: .center, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text(fiveHourValueText)
+                    Text(primaryValueText)
                         .font(.system(size: 32, weight: .semibold))
                         .monospacedDigit()
                         .kerning(-0.8)
-                        .foregroundStyle(fiveHourColor)
+                        .foregroundStyle(primaryColor)
                         .lineLimit(1)
                     Text("%")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(fiveHourColor.opacity(0.75))
+                        .foregroundStyle(primaryColor.opacity(0.75))
                 }
                 .fixedSize()
 
-                Text("5-HOUR · 五小时")
+                Text(primaryLabel)
                     .font(.system(size: 9, weight: .semibold))
                     .kerning(0.5)
                     .foregroundStyle(.quaternary)
             }
 
-            // 右:5h 进度条 + 两行(数值 / label)
             VStack(alignment: .leading, spacing: 8) {
-                ProgressBar(value: fiveHourRemaining / 100, tint: fiveHourColor, height: 7)
+                ProgressBar(value: primaryRemaining / 100, tint: primaryColor, height: 7)
 
                 VStack(spacing: 1) {
                     HStack(spacing: 0) {
-                        ResetTimeText(resetsAt: snapshot?.fiveHour?.resetsAt)
+                        ResetTimeText(resetsAt: primaryQuota?.resetsAt)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -402,22 +748,22 @@ private struct ServiceBlockView: View {
         }
     }
 
-    private var weeklyRow: some View {
+    private var secondaryRow: some View {
         HStack(spacing: 10) {
-            Text("WK")
+            Text(secondaryShortLabel)
                 .font(.system(size: 9, weight: .semibold))
                 .kerning(0.6)
                 .foregroundStyle(.quaternary)
                 .frame(width: 36, alignment: .leading)
 
-            ProgressBar(value: weeklyRemaining / 100, tint: weeklyColor, height: 2.5)
+            ProgressBar(value: secondaryRemaining / 100, tint: secondaryColor, height: 2.5)
 
-            Text(weeklyPercentText)
+            Text(secondaryPercentText)
                 .font(.system(size: 10.5, weight: .medium))
                 .monospacedDigit()
-                .foregroundStyle(weeklyColor)
+                .foregroundStyle(secondaryColor)
 
-            ResetTimeText(resetsAt: snapshot?.weekly?.resetsAt)
+            ResetTimeText(resetsAt: secondaryQuota?.resetsAt)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.quaternary)
         }
@@ -437,32 +783,60 @@ private struct ServiceBlockView: View {
 
     // MARK: Derived data
 
-    private var fiveHourRemaining: Double {
-        snapshot?.fiveHour?.remainingPercent ?? 0
+    private var primaryQuota: QuotaWindow? {
+        switch primaryWindow {
+        case .fiveHour, .both: return snapshot?.fiveHour
+        case .weekly: return snapshot?.weekly
+        }
     }
 
-    private var weeklyRemaining: Double {
-        snapshot?.weekly?.remainingPercent ?? 0
+    private var secondaryQuota: QuotaWindow? {
+        switch primaryWindow {
+        case .fiveHour, .both: return snapshot?.weekly
+        case .weekly: return snapshot?.fiveHour
+        }
     }
 
-    private var fiveHourColor: Color {
-        guard snapshot?.fiveHour != nil else { return .secondary }
-        return statusColor(remainingPercent: fiveHourRemaining, tint: tint)
+    private var primaryRemaining: Double {
+        primaryQuota?.remainingPercent ?? 0
     }
 
-    private var weeklyColor: Color {
-        guard snapshot?.weekly != nil else { return .secondary }
-        return statusColor(remainingPercent: weeklyRemaining, tint: tint)
+    private var secondaryRemaining: Double {
+        secondaryQuota?.remainingPercent ?? 0
     }
 
-    private var fiveHourValueText: String {
-        guard let window = snapshot?.fiveHour else { return "--" }
+    private var primaryColor: Color {
+        guard primaryQuota != nil else { return .secondary }
+        return statusColor(remainingPercent: primaryRemaining, tint: tint)
+    }
+
+    private var secondaryColor: Color {
+        guard secondaryQuota != nil else { return .secondary }
+        return statusColor(remainingPercent: secondaryRemaining, tint: tint)
+    }
+
+    private var primaryValueText: String {
+        guard let window = primaryQuota else { return "--" }
         return "\(Int(window.remainingPercent.rounded()))"
     }
 
-    private var weeklyPercentText: String {
-        guard let window = snapshot?.weekly else { return "--%" }
+    private var secondaryPercentText: String {
+        guard let window = secondaryQuota else { return "--%" }
         return "\(Int(window.remainingPercent.rounded()))%"
+    }
+
+    private var primaryLabel: String {
+        switch primaryWindow {
+        case .fiveHour, .both: return "5-HOUR · 五小时"
+        case .weekly: return "WEEKLY · 周额度"
+        }
+    }
+
+    private var secondaryShortLabel: String {
+        switch primaryWindow {
+        case .fiveHour, .both: return "WK"
+        case .weekly: return "5H"
+        }
     }
 
     /// 取整美元金额:`<$1` 用于 0 ~ 0.99,`$0` 仅在 nil/0 时显示。

@@ -2,7 +2,10 @@ import Foundation
 
 enum CodexAuth {
     nonisolated static func load() throws -> CodexAccount {
-        let url = authFileURL()
+        try load(from: authFileURL())
+    }
+
+    nonisolated static func load(from url: URL) throws -> CodexAccount {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw CredentialError.fileNotFound(url.path)
         }

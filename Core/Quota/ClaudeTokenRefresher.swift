@@ -45,6 +45,20 @@ enum ClaudeTokenRefresher {
     nonisolated static func ensureFreshAccessToken(
         account: inout ClaudeAccount
     ) async -> Result<String, QuotaError> {
+        let storage: ClaudeCredentialStorage
+        switch account.source {
+        case .file:
+            storage = .file(path: credentialsFileURL().path)
+        case .keychain:
+            storage = .keychain(service: keychainService)
+        }
+        return await ensureFreshAccessToken(account: &account, storage: storage)
+    }
+
+    nonisolated static func ensureFreshAccessToken(
+        account: inout ClaudeAccount,
+        storage: ClaudeCredentialStorage
+    ) async -> Result<String, QuotaError> {
         guard let current = account.accessToken else {
             return .failure(.missingToken)
         }
@@ -56,7 +70,7 @@ enum ClaudeTokenRefresher {
         }
         do {
             let r = try await Coordinator.shared.refresh(
-                source: account.source,
+                storage: storage,
                 currentRefresh: refreshToken
             )
             account.accessToken = r.accessToken
@@ -82,6 +96,7 @@ enum ClaudeTokenRefresher {
     private actor Coordinator {
         static let shared = Coordinator()
         private var inFlight: Task<Refreshed, Error>?
+        private var keyedInFlight: [String: Task<Refreshed, Error>] = [:]
 
         /// 同源刷新合并:若已有刷新在飞行中,所有调用者共享同一结果,
         /// 避免一个进程内多个入口几乎同时拿同一个 refresh_token 各发一次请求。
@@ -100,16 +115,46 @@ enum ClaudeTokenRefresher {
             return try await task.value
         }
 
+        func refresh(storage: ClaudeCredentialStorage, currentRefresh: String) async throws -> Refreshed {
+            let key = storage.cacheKey
+            if let task = keyedInFlight[key] {
+                return try await task.value
+            }
+            let task = Task {
+                try await Coordinator.performRefresh(
+                    storage: storage,
+                    initialRefresh: currentRefresh
+                )
+            }
+            keyedInFlight[key] = task
+            defer { keyedInFlight[key] = nil }
+            return try await task.value
+        }
+
         /// 真正的刷新主流程。
         private static func performRefresh(
             source: CredentialSource,
+            initialRefresh: String
+        ) async throws -> Refreshed {
+            let storage: ClaudeCredentialStorage
+            switch source {
+            case .file:
+                storage = .file(path: ClaudeTokenRefresher.credentialsFileURL().path)
+            case .keychain:
+                storage = .keychain(service: ClaudeTokenRefresher.keychainService)
+            }
+            return try await performRefresh(storage: storage, initialRefresh: initialRefresh)
+        }
+
+        private static func performRefresh(
+            storage: ClaudeCredentialStorage,
             initialRefresh: String
         ) async throws -> Refreshed {
             var refreshToken = initialRefresh
 
             // 1) 拿锁后先 *重读* 一次存储:别人(CLI / Desktop / cc-switch)
             //    可能在我们排队等锁时已经刷新过并写回了新值。
-            if let onDisk = ClaudeTokenRefresher.peekStored(source: source) {
+            if let onDisk = ClaudeTokenRefresher.peekStored(storage: storage) {
                 if let storedExpiresAt = onDisk.expiresAt,
                    !ClaudeTokenRefresher.isExpired(expiresAt: storedExpiresAt) {
                     // 存储里的 access_token 已经新鲜,直接用,不发请求。
@@ -127,11 +172,11 @@ enum ClaudeTokenRefresher {
             }
 
             // 2) 文件源:若文件刚被改过,礼让一拍再重读;依然过期才自己刷。
-            if source == .file, ClaudeTokenRefresher.fileMtimeWithinPoliteWindow() {
+            if ClaudeTokenRefresher.fileMtimeWithinPoliteWindow(storage: storage) {
                 try? await Task.sleep(
                     nanoseconds: UInt64(ClaudeTokenRefresher.softRecoveryDelay * 1_000_000_000)
                 )
-                if let onDisk = ClaudeTokenRefresher.peekStored(source: source) {
+                if let onDisk = ClaudeTokenRefresher.peekStored(storage: storage) {
                     if let storedExpiresAt = onDisk.expiresAt,
                        !ClaudeTokenRefresher.isExpired(expiresAt: storedExpiresAt) {
                         return Refreshed(
@@ -151,7 +196,7 @@ enum ClaudeTokenRefresher {
                 let refreshed = try await ClaudeTokenRefresher.performNetworkRefresh(
                     using: refreshToken
                 )
-                try ClaudeTokenRefresher.writeBack(source: source, refreshed: refreshed)
+                try ClaudeTokenRefresher.writeBack(storage: storage, refreshed: refreshed)
                 return refreshed
             } catch QuotaError.tokenRevoked {
                 // 4) 软恢复:别人可能就在这几百毫秒里抢先用旧 refresh_token 刷成功,
@@ -160,7 +205,7 @@ enum ClaudeTokenRefresher {
                 try? await Task.sleep(
                     nanoseconds: UInt64(ClaudeTokenRefresher.softRecoveryDelay * 1_000_000_000)
                 )
-                if let onDisk = ClaudeTokenRefresher.peekStored(source: source),
+                if let onDisk = ClaudeTokenRefresher.peekStored(storage: storage),
                    let onDiskRefresh = onDisk.refreshToken,
                    onDiskRefresh != refreshToken,
                    let storedExpiresAt = onDisk.expiresAt,
@@ -177,7 +222,11 @@ enum ClaudeTokenRefresher {
                 //    刷新,UI 自然更新到新数据。
                 //    这样用户点刷新永远不会等 10 秒,体感"无感后台自愈"。
                 refresherLog.warning("soft-recovery failed, kicking off background delegated refresh")
-                ClaudeDelegatedRefresh.attemptInBackground(source: source)
+                if storage == .file(path: ClaudeTokenRefresher.credentialsFileURL().path) {
+                    ClaudeDelegatedRefresh.attemptInBackground(source: .file)
+                } else if storage == .keychain(service: ClaudeTokenRefresher.keychainService) {
+                    ClaudeDelegatedRefresh.attemptInBackground(source: .keychain)
+                }
                 throw QuotaError.tokenRevoked
             }
         }
@@ -240,22 +289,31 @@ enum ClaudeTokenRefresher {
 
     nonisolated static func peekStored(source: CredentialSource) -> StoredSnapshot? {
         switch source {
-        case .file: return peekFile()
-        case .keychain: return peekKeychain()
+        case .file: return peekStored(storage: .file(path: credentialsFileURL().path))
+        case .keychain: return peekStored(storage: .keychain(service: keychainService))
         }
     }
 
-    nonisolated private static func peekFile() -> StoredSnapshot? {
-        let url = credentialsFileURL()
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = obj["claudeAiOauth"] as? [String: Any]
-        else { return nil }
-        return parseOAuth(oauth)
+    nonisolated static func peekStored(storage: ClaudeCredentialStorage) -> StoredSnapshot? {
+        switch storage {
+        case .file(let path): return peekFile(path: path)
+        case .keychain(let service): return peekKeychain(service: service)
+        }
     }
 
-    nonisolated private static func peekKeychain() -> StoredSnapshot? {
-        guard let root = try? readKeychainJSON(),
+    nonisolated private static func peekFile(path: String) -> StoredSnapshot? {
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        if let oauth = obj["claudeAiOauth"] as? [String: Any] {
+            return parseOAuth(oauth)
+        }
+        return parseOAuth(obj)
+    }
+
+    nonisolated private static func peekKeychain(service: String) -> StoredSnapshot? {
+        guard let root = try? readKeychainJSON(service: service),
               let oauth = root["claudeAiOauth"] as? [String: Any]
         else { return nil }
         return parseOAuth(oauth)
@@ -278,7 +336,12 @@ enum ClaudeTokenRefresher {
     }
 
     nonisolated static func fileMtimeWithinPoliteWindow() -> Bool {
-        let url = credentialsFileURL()
+        fileMtimeWithinPoliteWindow(storage: .file(path: credentialsFileURL().path))
+    }
+
+    nonisolated static func fileMtimeWithinPoliteWindow(storage: ClaudeCredentialStorage) -> Bool {
+        guard case .file(let path) = storage else { return false }
+        let url = URL(fileURLWithPath: path)
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let mtime = attrs[.modificationDate] as? Date
         else { return false }
@@ -298,14 +361,26 @@ enum ClaudeTokenRefresher {
     ) throws {
         switch source {
         case .file:
-            try writeBackToFile(refreshed: refreshed)
+            try writeBack(storage: .file(path: credentialsFileURL().path), refreshed: refreshed)
         case .keychain:
-            try writeBackToKeychain(refreshed: refreshed)
+            try writeBack(storage: .keychain(service: keychainService), refreshed: refreshed)
         }
     }
 
-    nonisolated private static func writeBackToFile(refreshed: Refreshed) throws {
-        let url = credentialsFileURL()
+    nonisolated private static func writeBack(
+        storage: ClaudeCredentialStorage,
+        refreshed: Refreshed
+    ) throws {
+        switch storage {
+        case .file(let path):
+            try writeBackToFile(path: path, refreshed: refreshed)
+        case .keychain(let service):
+            try writeBackToKeychain(service: service, refreshed: refreshed)
+        }
+    }
+
+    nonisolated private static func writeBackToFile(path: String, refreshed: Refreshed) throws {
+        let url = URL(fileURLWithPath: path)
         var root: [String: Any] = [:]
         if let data = try? Data(contentsOf: url),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -324,9 +399,9 @@ enum ClaudeTokenRefresher {
         try out.write(to: url, options: [.atomic])
     }
 
-    nonisolated private static func writeBackToKeychain(refreshed: Refreshed) throws {
+    nonisolated private static func writeBackToKeychain(service: String, refreshed: Refreshed) throws {
         // 读出原 JSON,更新 token 字段后整体回写,保留其他字段(subscriptionType 等)。
-        let existing = try readKeychainJSON()
+        let existing = try readKeychainJSON(service: service)
         var root = existing
         var oauth = root["claudeAiOauth"] as? [String: Any] ?? [:]
         oauth["accessToken"] = refreshed.accessToken
@@ -342,7 +417,7 @@ enum ClaudeTokenRefresher {
         proc.arguments = [
             "add-generic-password",
             "-U",
-            "-s", keychainService,
+            "-s", service,
             "-a", NSUserName(),
             "-w", str,
         ]
@@ -358,9 +433,13 @@ enum ClaudeTokenRefresher {
     }
 
     nonisolated private static func readKeychainJSON() throws -> [String: Any] {
+        try readKeychainJSON(service: keychainService)
+    }
+
+    nonisolated private static func readKeychainJSON(service: String) throws -> [String: Any] {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        proc.arguments = ["find-generic-password", "-s", keychainService, "-w"]
+        proc.arguments = ["find-generic-password", "-s", service, "-w"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         try proc.run()

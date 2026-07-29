@@ -14,6 +14,8 @@ struct FloatingContentView: View {
     var body: some View {
         let showCodex = settings.effectiveFloatingShowCodex
         let showClaude = settings.effectiveFloatingShowClaude
+        let claudeQuota = appState.claudeMonitorQuota()
+        let quotaWindow = settings.menuBarWindow
 
         VStack(alignment: .leading, spacing: 7) {
             if showCodex {
@@ -21,7 +23,8 @@ struct FloatingContentView: View {
                     logoName: "codex",
                     fallback: "C",
                     tint: .codexAccent,
-                    window: appState.codexQuota?.fiveHour
+                    label: floatingWindowLabel(for: quotaWindow),
+                    window: floatingWindow(appState.codexQuota, choice: quotaWindow)
                 )
             }
             if showClaude {
@@ -29,7 +32,8 @@ struct FloatingContentView: View {
                     logoName: "claude",
                     fallback: "K",
                     tint: .claudeAccent,
-                    window: appState.claudeQuota?.fiveHour
+                    label: floatingWindowLabel(for: quotaWindow),
+                    window: floatingWindow(claudeQuota, choice: quotaWindow)
                 )
             }
             if !showCodex && !showClaude {
@@ -40,7 +44,7 @@ struct FloatingContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(minWidth: 168, alignment: .leading)
+        .frame(minWidth: 190, alignment: .leading)
         .background {
             // 三层叠加,解决 `.hudWindow` 在彩色桌面下前景被吃掉的问题:
             // 1) 实色窗背景压一层,使桌面像素不再直接透上来
@@ -60,12 +64,31 @@ struct FloatingContentView: View {
         // SwiftUI 这层 shadow 会被 panel 边界裁掉而且和系统阴影叠加,所以移除。
         .fixedSize()
     }
+
+    private func floatingWindow(_ snapshot: QuotaSnapshot?, choice: MenuBarWindowChoice) -> QuotaWindow? {
+        switch choice {
+        case .fiveHour, .both:
+            return snapshot?.fiveHour
+        case .weekly:
+            return snapshot?.weekly
+        }
+    }
+
+    private func floatingWindowLabel(for choice: MenuBarWindowChoice) -> String {
+        switch choice {
+        case .fiveHour, .both:
+            return "5H"
+        case .weekly:
+            return "WK"
+        }
+    }
 }
 
 private struct FloatingRow: View {
     let logoName: String
     let fallback: String
     let tint: Color
+    let label: String
     let window: QuotaWindow?
 
     var body: some View {
@@ -81,6 +104,12 @@ private struct FloatingRow: View {
 
             ProgressBar(value: barValue, tint: barColor, height: 4)
                 .frame(minWidth: 56)
+
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(.quaternary)
+                .frame(width: 16, alignment: .trailing)
 
             Text(percentText)
                 .font(.system(size: 13, weight: .semibold))

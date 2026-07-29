@@ -136,6 +136,8 @@ private struct DetectAccountsStep: View {
     let onContinue: () -> Void
 
     var body: some View {
+        @Bindable var settings = SettingsStore.shared
+
         VStack(alignment: .leading, spacing: 0) {
             Text(tr("We found these accounts", "检测到以下账号,请勾选要显示的服务"))
                 .font(.system(size: 18, weight: .bold))
@@ -145,24 +147,32 @@ private struct DetectAccountsStep: View {
                 DetectedAccountRow(
                     title: "Codex",
                     subtitle: "OpenAI",
-                    plan: appState.codexAccount?.planType,
-                    email: appState.codexAccount?.email,
+                    plan: appState.codexAccount?.planType
+                        ?? appState.ccpmCodexProfilesForMonitoring.first?.planType,
+                    email: appState.codexAccount?.email
+                        ?? appState.ccpmCodexProfilesForMonitoring.first?.email,
                     source: codexSource,
                     tint: .codexAccent,
                     logoName: "codex",
                     fallback: "C",
                     isDetected: appState.codexAccount != nil
+                        || !appState.importedCodexAccounts.isEmpty
+                        || appState.hasCCPMCodexProfiles,
+                    isOn: Binding(get: { settings.showCodex }, set: { settings.showCodex = $0 })
                 )
                 DetectedAccountRow(
                     title: "Claude Code",
                     subtitle: "Anthropic",
-                    plan: appState.claudeAccount?.subscriptionType,
-                    email: appState.claudeAccount?.email,
+                    plan: appState.claudeAccount?.subscriptionType
+                        ?? appState.ccpmClaudeProfilesForMonitoring.first?.organizationType,
+                    email: appState.claudeAccount?.email
+                        ?? appState.ccpmClaudeProfilesForMonitoring.first?.email,
                     source: claudeSource,
                     tint: .claudeAccent,
                     logoName: "claude",
                     fallback: "K",
-                    isDetected: appState.claudeAccount != nil
+                    isDetected: appState.claudeAccount != nil || appState.hasCCPMClaudeProfiles,
+                    isOn: Binding(get: { settings.showClaude }, set: { settings.showClaude = $0 })
                 )
             }
             .padding(.top, 18)
@@ -183,14 +193,18 @@ private struct DetectAccountsStep: View {
     }
 
     private var codexSource: String {
-        "~/.codex/auth.json"
+        if appState.codexAccount != nil { return "~/.codex/auth.json" }
+        if appState.hasCCPMCodexProfiles { return "~/.ccpm/config.json" }
+        if !appState.importedCodexAccounts.isEmpty { return "CCBar Keychain" }
+        return "—"
     }
 
     private var claudeSource: String {
         switch appState.claudeAccount?.source {
         case .file: return "~/.claude/.credentials.json"
         case .keychain: return "Keychain · claude-code"
-        case .none: return "—"
+        case .none:
+            return appState.hasCCPMClaudeProfiles ? "~/.ccpm/config.json" : "—"
         }
     }
 }
@@ -205,34 +219,43 @@ private struct DetectedAccountRow: View {
     let logoName: String
     let fallback: String
     let isDetected: Bool
+    @Binding var isOn: Bool
 
     var body: some View {
-        HStack(spacing: 13) {
-            CheckmarkBox(checked: isDetected)
-            ServiceTile(logoName: logoName, fallback: fallback, tint: tint, size: 34, logoSize: 16, cornerRadius: 8)
+        Button {
+            guard isDetected else { return }
+            isOn.toggle()
+        } label: {
+            HStack(spacing: 13) {
+                CheckmarkBox(checked: isDetected && isOn)
+                ServiceTile(logoName: logoName, fallback: fallback, tint: tint, size: 34, logoSize: 16, cornerRadius: 8)
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("· \(subtitleText)")
-                        .font(.system(size: 11))
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("· \(subtitleText)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(email ?? tr("Not detected", "未识别"))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                    Text(source)
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
-                Text(email ?? tr("Not detected", "未识别"))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                Text(source)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
 
-            Spacer()
+                Spacer()
+            }
         }
+        .buttonStyle(.plain)
+        .disabled(!isDetected)
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .ccPanel(cornerRadius: 12)
-        .opacity(isDetected ? 1 : 0.6)
+        .opacity(isDetected ? (isOn ? 1 : 0.72) : 0.6)
+        .pointingHandCursor()
     }
 
     private var subtitleText: String {
@@ -274,8 +297,8 @@ private struct ReadOnlyInfoCard: View {
                 Text(tr("Read-only access", "仅读取"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "cc-bar reads quota status locally. It never sends your credentials anywhere.",
-                    "cc-bar 仅本地读取额度,不会向任何地方发送你的凭据。"
+                    "cc-bar reads local credentials and only calls official OpenAI / Anthropic APIs. It never sends credentials to third-party servers.",
+                    "cc-bar 读取本机凭据,只请求 OpenAI / Anthropic 官方 API,不会把凭据发送到第三方服务器。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)

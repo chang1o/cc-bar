@@ -138,6 +138,18 @@ enum StatsServiceFilter: Hashable, CaseIterable {
 enum StatsViewMode: Hashable {
     case overview
     case timeline
+    case breakdown
+}
+
+enum BreakdownSort: Hashable {
+    case day
+    case service
+    case model
+    case input
+    case output
+    case cache
+    case total
+    case cost
 }
 
 // MARK: - StatsView
@@ -147,6 +159,8 @@ struct StatsView: View {
     @State private var range: StatsRange = .today
     @State private var serviceFilter: StatsServiceFilter = .all
     @State private var viewMode: StatsViewMode = .overview
+    @State private var breakdownSort: BreakdownSort = .day
+    @State private var breakdownDescending: Bool = true
     @State private var customFrom: Date = Calendar.current.startOfDay(
         for: Date().addingTimeInterval(-7 * 86400)
     )
@@ -172,6 +186,8 @@ struct StatsView: View {
             overviewContent
         case .timeline:
             timelineContent
+        case .breakdown:
+            breakdownContent
         }
     }
 
@@ -192,6 +208,15 @@ struct StatsView: View {
             }
 
             byModelPanel
+        }
+        .padding(20)
+    }
+
+    private var breakdownContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            topBar
+            if range == .custom { customRangeRow }
+            breakdownPanel
         }
         .padding(20)
     }
@@ -221,8 +246,10 @@ struct StatsView: View {
                         english: item.englishLabel,
                         chinese: item.chineseLabel,
                         tint: item.tint,
-                        active: serviceFilter == item
+                        active: serviceFilter == item,
+                        enabled: isServiceFilterAvailable(item)
                     ) {
+                        guard isServiceFilterAvailable(item) else { return }
                         serviceFilter = item
                     }
                 }
@@ -245,9 +272,14 @@ struct StatsView: View {
                 ) {
                     viewMode = .timeline
                 }
-                sidebarItem(english: "Breakdown", chinese: "明细", icon: "list.bullet", active: false) {}
-                    .disabled(true)
-                    .opacity(0.5)
+                sidebarItem(
+                    english: "Breakdown",
+                    chinese: "明细",
+                    icon: "list.bullet",
+                    active: viewMode == .breakdown
+                ) {
+                    viewMode = .breakdown
+                }
             }
 
             Spacer()
@@ -256,6 +288,15 @@ struct StatsView: View {
         .padding(.vertical, 14)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
+        .onAppear {
+            normalizeServiceFilter()
+        }
+        .onChange(of: SettingsStore.shared.showCodex) { _, _ in
+            normalizeServiceFilter()
+        }
+        .onChange(of: SettingsStore.shared.showClaude) { _, _ in
+            normalizeServiceFilter()
+        }
     }
 
     @ViewBuilder
@@ -281,6 +322,7 @@ struct StatsView: View {
         tint: Color? = nil,
         icon: String? = nil,
         active: Bool,
+        enabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -312,6 +354,8 @@ struct StatsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
         .pointingHandCursor()
     }
 
@@ -362,22 +406,26 @@ struct StatsView: View {
                                     previous: previousTotalsAll.costUSD.doubleValue),
                 tint: nil
             )
-            KPICard(
-                english: "Codex",
-                chinese: "OpenAI",
-                value: StatsFormatter.cost(currentTotals(.codex).costUSD),
-                delta: deltaPercent(current: currentTotals(.codex).costUSD.doubleValue,
-                                    previous: previousTotals(.codex).costUSD.doubleValue),
-                tint: .codexAccent
-            )
-            KPICard(
-                english: "Claude Code",
-                chinese: "Anthropic",
-                value: StatsFormatter.cost(currentTotals(.claude).costUSD),
-                delta: deltaPercent(current: currentTotals(.claude).costUSD.doubleValue,
-                                    previous: previousTotals(.claude).costUSD.doubleValue),
-                tint: .claudeAccent
-            )
+            if includesCodex {
+                KPICard(
+                    english: "Codex",
+                    chinese: "OpenAI",
+                    value: StatsFormatter.cost(currentTotals(.codex).costUSD),
+                    delta: deltaPercent(current: currentTotals(.codex).costUSD.doubleValue,
+                                        previous: previousTotals(.codex).costUSD.doubleValue),
+                    tint: .codexAccent
+                )
+            }
+            if includesClaude {
+                KPICard(
+                    english: "Claude Code",
+                    chinese: "Anthropic",
+                    value: StatsFormatter.cost(currentTotals(.claude).costUSD),
+                    delta: deltaPercent(current: currentTotals(.claude).costUSD.doubleValue,
+                                        previous: previousTotals(.claude).costUSD.doubleValue),
+                    tint: .claudeAccent
+                )
+            }
         }
     }
 
@@ -386,8 +434,12 @@ struct StatsView: View {
     private var dailyUsagePanel: some View {
         Panel(title: "Daily usage", chinese: "每日用量", right: AnyView(
             HStack(spacing: 8) {
-                LegendChip(color: .codexAccent, label: "Codex")
-                LegendChip(color: .claudeAccent, label: "Claude")
+                if includesCodex {
+                    LegendChip(color: .codexAccent, label: "Codex")
+                }
+                if includesClaude {
+                    LegendChip(color: .claudeAccent, label: "Claude")
+                }
             }
         )) {
             VStack(spacing: 6) {
@@ -395,21 +447,25 @@ struct StatsView: View {
                     placeholderHeight(160, message: tr("No data", "无数据"))
                 } else {
                     Chart(dailySamples) { sample in
-                        BarMark(
-                            x: .value("Day", sample.day, unit: .day),
-                            y: .value("Cost", sample.codexCost.doubleValue),
-                            stacking: .standard
-                        )
-                        .foregroundStyle(Color.codexAccent)
-                        .cornerRadius(2)
+                        if includesCodex {
+                            BarMark(
+                                x: .value("Day", sample.day, unit: .day),
+                                y: .value("Cost", sample.codexCost.doubleValue),
+                                stacking: .standard
+                            )
+                            .foregroundStyle(Color.codexAccent)
+                            .cornerRadius(2)
+                        }
 
-                        BarMark(
-                            x: .value("Day", sample.day, unit: .day),
-                            y: .value("Cost", sample.claudeCost.doubleValue),
-                            stacking: .standard
-                        )
-                        .foregroundStyle(Color.claudeAccent)
-                        .cornerRadius(2)
+                        if includesClaude {
+                            BarMark(
+                                x: .value("Day", sample.day, unit: .day),
+                                y: .value("Cost", sample.claudeCost.doubleValue),
+                                stacking: .standard
+                            )
+                            .foregroundStyle(Color.claudeAccent)
+                            .cornerRadius(2)
+                        }
                     }
                     .chartXAxis {
                         AxisMarks(values: .stride(by: .day, count: max(1, dailySamples.count / 5))) { value in
@@ -431,22 +487,29 @@ struct StatsView: View {
     private var byServicePanel: some View {
         Panel(title: "By service", chinese: "按服务") {
             VStack(alignment: .leading, spacing: 4) {
-                ByServiceRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    tint: .codexAccent,
-                    value: currentTotals(.codex).costUSD,
-                    totalValue: currentTotalsAll.costUSD,
-                    tokens: currentTotals(.codex).totalTokens
-                )
-                ByServiceRow(
-                    title: "Claude Code",
-                    subtitle: "Anthropic",
-                    tint: .claudeAccent,
-                    value: currentTotals(.claude).costUSD,
-                    totalValue: currentTotalsAll.costUSD,
-                    tokens: currentTotals(.claude).totalTokens
-                )
+                if includesCodex {
+                    ByServiceRow(
+                        title: "Codex",
+                        subtitle: "OpenAI",
+                        tint: .codexAccent,
+                        value: currentTotals(.codex).costUSD,
+                        totalValue: currentTotalsAll.costUSD,
+                        tokens: currentTotals(.codex).totalTokens
+                    )
+                }
+                if includesClaude {
+                    ByServiceRow(
+                        title: "Claude Code",
+                        subtitle: "Anthropic",
+                        tint: .claudeAccent,
+                        value: currentTotals(.claude).costUSD,
+                        totalValue: currentTotalsAll.costUSD,
+                        tokens: currentTotals(.claude).totalTokens
+                    )
+                }
+                if !includesCodex && !includesClaude {
+                    placeholderHeight(96, message: tr("No services enabled", "暂无启用服务"))
+                }
             }
         }
     }
@@ -454,12 +517,20 @@ struct StatsView: View {
     // MARK: Current limits panel
 
     private var currentLimitsPanel: some View {
-        Panel(title: "Current limits", chinese: "当前限额") {
+        let claudeQuota = appState.claudeMonitorQuota()
+        return Panel(title: "Current limits", chinese: "当前限额") {
             VStack(spacing: 4) {
-                LimitRingRow(label: "Codex 5H", window: appState.codexQuota?.fiveHour, tint: .codexAccent)
-                LimitRingRow(label: "Codex WK", window: appState.codexQuota?.weekly, tint: .codexAccent)
-                LimitRingRow(label: "Claude 5H", window: appState.claudeQuota?.fiveHour, tint: .claudeAccent)
-                LimitRingRow(label: "Claude WK", window: appState.claudeQuota?.weekly, tint: .claudeAccent)
+                if includesCodex {
+                    LimitRingRow(label: "Codex 5H", window: appState.codexQuota?.fiveHour, tint: .codexAccent)
+                    LimitRingRow(label: "Codex WK", window: appState.codexQuota?.weekly, tint: .codexAccent)
+                }
+                if includesClaude {
+                    LimitRingRow(label: "Claude 5H", window: claudeQuota?.fiveHour, tint: .claudeAccent)
+                    LimitRingRow(label: "Claude WK", window: claudeQuota?.weekly, tint: .claudeAccent)
+                }
+                if !includesCodex && !includesClaude {
+                    placeholderHeight(96, message: tr("No services enabled", "暂无启用服务"))
+                }
             }
         }
     }
@@ -469,16 +540,131 @@ struct StatsView: View {
     private var byModelPanel: some View {
         Panel(title: "By model", chinese: "按模型") {
             VStack(alignment: .leading, spacing: 10) {
-                if serviceFilter != .claude {
+                if includesCodex {
                     modelGroup(title: "Codex", tint: .codexAccent, rows: modelRows(for: .codex))
                 }
-                if serviceFilter != .codex && serviceFilter != .claude {
+                if includesCodex && includesClaude {
                     Divider()
                 }
-                if serviceFilter != .codex {
+                if includesClaude {
                     modelGroup(title: "Claude", tint: .claudeAccent, rows: modelRows(for: .claude))
                 }
+                if !includesCodex && !includesClaude {
+                    placeholderHeight(96, message: tr("No services enabled", "暂无启用服务"))
+                }
             }
+        }
+    }
+
+    // MARK: Breakdown
+
+    private var breakdownPanel: some View {
+        Panel(title: "Breakdown", chinese: "明细") {
+            if breakdownRows.isEmpty {
+                placeholderHeight(240, message: tr("No data", "无数据"))
+            } else {
+                ScrollView(.horizontal) {
+                    VStack(spacing: 0) {
+                        breakdownHeader
+                        ForEach(breakdownRows) { row in
+                            Divider()
+                            breakdownRow(row)
+                        }
+                    }
+                    .frame(minWidth: 948, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 0.5)
+                    )
+                }
+            }
+        }
+    }
+
+    private var breakdownHeader: some View {
+        HStack(spacing: 0) {
+            breakdownHeaderCell("Day", "日期", sort: .day, width: 96, alignment: .leading)
+            breakdownHeaderCell("Service", "服务", sort: .service, width: 110, alignment: .leading)
+            breakdownHeaderCell("Model", "模型", sort: .model, width: 230, alignment: .leading)
+            breakdownHeaderCell("Input", "输入", sort: .input, width: 104, alignment: .trailing)
+            breakdownHeaderCell("Output", "输出", sort: .output, width: 104, alignment: .trailing)
+            breakdownHeaderCell("Cache", "缓存", sort: .cache, width: 104, alignment: .trailing)
+            breakdownHeaderCell("Total", "总计", sort: .total, width: 104, alignment: .trailing)
+            breakdownHeaderCell("Cost", "花费", sort: .cost, width: 96, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.secondary.opacity(0.06))
+    }
+
+    private func breakdownHeaderCell(
+        _ english: String,
+        _ chinese: String,
+        sort: BreakdownSort,
+        width: CGFloat,
+        alignment: Alignment
+    ) -> some View {
+        Button {
+            setBreakdownSort(sort)
+        } label: {
+            HStack(spacing: 4) {
+                Text(tr(english, chinese))
+                if breakdownSort == sort {
+                    Image(systemName: breakdownDescending ? "chevron.down" : "chevron.up")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+            }
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(.tertiary)
+            .frame(width: width, alignment: alignment)
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
+    private func breakdownRow(_ row: BreakdownRow) -> some View {
+        HStack(spacing: 0) {
+            breakdownText(StatsFormatter.day(row.day), width: 96, alignment: .leading)
+            HStack(spacing: 6) {
+                ServiceMark(color: serviceTint(row.app), size: 7, cornerRadius: 1.8)
+                Text(serviceLabel(row.app))
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 110, alignment: .leading)
+
+            Text(row.model)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: 230, alignment: .leading)
+
+            breakdownText(StatsFormatter.compactToken(row.totals.inputTokens), width: 104, alignment: .trailing)
+            breakdownText(StatsFormatter.compactToken(row.totals.outputTokens), width: 104, alignment: .trailing)
+            breakdownText(StatsFormatter.compactToken(row.cacheTokens), width: 104, alignment: .trailing)
+            breakdownText(StatsFormatter.compactToken(row.totals.totalTokens), width: 104, alignment: .trailing)
+            breakdownText(StatsFormatter.cost(row.totals.costUSD), width: 96, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+    }
+
+    private func breakdownText(_ text: String, width: CGFloat, alignment: Alignment) -> some View {
+        Text(text)
+            .font(.system(size: 11.5, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(width: width, alignment: alignment)
+    }
+
+    private func setBreakdownSort(_ sort: BreakdownSort) {
+        if breakdownSort == sort {
+            breakdownDescending.toggle()
+        } else {
+            breakdownSort = sort
+            breakdownDescending = true
         }
     }
 
@@ -503,7 +689,7 @@ struct StatsView: View {
     private var timelineSections: [QuotaTimelineSection] {
         var sections: [QuotaTimelineSection] = []
 
-        if serviceFilter != .claude {
+        if includesCodex {
             let key = QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
             if shouldShowTimelineSection(key: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
                 sections.append(timelineSection(
@@ -523,16 +709,36 @@ struct StatsView: View {
                     snapshot: appState.importedCodexQuota(for: account)
                 ))
             }
+
+            for (idx, profile) in appState.ccpmCodexProfilesForMonitoring.enumerated() {
+                let key = QuotaHistoryAccountKey.codexCCPMProfile(id: profile.id)
+                sections.append(timelineSection(
+                    key: key,
+                    title: ccpmCodexTimelineTitle(profile, index: idx),
+                    tint: .codexAccent,
+                    snapshot: appState.ccpmCodexQuota(for: profile)
+                ))
+            }
         }
 
-        if serviceFilter != .codex {
+        if includesClaude {
             let key = QuotaHistoryAccountKey.claudePrimary()
             if shouldShowTimelineSection(key: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
                 sections.append(timelineSection(
                     key: key,
-                    title: "Claude Code",
+                    title: tr("Claude Code · Default", "Claude Code · 默认"),
                     tint: .claudeAccent,
                     snapshot: appState.claudeQuota
+                ))
+            }
+
+            for (idx, profile) in appState.ccpmClaudeProfilesForMonitoring.enumerated() {
+                let key = QuotaHistoryAccountKey.claudeCCPMProfile(id: profile.id)
+                sections.append(timelineSection(
+                    key: key,
+                    title: ccpmClaudeTimelineTitle(profile, index: idx),
+                    tint: .claudeAccent,
+                    snapshot: appState.ccpmClaudeQuota(for: profile)
                 ))
             }
         }
@@ -585,6 +791,30 @@ struct StatsView: View {
         return "Codex · \(account.id)"
     }
 
+    private func ccpmCodexTimelineTitle(_ profile: CCPMCodexProfile, index: Int) -> String {
+        if SettingsStore.shared.privacyMode {
+            let offset = appState.importedCodexAccounts.count
+            return tr("Codex · Account \(offset + index + 1)", "Codex · 账号 \(offset + index + 1)")
+        }
+        if let email = profile.email, !email.isEmpty {
+            return "Codex · \(email.components(separatedBy: "@").first ?? email)"
+        }
+        return "Codex · \(profile.name)"
+    }
+
+    private func ccpmClaudeTimelineTitle(_ profile: CCPMClaudeProfile, index: Int) -> String {
+        if SettingsStore.shared.privacyMode {
+            return tr("Claude · Profile \(index + 1)", "Claude · 账号 \(index + 1)")
+        }
+        if let displayName = profile.displayName, !displayName.isEmpty {
+            return "Claude · \(displayName)"
+        }
+        if let email = profile.email, !email.isEmpty {
+            return "Claude · \(email.components(separatedBy: "@").first ?? email)"
+        }
+        return "Claude · \(profile.name)"
+    }
+
     private func modelGroup(title: String, tint: Color, rows: [ModelRow]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -634,18 +864,62 @@ struct StatsView: View {
         range.previousBounds(customFrom: customFrom, customTo: customTo)
     }
 
+    private var includesCodex: Bool {
+        SettingsStore.shared.showCodex && serviceFilter != .claude
+    }
+
+    private var includesClaude: Bool {
+        SettingsStore.shared.showClaude && serviceFilter != .codex
+    }
+
+    private func includesApp(_ app: UsageApp) -> Bool {
+        switch app {
+        case .codex:
+            return includesCodex
+        case .claude:
+            return includesClaude
+        }
+    }
+
+    private func serviceLabel(_ app: UsageApp) -> String {
+        switch app {
+        case .codex:
+            return "Codex"
+        case .claude:
+            return "Claude"
+        }
+    }
+
+    private func serviceTint(_ app: UsageApp) -> Color {
+        switch app {
+        case .codex:
+            return .codexAccent
+        case .claude:
+            return .claudeAccent
+        }
+    }
+
+    private func isServiceFilterAvailable(_ filter: StatsServiceFilter) -> Bool {
+        switch filter {
+        case .all:
+            return true
+        case .codex:
+            return SettingsStore.shared.showCodex
+        case .claude:
+            return SettingsStore.shared.showClaude
+        }
+    }
+
+    private func normalizeServiceFilter() {
+        guard !isServiceFilterAvailable(serviceFilter) else { return }
+        serviceFilter = .all
+    }
+
     private var filteredBuckets: [UsageBucket] {
         let (from, to) = rangeBounds
-        let buckets = appState.usageService.aggregator.snapshot()
+        return appState.usageService.aggregator.snapshot()
             .filter { $0.day >= from && $0.day < to }
-        switch serviceFilter {
-        case .all:
-            return buckets
-        case .codex:
-            return buckets.filter { $0.app == .codex }
-        case .claude:
-            return buckets.filter { $0.app == .claude }
-        }
+            .filter { includesApp($0.app) }
     }
 
     private var currentTotalsAll: UsageTotals {
@@ -655,6 +929,7 @@ struct StatsView: View {
     }
 
     private func currentTotals(_ app: UsageApp) -> UsageTotals {
+        guard includesApp(app) else { return .zero }
         var t = UsageTotals.zero
         for b in filteredBuckets where b.app == app { t.add(b) }
         return t
@@ -665,15 +940,14 @@ struct StatsView: View {
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.day >= bounds.from && $0.day < bounds.to }
         var t = UsageTotals.zero
-        for b in buckets {
-            if serviceFilter == .codex && b.app != .codex { continue }
-            if serviceFilter == .claude && b.app != .claude { continue }
+        for b in buckets where includesApp(b.app) {
             t.add(b)
         }
         return t
     }
 
     private func previousTotals(_ app: UsageApp) -> UsageTotals {
+        guard includesApp(app) else { return .zero }
         guard let bounds = previousRangeBounds else { return .zero }
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.app == app && $0.day >= bounds.from && $0.day < bounds.to }
@@ -713,6 +987,62 @@ struct StatsView: View {
         return byModel
             .map { ModelRow(model: $0.key, totals: $0.value) }
             .sorted { $0.totals.costUSD > $1.totals.costUSD }
+    }
+
+    private var breakdownRows: [BreakdownRow] {
+        filteredBuckets
+            .map { bucket in
+                var totals = UsageTotals.zero
+                totals.add(bucket)
+                return BreakdownRow(
+                    day: bucket.day,
+                    app: bucket.app,
+                    model: bucket.model,
+                    totals: totals
+                )
+            }
+            .sorted { lhs, rhs in
+                let order = breakdownOrder(lhs, rhs)
+                guard order != .orderedSame else {
+                    return breakdownTieBreak(lhs, rhs)
+                }
+                return breakdownDescending
+                    ? order == .orderedDescending
+                    : order == .orderedAscending
+            }
+    }
+
+    private func breakdownOrder(_ lhs: BreakdownRow, _ rhs: BreakdownRow) -> ComparisonResult {
+        switch breakdownSort {
+        case .day:
+            return compare(lhs.day, rhs.day)
+        case .service:
+            return lhs.app.rawValue.localizedStandardCompare(rhs.app.rawValue)
+        case .model:
+            return lhs.model.localizedStandardCompare(rhs.model)
+        case .input:
+            return compare(lhs.totals.inputTokens, rhs.totals.inputTokens)
+        case .output:
+            return compare(lhs.totals.outputTokens, rhs.totals.outputTokens)
+        case .cache:
+            return compare(lhs.cacheTokens, rhs.cacheTokens)
+        case .total:
+            return compare(lhs.totals.totalTokens, rhs.totals.totalTokens)
+        case .cost:
+            return compare(lhs.totals.costUSD.doubleValue, rhs.totals.costUSD.doubleValue)
+        }
+    }
+
+    private func breakdownTieBreak(_ lhs: BreakdownRow, _ rhs: BreakdownRow) -> Bool {
+        if lhs.day != rhs.day { return lhs.day > rhs.day }
+        if lhs.app != rhs.app { return lhs.app.rawValue < rhs.app.rawValue }
+        return lhs.model.localizedStandardCompare(rhs.model) == .orderedAscending
+    }
+
+    private func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> ComparisonResult {
+        if lhs < rhs { return .orderedAscending }
+        if lhs > rhs { return .orderedDescending }
+        return .orderedSame
     }
 
     private func placeholderHeight(_ height: CGFloat, message: String) -> some View {
@@ -1095,6 +1425,21 @@ private struct ModelRow: Identifiable {
     var id: String { model }
     let model: String
     let totals: UsageTotals
+}
+
+private struct BreakdownRow: Identifiable {
+    var id: String {
+        "\(day.timeIntervalSince1970)-\(app.rawValue)-\(model)"
+    }
+
+    let day: Date
+    let app: UsageApp
+    let model: String
+    let totals: UsageTotals
+
+    var cacheTokens: Int {
+        totals.cacheReadTokens + totals.cacheCreationTokens
+    }
 }
 
 private struct QuotaTimelineSection: Identifiable {

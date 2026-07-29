@@ -13,6 +13,8 @@ struct QuotaCachePayload: Sendable, Equatable, Codable {
     /// 用户导入的 Codex 账号配额缓存,key = ImportedCodexAccount.id (= chatgpt_account_id)。
     /// 字段缺失时解码为 nil,旧缓存文件兼容。
     var importedCodex: [String: QuotaCacheRecord]?
+    var ccpmCodex: [String: QuotaCacheRecord]?
+    var ccpmClaude: [String: QuotaCacheRecord]?
 }
 
 enum QuotaCache {

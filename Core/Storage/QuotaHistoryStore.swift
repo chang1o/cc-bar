@@ -3,7 +3,9 @@ import Foundation
 enum QuotaHistoryAccountKind: String, Sendable, Codable {
     case codexPrimary
     case codexImported
+    case codexCCPMProfile
     case claudePrimary
+    case claudeCCPMProfile
 }
 
 struct QuotaHistorySample: Sendable, Equatable, Codable {
@@ -48,8 +50,16 @@ enum QuotaHistoryAccountKey {
         "codex:imported:\(id)"
     }
 
+    nonisolated static func codexCCPMProfile(id: String) -> String {
+        "codex:ccpm:\(id)"
+    }
+
     nonisolated static func claudePrimary() -> String {
         "claude:primary"
+    }
+
+    nonisolated static func claudeCCPMProfile(id: String) -> String {
+        "claude:ccpm:\(id)"
     }
 
     nonisolated private static func nonEmpty(_ value: String?) -> String? {

@@ -5,9 +5,10 @@ struct MenuBarLabel: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
+        let claudeQuota = appState.claudeMonitorQuota()
         Image(nsImage: MenuBarBadgeImage.make(
             codex: appState.codexQuota,
-            claude: appState.claudeQuota,
+            claude: claudeQuota,
             showCodex: SettingsStore.shared.effectiveMenuBarShowCodex,
             showClaude: SettingsStore.shared.effectiveMenuBarShowClaude,
             window: SettingsStore.shared.menuBarWindow
@@ -15,7 +16,7 @@ struct MenuBarLabel: View {
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(MenuBarBadgeImage.accessibilityLabel(
             codex: appState.codexQuota,
-            claude: appState.claudeQuota,
+            claude: claudeQuota,
             showCodex: SettingsStore.shared.effectiveMenuBarShowCodex,
             showClaude: SettingsStore.shared.effectiveMenuBarShowClaude,
             window: SettingsStore.shared.menuBarWindow

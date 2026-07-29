@@ -51,8 +51,11 @@
 		49C1B181000000000001AABB /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B181000000000001AAAA /* OnboardingView.swift */; };
 		49C1B191000000000001AABB /* ImportedCodexAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B191000000000001AAAA /* ImportedCodexAccount.swift */; };
 		49C1B192000000000001AABB /* ImportedCodexStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B192000000000001AAAA /* ImportedCodexStore.swift */; };
-		49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */; };
+		49C1B193000000000001AABB /* CodexAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B193000000000001AAAA /* CodexAccountsSection.swift */; };
 		49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */; };
+		49C1B195000000000001AABB /* CCPMProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CCPMProfiles.swift */; };
+		49C1B196000000000001AABB /* ClaudeAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B196000000000001AAAA /* ClaudeAccountsSection.swift */; };
+		49C1B197000000000001AABB /* CCPMProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B197000000000001AAAA /* CCPMProfilesView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -104,8 +107,11 @@
 		49C1B181000000000001AAAA /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		49C1B191000000000001AAAA /* ImportedCodexAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexAccount.swift; sourceTree = "<group>"; };
 		49C1B192000000000001AAAA /* ImportedCodexStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexStore.swift; sourceTree = "<group>"; };
-		49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OtherCodexAccountsSection.swift; sourceTree = "<group>"; };
+		49C1B193000000000001AAAA /* CodexAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAccountsSection.swift; sourceTree = "<group>"; };
 		49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexAccountsView.swift; sourceTree = "<group>"; };
+		49C1B195000000000001AAAA /* CCPMProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfiles.swift; sourceTree = "<group>"; };
+		49C1B196000000000001AAAA /* ClaudeAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeAccountsSection.swift; sourceTree = "<group>"; };
+		49C1B197000000000001AAAA /* CCPMProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfilesView.swift; sourceTree = "<group>"; };
 		49C1B200000000000001AAAA /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -168,7 +174,8 @@
 				4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */,
 				49C1B130000000000001AAAA /* MenuBarLabelFormatter.swift */,
 				4931AC502FC02A4200EE598C /* PopoverRootView.swift */,
-				49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */,
+				49C1B193000000000001AAAA /* CodexAccountsSection.swift */,
+				49C1B196000000000001AAAA /* ClaudeAccountsSection.swift */,
 			);
 			path = MenuBar;
 			sourceTree = "<group>";
@@ -187,6 +194,7 @@
 			children = (
 				4931AC542FC02A4200EE598C /* SettingsRootView.swift */,
 				49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */,
+				49C1B197000000000001AAAA /* CCPMProfilesView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -203,6 +211,7 @@
 				49C1B102000000000001AAAA /* JWT.swift */,
 				49C1B103000000000001AAAA /* CodexAuth.swift */,
 				49C1B104000000000001AAAA /* ClaudeAuth.swift */,
+				49C1B195000000000001AAAA /* CCPMProfiles.swift */,
 				49C1B191000000000001AAAA /* ImportedCodexAccount.swift */,
 				49C1B192000000000001AAAA /* ImportedCodexStore.swift */,
 			);
@@ -447,8 +456,11 @@
 				49C1B181000000000001AABB /* OnboardingView.swift in Sources */,
 				49C1B191000000000001AABB /* ImportedCodexAccount.swift in Sources */,
 				49C1B192000000000001AABB /* ImportedCodexStore.swift in Sources */,
-				49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */,
+				49C1B193000000000001AABB /* CodexAccountsSection.swift in Sources */,
 				49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */,
+				49C1B195000000000001AABB /* CCPMProfiles.swift in Sources */,
+				49C1B196000000000001AABB /* ClaudeAccountsSection.swift in Sources */,
+				49C1B197000000000001AABB /* CCPMProfilesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

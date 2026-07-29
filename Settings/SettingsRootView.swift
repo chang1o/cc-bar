@@ -36,7 +36,7 @@ struct SettingsRootView: View {
                 title: "Accounts",
                 chinese: "账号",
                 desc: "Auto-detected on your Mac. Toggle which services to display.",
-                chineseDesc: "自动检测,自行勾选要显示的"
+                chineseDesc: "自动检测,可勾选要显示的服务"
             ) {
                 AccountRow(
                     title: "Codex",
@@ -46,7 +46,16 @@ struct SettingsRootView: View {
                     fallback: "C",
                     email: appState.codexAccount?.email,
                     plan: appState.codexAccount?.planType,
-                    isOn: Binding(get: { settings.showCodex }, set: { settings.showCodex = $0 })
+                    fallbackDetail: appState.importedCodexAccounts.isEmpty && !appState.hasCCPMCodexProfiles
+                        ? nil
+                        : tr("Additional accounts configured", "已配置其他账号"),
+                    isAvailable: appState.codexAccount != nil
+                        || !appState.importedCodexAccounts.isEmpty
+                        || appState.hasCCPMCodexProfiles,
+                    isOn: Binding(
+                        get: { settings.showCodex },
+                        set: { setServiceEnabled(.codex, enabled: $0) }
+                    )
                 )
                 AccountRow(
                     title: "Claude Code",
@@ -56,8 +65,24 @@ struct SettingsRootView: View {
                     fallback: "K",
                     email: appState.claudeAccount?.email,
                     plan: appState.claudeAccount?.subscriptionType,
-                    isOn: Binding(get: { settings.showClaude }, set: { settings.showClaude = $0 })
+                    fallbackDetail: appState.ccpmClaudeProfiles.isEmpty
+                        ? nil
+                        : tr("ccpm profiles configured", "已配置 ccpm profile"),
+                    isAvailable: appState.claudeAccount != nil || !appState.ccpmClaudeProfiles.isEmpty,
+                    isOn: Binding(
+                        get: { settings.showClaude },
+                        set: { setServiceEnabled(.claude, enabled: $0) }
+                    )
                 )
+            }
+
+            PrefsGroup(
+                title: "Codex Profiles",
+                chinese: "Codex 账号",
+                desc: "Auto-discovered from ccpm. OAuth profiles are monitored from their native auth.json.",
+                chineseDesc: "自动读取 ccpm 配置;OAuth profile 直接使用各自的 auth.json 独立监控"
+            ) {
+                CCPMCodexProfilesView()
             }
 
             // 其他 Codex 账号（手动导入）
@@ -68,6 +93,15 @@ struct SettingsRootView: View {
                 chineseDesc: "粘贴 auth.json 添加更多 Codex 账号额度，仅查看，不会切换 CLI 登录状态"
             ) {
                 ImportedCodexAccountsView()
+            }
+
+            PrefsGroup(
+                title: "Claude Code Profiles",
+                chinese: "Claude Code 账号",
+                desc: "Auto-discovered from ccpm. OAuth profiles are monitored independently.",
+                chineseDesc: "自动读取 ccpm 配置;OAuth profile 会独立监控额度"
+            ) {
+                CCPMClaudeProfilesView()
             }
         }
     }
@@ -99,7 +133,13 @@ struct SettingsRootView: View {
                 desc: "Which window to display in the menu bar.",
                 chineseDesc: "菜单栏显示哪个窗口"
             ) {
-                Picker("", selection: Binding(get: { settings.menuBarWindow }, set: { settings.menuBarWindow = $0 })) {
+                Picker("", selection: Binding(
+                    get: { settings.menuBarWindow },
+                    set: { newValue in
+                        settings.menuBarWindow = newValue
+                        FloatingPanelController.shared.sync()
+                    }
+                )) {
                     Text("5H").tag(MenuBarWindowChoice.fiveHour)
                     Text("WK").tag(MenuBarWindowChoice.weekly)
                     Text(tr("Both", "都显示")).tag(MenuBarWindowChoice.both)
@@ -314,10 +354,30 @@ struct SettingsRootView: View {
 
     // MARK: Helpers
 
+    private func setServiceEnabled(_ service: UsageApp, enabled: Bool) {
+        let settings = SettingsStore.shared
+        switch service {
+        case .codex:
+            settings.showCodex = enabled
+        case .claude:
+            settings.showClaude = enabled
+        }
+        FloatingPanelController.shared.sync()
+
+        guard enabled else { return }
+        Task {
+            await appState.refreshQuotas(reason: .userInitiated)
+            await appState.refreshServiceStatus()
+        }
+    }
+
     private var lastRefreshText: String {
         let latest = [
             appState.codexRefreshState.lastSuccessAt,
-            appState.claudeRefreshState.lastSuccessAt
+            appState.claudeRefreshState.lastSuccessAt,
+            appState.importedCodexRefreshStates.values.compactMap(\.lastSuccessAt).max(),
+            appState.ccpmCodexRefreshStates.values.compactMap(\.lastSuccessAt).max(),
+            appState.ccpmClaudeRefreshStates.values.compactMap(\.lastSuccessAt).max()
         ].compactMap { $0 }.max()
         guard let latest else { return "—" }
         let timeFormatter = DateFormatter()
@@ -408,6 +468,8 @@ private struct AccountRow: View {
     let fallback: String
     let email: String?
     let plan: String?
+    let fallbackDetail: String?
+    let isAvailable: Bool
     @Binding var isOn: Bool
 
     var body: some View {
@@ -436,7 +498,7 @@ private struct AccountRow: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
-                    .disabled(email == nil)
+                    .disabled(!isAvailable)
             }
         }
         .padding(.vertical, 12)
@@ -450,6 +512,9 @@ private struct AccountRow: View {
             }
             return email
         }
+        if let fallbackDetail {
+            return fallbackDetail
+        }
         return tr("Not detected", "未识别")
     }
 
@@ -459,6 +524,13 @@ private struct AccountRow: View {
             HStack(spacing: 4) {
                 Circle().fill(Color.green).frame(width: 6, height: 6)
                 Text(tr("Connected", "已连接"))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.green)
+            }
+        } else if isAvailable {
+            HStack(spacing: 4) {
+                Circle().fill(Color.green).frame(width: 6, height: 6)
+                Text(tr("Available", "可用"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.green)
             }
@@ -476,6 +548,7 @@ private struct AccountRow: View {
 // MARK: - Bilingual display names for existing enums
 
 extension QuotaIntervalChoice {
+    @MainActor
     var bilingualDisplayName: String {
         switch self {
         case .m1: return tr("1 minute", "1 分钟")
@@ -488,6 +561,7 @@ extension QuotaIntervalChoice {
 }
 
 extension UsageIntervalChoice {
+    @MainActor
     var bilingualDisplayName: String {
         switch self {
         case .m1: return tr("1 minute", "1 分钟")

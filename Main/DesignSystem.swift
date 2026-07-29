@@ -7,7 +7,6 @@ import AppKit
 // 浅色 #6C6C70 / #D97757,深色 #98989D / #E68A6E。
 // Xcode 自动从 .xcassets 生成 `Color.codexAccent` / `Color.claudeAccent`,直接使用即可。
 // 见 docs/03-设计风格.md §4.2。
-
 // MARK: - Status color
 
 /// 按剩余百分比解析 4 档状态色:>50% → normal / 20~50% → warning / <20% → low / <=0 → empty。
@@ -399,6 +398,7 @@ enum CCRefreshState {
         }
     }
 
+    @MainActor
     var tooltip: String {
         switch self {
         case .live: return tr("Live", "在线")
@@ -442,6 +442,25 @@ struct PopoverIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .frame(width: 26, height: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hovering && isEnabled ? Color.primary.opacity(0.08) : .clear)
+            )
+            .opacity(configuration.isPressed ? 0.5 : 1)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .pointingHandCursor()
+    }
+}
+
+struct PopoverTextButtonStyle: ButtonStyle {
+    let width: CGFloat
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: width, height: 22)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(hovering && isEnabled ? Color.primary.opacity(0.08) : .clear)

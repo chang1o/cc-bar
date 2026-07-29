@@ -32,6 +32,7 @@ enum ServiceStatusIndicator: String, Sendable, Codable {
     }
 
     /// 默认中英文标签,在 UI 没有 description 时用作 tooltip。
+    @MainActor
     var label: String {
         switch self {
         case .none: return tr("All systems normal", "服务正常")

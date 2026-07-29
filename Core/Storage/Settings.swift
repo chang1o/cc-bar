@@ -84,6 +84,22 @@ enum MenuBarWindowChoice: String, CaseIterable, Identifiable {
         case .both: return "两者都显示"
         }
     }
+
+    var shortLabel: String {
+        switch self {
+        case .fiveHour: return "5H"
+        case .weekly: return "WK"
+        case .both: return "5/W"
+        }
+    }
+
+    var toggledForMenuBar: MenuBarWindowChoice {
+        switch self {
+        case .fiveHour: return .weekly
+        case .weekly: return .fiveHour
+        case .both: return .weekly
+        }
+    }
 }
 
 @Observable

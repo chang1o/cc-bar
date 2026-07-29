@@ -17,6 +17,7 @@ enum CodexTokenRefresher {
     ///   绝不触碰 `~/.codex/auth.json`。
     enum WriteBack: Sendable {
         case codexAuthJSON
+        case codexAuthJSONAt(path: String)
         case importedAccount(id: String)
     }
 
@@ -107,7 +108,19 @@ enum CodexTokenRefresher {
         let newRefresh = root["refresh_token"] as? String ?? refreshToken
         switch writeBack {
         case .codexAuthJSON:
-            try writeBackToAuthJSON(accessToken: newAccess, idToken: newId, refreshToken: newRefresh)
+            try writeBackToAuthJSON(
+                url: CodexAuth.authFileURL(),
+                accessToken: newAccess,
+                idToken: newId,
+                refreshToken: newRefresh
+            )
+        case .codexAuthJSONAt(let path):
+            try writeBackToAuthJSON(
+                url: URL(fileURLWithPath: path),
+                accessToken: newAccess,
+                idToken: newId,
+                refreshToken: newRefresh
+            )
         case .importedAccount(let id):
             try ImportedCodexStore.saveTokens(
                 ImportedCodexTokens(accessToken: newAccess, refreshToken: newRefresh, idToken: newId),
@@ -118,11 +131,11 @@ enum CodexTokenRefresher {
     }
 
     nonisolated private static func writeBackToAuthJSON(
+        url: URL,
         accessToken: String,
         idToken: String?,
         refreshToken: String
     ) throws {
-        let url = CodexAuth.authFileURL()
         var root: [String: Any] = [:]
         if let data = try? Data(contentsOf: url),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
