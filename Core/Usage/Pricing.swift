@@ -89,7 +89,8 @@ nonisolated enum Pricing {
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
     ]
 
-    /// Fast / Priority 的显式价格表。远端 LiteLLM / models.dev 目录没有服务档位维度，不能用于覆盖这些价格。
+    /// Fast / Priority 的离线兜底表。当前在线目录可提供部分 Fast 价格；
+    /// 历史/特殊规则优先本地，其余型号在线优先、命中不到再回落这里。
     private static let codexFastPrices: [String: ModelPrice] = [
         "gpt-5.6":       .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
         "gpt-5.6-sol":   .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
@@ -108,6 +109,15 @@ nonisolated enum Pricing {
         "claude-opus-4-7": .init(input: 30, output: 150, cacheRead: 3, cacheCreation: 37.5),
         // 仅用于 2026-06-29 停止支持 Fast 前产生的历史日志计价。
         "claude-opus-4-6": .init(input: 30, output: 150, cacheRead: 3, cacheCreation: 37.5)
+    ]
+
+    /// 历史价格或已核对的上游偏差必须固定使用本地价，不能被远端当前值覆盖。
+    private static let fixedFastLocalOverrideKeys: Set<String> = [
+        // LiteLLM 当前 GPT-5.5 Priority 仍是旧价；以已审计官方价固定覆盖。
+        "gpt-5.5",
+        "gpt-5.5-codex",
+        "claude-opus-4-7",
+        "claude-opus-4-6"
     ]
 
     /// Fast 的计费等效 Token 倍率。Codex 使用 ChatGPT credit 倍率；Claude 使用 Fast/Standard API 价比。
@@ -209,7 +219,12 @@ nonisolated enum Pricing {
     /// 取某模型在 `date` 这天应使用的价格。
     /// A 类（`localOverrideKeys`）：走本地阶梯价 / 分段生效价，远端价格目录零参与。
     /// B 类（其余）：远端价格目录优先，命中不到才回落内置 `table`；两者都没有 → nil（未定价）。
-    private static func standardPrice(for key: String, at date: Date, inputTotal: Int) -> ModelPrice? {
+    private static func standardPrice(
+        for key: String,
+        app: UsageApp,
+        at date: Date,
+        inputTotal: Int
+    ) -> ModelPrice? {
         if let tiers = contextPriceTiers[key] {
             return tiers.rates(for: inputTotal)
         }
@@ -223,7 +238,7 @@ nonisolated enum Pricing {
         if fixedLocalOverrideKeys.contains(key) {
             return table[key]
         }
-        return PricingCatalogStore.shared.rate(for: key) ?? table[key]
+        return PricingCatalogStore.shared.rate(for: key, app: app, speed: .standard) ?? table[key]
     }
 
     private static func price(
@@ -235,17 +250,25 @@ nonisolated enum Pricing {
     ) -> ModelPrice? {
         switch speed {
         case .standard:
-            return standardPrice(for: key, at: date, inputTotal: inputTotal)
+            return standardPrice(for: key, app: app, at: date, inputTotal: inputTotal)
         case .unknown:
             return nil
         case .fast:
+            if fixedFastLocalOverrideKeys.contains(key) {
+                switch app {
+                case .codex: return codexFastPrices[key]
+                case .claude: return claudeFastPrices[key]
+                }
+            }
             switch app {
             case .codex:
                 // OpenAI Priority 官方价格明确排除 >272K 长上下文；不能用 Standard 长上下文价猜测。
                 guard inputTotal <= 272_000 else { return nil }
-                return codexFastPrices[key]
+                return PricingCatalogStore.shared.rate(for: key, app: app, speed: .fast)
+                    ?? codexFastPrices[key]
             case .claude:
-                return claudeFastPrices[key]
+                return PricingCatalogStore.shared.rate(for: key, app: app, speed: .fast)
+                    ?? claudeFastPrices[key]
             }
         }
     }
@@ -341,7 +364,7 @@ nonisolated enum Pricing {
     }
 
     /// 该模型是否已有可用价格（本地表 / 阶梯价 / 远端价格目录任一命中）。唯一权威接口，
-    /// 供 UI 层区分「已定价（含真实 $0）/ 未定价」（目前尚无调用点，供后续统计 UI 使用）。
+    /// 供扫描层区分「已定价（含真实 $0）/ 未定价」。
     static func hasPrice(
         model: String,
         app: UsageApp = .codex,
@@ -349,12 +372,15 @@ nonisolated enum Pricing {
         inputTotal: Int = 0
     ) -> Bool {
         let key = normalize(model: model)
-        if speed != .standard {
-            return price(for: key, app: app, speed: speed, at: Date(), inputTotal: inputTotal) != nil
-        }
-        if localOverrideKeys.contains(key) { return true }
-        if table[key] != nil { return true }
-        return PricingCatalogStore.shared.rate(for: key) != nil
+        return price(for: key, app: app, speed: speed, at: Date(), inputTotal: inputTotal) != nil
+    }
+
+    /// 是否应因缺价主动刷新远端目录。明确不计价的内部模型不会触发网络请求。
+    static func needsRemotePriceRefresh(model: String, app: UsageApp, speed: UsageSpeed) -> Bool {
+        let key = normalize(model: model)
+        guard speed != .unknown else { return false }
+        if app == .codex, key == "codex-auto-review" { return false }
+        return price(for: key, app: app, speed: speed, at: Date(), inputTotal: 0) == nil
     }
 
     /// 原始 Tokens 到 Fast 计费等效 Tokens 的换算倍率；未知或未收录的 Fast 模型返回 nil。
@@ -367,21 +393,47 @@ nonisolated enum Pricing {
         case .fast:
             let key = normalize(model: model)
             switch app {
-            case .codex: return codexFastMultipliers[key]
-            case .claude: return claudeFastMultipliers[key]
+            case .codex:
+                // ChatGPT credit 倍率不是 API Priority 价格字段，不能从在线价格猜。
+                return codexFastMultipliers[key]
+            case .claude:
+                return claudeFastMultipliers[key] ?? derivedClaudeFastMultiplier(for: key)
             }
         }
+    }
+
+    /// Claude 的计费等效倍率定义为 Fast / Standard API 价比。只有四项费率的非零比例完全一致时才推导；
+    /// 任一项不一致就返回 nil，让 UI 显示「—」，避免用输入价比例冒充整体倍率。
+    private static func derivedClaudeFastMultiplier(for key: String) -> Decimal? {
+        guard let standard = standardPrice(for: key, app: .claude, at: Date(), inputTotal: 0),
+              let fast = price(for: key, app: .claude, speed: .fast, at: Date(), inputTotal: 0)
+        else { return nil }
+        let pairs = [
+            (standard.input, fast.input),
+            (standard.output, fast.output),
+            (standard.cacheRead, fast.cacheRead),
+            (standard.cacheCreation, fast.cacheCreation)
+        ]
+        var ratio: Decimal?
+        for (base, premium) in pairs {
+            if base == 0 {
+                guard premium == 0 else { return nil }
+                continue
+            }
+            let current = premium / base
+            if let ratio, ratio != current { return nil }
+            ratio = current
+        }
+        return ratio
     }
 
     /// 价格表内容指纹（SHA-256，确定性）。
     /// 扫描状态 / 汇总缓存持久化它；内容一变（新增模型、改价、修正数值、调整限时覆盖，或 B 类模型
     /// 的远端合并价变化）→ 指纹变 → 缓存自动失效并全量重扫重算历史桶，无需手动 bump 版本号。
     ///
-    /// - Parameter knownModels: 当前用量中实际出现过的（归一化后）模型名集合。B 类远端合并价只对
-    ///   这个集合里的模型算入哈希——而不是把整个 LiteLLM/models.dev 目录塞进去，否则远端新增的、
-    ///   本地用户根本没用过的模型也会触发全量重扫。调用方通常传 `Set(aggregator.snapshot().map(\.model))`
-    ///   或从磁盘缓存自带的 buckets 推导（`UsageRollupCache.load()` 即如此，见该文件）。
-    static func fingerprint(knownModels: Set<String>) -> String {
+    /// - Parameter knownUsage: 当前用量中实际出现过的 app/model/speed 集合。远端合并价只对
+    ///   这个集合算入哈希，避免远端新增本地未使用模型时触发无关全量重扫。
+    static func fingerprint(knownUsage: Set<PricingUsageKey>) -> String {
         let baseBody = table.keys.sorted().map { key -> String in
             let p = table[key]!
             return "\(key):\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
@@ -409,11 +461,18 @@ nonisolated enum Pricing {
         ].joined(separator: ";")
         let cacheRuleBody = "claude-cache-creation-1h:\(claudeCacheCreation1hMultiplier)"
         let fixedOverrideBody = fixedLocalOverrideKeys.sorted().joined(separator: ";")
-        let remoteBody = knownModels.subtracting(localOverrideKeys).sorted().compactMap { key -> String? in
-            guard let rate = PricingCatalogStore.shared.rate(for: key) else { return nil }
-            return "\(key):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
+        let fixedFastOverrideBody = fixedFastLocalOverrideKeys.sorted().joined(separator: ";")
+        let remoteBody = knownUsage.sorted { $0.persistedKey < $1.persistedKey }.compactMap { usage -> String? in
+            if usage.speed == .standard, localOverrideKeys.contains(usage.model) { return nil }
+            if usage.speed == .fast, fixedFastLocalOverrideKeys.contains(usage.model) { return nil }
+            guard let rate = PricingCatalogStore.shared.rate(
+                for: usage.model,
+                app: usage.app,
+                speed: usage.speed
+            ) else { return nil }
+            return "\(usage.persistedKey):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
         }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)|\(fixedOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
+        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 

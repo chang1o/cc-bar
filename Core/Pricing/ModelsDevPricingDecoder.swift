@@ -16,29 +16,63 @@ nonisolated enum ModelsDevPricingDecoder {
         let price: ModelPrice
     }
 
-    /// - Returns: key 为归一化后的模型名，value 已是 USD / 百万 token（models.dev 原生单位，无需换算）。
+    /// - Returns: Standard / Fast 两套归一化价格（models.dev 原生单位为 USD / 百万 token）。
     /// - Throws: `PricingCatalogError.notAnObject` 顶层不是 JSON 对象；
     ///           `PricingCatalogError.emptyFeed` 解析后一条可用条目都没有。
-    nonisolated static func decode(_ data: Data) throws -> [String: ModelPrice] {
+    nonisolated static func decode(_ data: Data) throws -> DecodedPricingRates {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw PricingCatalogError.notAnObject
         }
 
-        var bareCandidates: [Candidate] = []
+        var standardCandidates: [Candidate] = []
+        var codexFastCandidates: [Candidate] = []
+        var claudeFastCandidates: [Candidate] = []
         for (providerPriority, providerId) in allowedProviders.enumerated() {
             guard let providerEntry = root[providerId] as? [String: Any],
                   let models = providerEntry["models"] as? [String: Any]
             else { continue }
             for (modelId, value) in models {
-                guard let entry = value as? [String: Any],
-                      let cost = entry["cost"] as? [String: Any],
-                      let price = parseRates(cost)
-                else { continue }
-                bareCandidates.append(.init(key: modelId, providerPriority: providerPriority, price: price))
+                guard let entry = value as? [String: Any] else { continue }
+                if let cost = entry["cost"] as? [String: Any],
+                   let price = parseRates(cost) {
+                    standardCandidates.append(.init(
+                        key: modelId,
+                        providerPriority: providerPriority,
+                        price: price
+                    ))
+                }
+                if let experimental = entry["experimental"] as? [String: Any],
+                   let modes = experimental["modes"] as? [String: Any],
+                   let fast = modes["fast"] as? [String: Any],
+                   let cost = fast["cost"] as? [String: Any],
+                   let price = parseRates(cost) {
+                    let candidate = Candidate(
+                        key: modelId,
+                        providerPriority: providerPriority,
+                        price: price
+                    )
+                    switch providerId {
+                    case "openai": codexFastCandidates.append(candidate)
+                    case "anthropic": claudeFastCandidates.append(candidate)
+                    default: break
+                    }
+                }
             }
         }
 
-        let orderedCandidates = bareCandidates.sorted {
+        let standard = resolve(standardCandidates)
+        let codexFast = resolve(codexFastCandidates)
+        let claudeFast = resolve(claudeFastCandidates)
+        guard !standard.isEmpty else { throw PricingCatalogError.emptyFeed }
+        return DecodedPricingRates(
+            standard: standard,
+            codexFast: codexFast,
+            claudeFast: claudeFast
+        )
+    }
+
+    private static func resolve(_ candidates: [Candidate]) -> [String: ModelPrice] {
+        let orderedCandidates = candidates.sorted {
             $0.key == $1.key ? $0.providerPriority < $1.providerPriority : $0.key < $1.key
         }
         var result: [String: ModelPrice] = [:]
@@ -54,7 +88,6 @@ nonisolated enum ModelsDevPricingDecoder {
             result[normalized] = candidate.price
         }
 
-        guard !result.isEmpty else { throw PricingCatalogError.emptyFeed }
         return result
     }
 

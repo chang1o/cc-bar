@@ -24,7 +24,7 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     static let currentVersion: Int = 9
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
-    /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即视为缓存失效、全量重扫重算。
+    /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownUsage:)` 不一致即视为缓存失效、全量重扫重算。
     var pricingFingerprint: String = ""
     var claude: [String: ScanFileState] = [:]
     var codex: [String: ScanFileState] = [:]
@@ -52,14 +52,13 @@ enum ScanCache {
     nonisolated private static let fileName = "scan-state.json"
     nonisolated private static let bundleDirectory = "CCBar"
 
-    /// - Parameter knownModels: 用于比对价格指纹的「当前已知模型集合」，通常传
-    ///   `Set(aggregator.snapshot().map(\.model))`（调用方 `UsageService.scanNow()` 传入）。
-    nonisolated static func load(knownModels: Set<String>) -> ScanCacheLoadResult {
+    /// - Parameter knownUsage: 用于比对价格指纹的当前 app/model/speed 集合。
+    nonisolated static func load(knownUsage: Set<PricingUsageKey>) -> ScanCacheLoadResult {
         let url = cacheFileURL()
         guard let data = try? Data(contentsOf: url),
               let state = try? JSONDecoder().decode(ScanState.self, from: data),
               state.version == ScanState.currentVersion,
-              state.pricingFingerprint == Pricing.fingerprint(knownModels: knownModels)
+              state.pricingFingerprint == Pricing.fingerprint(knownUsage: knownUsage)
         else {
             return .invalidated
         }
@@ -99,7 +98,7 @@ nonisolated struct UsageRollupPayload: Sendable, Codable {
     static let currentVersion: Int = 8
     var version: Int = UsageRollupPayload.currentVersion
     var generationID: String = ""
-    /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即丢弃，全量重扫重建。
+    /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownUsage:)` 不一致即丢弃，全量重扫重建。
     var pricingFingerprint: String = ""
     var buckets: [UsageBucket] = []
     var updatedAt: Date = Date()
@@ -109,8 +108,7 @@ enum UsageRollupCache {
     nonisolated private static let fileName = "usage-rollup.json"
     nonisolated private static let bundleDirectory = "CCBar"
 
-    /// 自包含校验：用 payload 自带的 `buckets` 推导「已知模型集合」现算指纹去比对，
-    /// 不需要外部传参——等价于「用这份缓存自己包含的模型集合，检验它的指纹在今天的价格下是否还成立」。
+    /// 自包含校验：用 payload 自带的 buckets 推导 app/model/speed 现算指纹去比对。
     nonisolated static func load() -> UsageRollupPayload {
         let url = cacheFileURL()
         guard let data = try? Data(contentsOf: url),
@@ -119,8 +117,10 @@ enum UsageRollupCache {
         else {
             return UsageRollupPayload()
         }
-        let knownModels = Set(payload.buckets.map { $0.model })
-        guard payload.pricingFingerprint == Pricing.fingerprint(knownModels: knownModels) else {
+        let knownUsage = Set(payload.buckets.map {
+            PricingUsageKey(app: $0.app, model: $0.model, speed: $0.speed)
+        })
+        guard payload.pricingFingerprint == Pricing.fingerprint(knownUsage: knownUsage) else {
             return UsageRollupPayload()
         }
         return payload

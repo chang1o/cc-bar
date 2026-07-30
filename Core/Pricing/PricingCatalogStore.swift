@@ -3,7 +3,7 @@ import os
 
 /// LiteLLM / models.dev 远端价格目录：内存快照 + 磁盘缓存 + 后台刷新（stale-while-revalidate）。
 ///
-/// 用锁保护的普通 class（不用 `actor`）：`rate(for:)` 必须保持同步调用，因为它被 `Pricing.cost()`
+/// 用锁保护的普通 class（不用 `actor`）：`rate(for:app:speed:)` 必须保持同步调用，因为它被 `Pricing.cost()`
 /// 同步调用，而 `Pricing.cost()` 又被两个 JSONL Scanner 同步调用——接远端价格目录不应该把整条
 /// 计价链路改成 async。刷新（网络 I/O）本身仍然是 `Task.detached` 里的 async 工作，只是读侧保持同步。
 nonisolated final class PricingCatalogStore: @unchecked Sendable {
@@ -40,7 +40,9 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
 
     private let refreshInterval: TimeInterval = 24 * 3600
     private let failureRetryInterval: TimeInterval = 30 * 60
+    private let missingRefreshInterval: TimeInterval = 30 * 60
     private let suspiciousShrinkMinimumExistingCount = 20
+    private let missingRefreshRetention: TimeInterval = 7 * 24 * 3600
 
     private let state: OSAllocatedUnfairLock<CatalogState>
     private let refreshRunning = OSAllocatedUnfairLock(initialState: false)
@@ -54,20 +56,38 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         state = OSAllocatedUnfairLock(initialState: CatalogState(active: PricingCatalogCache.load()))
     }
 
-    /// 快速同步读取，零 I/O，不阻塞调用方。LiteLLM 优先于 models.dev。
-    func rate(for normalizedKey: String) -> ModelPrice? {
+    /// 快速同步读取，零 I/O，不阻塞调用方。Standard 沿用 LiteLLM 优先；
+    /// Fast 统一 models.dev 优先（其官方 provider 的显式 fast mode 已核对），LiteLLM Priority 只兜底。
+    func rate(for normalizedKey: String, app: UsageApp, speed: UsageSpeed) -> ModelPrice? {
         state.withLock { catalog in
-            catalog.active.liteLLM.rates[normalizedKey] ?? catalog.active.modelsDev.rates[normalizedKey]
+            switch speed {
+            case .standard:
+                return catalog.active.liteLLM.standardRates[normalizedKey]
+                    ?? catalog.active.modelsDev.standardRates[normalizedKey]
+            case .fast:
+                switch app {
+                case .codex:
+                    return catalog.active.modelsDev.codexFastRates[normalizedKey]
+                        ?? catalog.active.liteLLM.codexFastRates[normalizedKey]
+                case .claude:
+                    return catalog.active.modelsDev.claudeFastRates[normalizedKey]
+                        ?? catalog.active.liteLLM.claudeFastRates[normalizedKey]
+                }
+            case .unknown:
+                return nil
+            }
         }
     }
 
     /// 扫描开始前提交已完成刷新的目录。扫描进行中产生的新目录继续留在 pending，
     /// 留给下一次扫描使用，保证 `Pricing.cost()` 和最终 fingerprint 读取同一份价格表。
-    func commitPending() {
-        state.withLock { catalog in
-            guard let pending = catalog.pending else { return }
+    @discardableResult
+    func commitPending() -> Bool {
+        state.withLock { catalog -> Bool in
+            guard let pending = catalog.pending else { return false }
             catalog.active = pending
             catalog.pending = nil
+            return true
         }
     }
 
@@ -81,17 +101,61 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         }
         guard due else { return }
 
-        let alreadyRunning = refreshRunning.withLock { running -> Bool in
-            if running { return true }
-            running = true
-            return false
-        }
-        guard !alreadyRunning else { return }
+        guard beginRefresh() else { return }
 
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            await self.performRefresh()
+            _ = await self.performRefresh(force: false)
             self.refreshRunning.withLock { $0 = false }
+        }
+    }
+
+    /// 用户手动更新：绕过 24 小时与失败退避。若常规刷新正在进行，等它完成后再强制刷新，
+    /// 避免只复用「其中一个源到期」的常规结果而漏掉另一个源。
+    func forceRefresh() async -> Bool {
+        while !beginRefresh() {
+            await waitForRefreshCompletion()
+        }
+        let succeeded = await performRefresh(force: true)
+        refreshRunning.withLock { $0 = false }
+        return succeeded
+    }
+
+    /// 扫描发现缺价时触发。每个 app/model/speed 持久化 30 分钟冷却，避免上游尚未收录时反复下载。
+    func refreshForMissing(_ keys: Set<PricingUsageKey>) async -> Bool {
+        let now = Date()
+        let eligible = state.withLock { catalog -> Bool in
+            var payload = catalog.pending ?? catalog.active
+            payload.missingRefreshAttempts = payload.missingRefreshAttempts.filter {
+                now.timeIntervalSince($0.value) < missingRefreshRetention
+            }
+            let dueKeys = keys.filter { key in
+                guard let attemptedAt = payload.missingRefreshAttempts[key.persistedKey] else { return true }
+                return now.timeIntervalSince(attemptedAt) >= missingRefreshInterval
+            }
+            guard !dueKeys.isEmpty else { return false }
+            for key in dueKeys {
+                payload.missingRefreshAttempts[key.persistedKey] = now
+            }
+            catalog.pending = payload
+            return true
+        }
+        guard eligible else { return false }
+        persist()
+        return await forceRefresh()
+    }
+
+    private func beginRefresh() -> Bool {
+        refreshRunning.withLock { running -> Bool in
+            if running { return false }
+            running = true
+            return true
+        }
+    }
+
+    private func waitForRefreshCompletion() async {
+        while refreshRunning.withLock({ $0 }) {
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
 
@@ -103,23 +167,35 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         return now.timeIntervalSince(fetchedAt) >= refreshInterval
     }
 
-    private func performRefresh() async {
-        await refreshSource(url: Self.liteLLMURL, source: .liteLLM, decode: LiteLLMPricingDecoder.decode)
-        await refreshSource(url: Self.modelsDevURL, source: .modelsDev, decode: ModelsDevPricingDecoder.decode)
+    private func performRefresh(force: Bool) async -> Bool {
+        let liteLLM = await refreshSource(
+            url: Self.liteLLMURL,
+            source: .liteLLM,
+            force: force,
+            decode: LiteLLMPricingDecoder.decode
+        )
+        let modelsDev = await refreshSource(
+            url: Self.modelsDevURL,
+            source: .modelsDev,
+            force: force,
+            decode: ModelsDevPricingDecoder.decode
+        )
+        return liteLLM || modelsDev
     }
 
     private func refreshSource(
         url: URL,
         source: Source,
-        decode: @Sendable (Data) throws -> [String: ModelPrice]
-    ) async {
+        force: Bool,
+        decode: @Sendable (Data) throws -> DecodedPricingRates
+    ) async -> Bool {
         let now = Date()
         let (due, previousSource) = state.withLock { catalog -> (Bool, PricingSourceState) in
             let payload = catalog.pending ?? catalog.active
             let sourceState = source.state(in: payload)
-            return (isDue(sourceState, now: now), sourceState)
+            return (force || isDue(sourceState, now: now), sourceState)
         }
-        guard due else { return }
+        guard due else { return false }
 
         switch await PricingCatalogClient.fetch(url: url, etag: previousSource.etag) {
         case .success(.notModified):
@@ -130,14 +206,15 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                 }
             }
             persist()
+            return true
 
         case .success(.updated(let data, let newEtag)):
             do {
                 // 解码即校验；结果为空也会被 decode 抛出（emptyFeed），一并走 catch。
                 let rates = try decode(data)
-                guard !isSuspiciousShrink(rates, comparedTo: previousSource.rates) else {
+                guard !isSuspiciousShrink(rates.standard, comparedTo: previousSource.standardRates) else {
                     // 可疑的部分目录不能覆盖旧数据。清掉 ETag，确保退避后是一次完整拉取，
-                    // 而不是对这份可疑内容收到 304 后把旧 rates 误标为新鲜。
+                    // 而不是对这份可疑内容收到 304 后把旧 Standard rates 误标为新鲜。
                     mutatePending { payload in
                         source.update(&payload) {
                             $0.etag = nil
@@ -145,18 +222,22 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                         }
                     }
                     persist()
-                    print("[PricingCatalog 价格目录] 条目异常缩水，保留旧缓存 suspicious shrink, kept old cache: \(url.lastPathComponent) old=\(previousSource.rates.count) new=\(rates.count)")
-                    return
+                    print("[PricingCatalog 价格目录] 条目异常缩水，保留旧缓存 suspicious shrink, kept old cache: \(url.lastPathComponent) old=\(previousSource.standardRates.count) new=\(rates.standard.count)")
+                    return false
                 }
                 mutatePending { payload in
                     source.update(&payload) {
-                        $0.rates = rates
+                        $0.standardRates = rates.standard
+                        // Fast 支持可能下线，但历史日志仍需按最后可靠价格计费；新增/改价覆盖，缺失不删除。
+                        $0.codexFastRates.merge(rates.codexFast) { _, new in new }
+                        $0.claudeFastRates.merge(rates.claudeFast) { _, new in new }
                         $0.etag = newEtag
                         $0.fetchedAt = now
                         $0.failedAt = nil
                     }
                 }
                 persist()
+                return true
             } catch {
                 // 远端请求成功不等于价格正确：解析失败/结果为空一律保留旧缓存，只记退避时间戳。
                 mutatePending { payload in
@@ -167,6 +248,7 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                 }
                 persist()
                 print("[PricingCatalog 价格目录] 解析失败，保留旧缓存 decode failed, kept old cache: \(url.lastPathComponent) \(error)")
+                return false
             }
 
         case .failure(let err):
@@ -175,6 +257,7 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
             }
             persist()
             print("[PricingCatalog 价格目录] 拉取失败，保留旧缓存 fetch failed, kept old cache: \(url.lastPathComponent) \(err)")
+            return false
         }
     }
 
@@ -244,13 +327,23 @@ enum PricingCatalogCache {
 
     nonisolated static func load() -> PricingCatalogCachePayload {
         let url = cacheFileURL()
-        guard let data = try? Data(contentsOf: url),
-              let payload = try? JSONDecoder().decode(PricingCatalogCachePayload.self, from: data),
-              payload.version == PricingCatalogCachePayload.currentVersion
-        else {
+        guard let data = try? Data(contentsOf: url) else {
             return PricingCatalogCachePayload()
         }
-        return payload
+        if let payload = try? JSONDecoder().decode(PricingCatalogCachePayload.self, from: data),
+           payload.version == PricingCatalogCachePayload.currentVersion {
+            return payload
+        }
+        // v1 只有 Standard rates；迁移时保留离线缓存，但清掉 ETag/刷新时间，
+        // 否则上游持续返回 304 会让新版永远没有机会解析 Fast 字段。
+        if let legacy = try? JSONDecoder().decode(LegacyPayloadV1.self, from: data),
+           legacy.version == 1 {
+            return PricingCatalogCachePayload(
+                liteLLM: legacy.liteLLM.migrated,
+                modelsDev: legacy.modelsDev.migrated
+            )
+        }
+        return PricingCatalogCachePayload()
     }
 
     nonisolated static func save(_ payload: PricingCatalogCachePayload) throws {
@@ -270,5 +363,21 @@ enum PricingCatalogCache {
         return support
             .appendingPathComponent(bundleDirectory, isDirectory: true)
             .appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    private struct LegacySourceV1: Codable {
+        var rates: [String: ModelPrice]
+
+        var migrated: PricingSourceState {
+            PricingSourceState(
+                standardRates: rates
+            )
+        }
+    }
+
+    private struct LegacyPayloadV1: Codable {
+        var version: Int
+        var liteLLM: LegacySourceV1
+        var modelsDev: LegacySourceV1
     }
 }

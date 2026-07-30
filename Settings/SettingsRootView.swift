@@ -10,6 +10,8 @@ struct SettingsRootView: View {
     @State private var launchAtLoginMessage: String?
     @State private var launchAtLoginMessageIsError = false
     @State private var isRecalculatingUsage = false
+    @State private var pricingCatalogMessage: String?
+    @State private var pricingCatalogMessageIsError = false
 
     /// 主账号额外重置 credit 的展开状态与懒加载结果(nil = 尚未加载)。
     @State private var codexResetCreditsExpanded = false
@@ -308,6 +310,42 @@ struct SettingsRootView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
+            }
+            PrefsRow(
+                label: "Price catalog",
+                chinese: "价格目录",
+                desc: "Fetch the latest Standard and Fast model pricing now.",
+                chineseDesc: "立即获取最新的 Standard 与 Fast 模型价格"
+            ) {
+                HStack(spacing: 8) {
+                    if let pricingCatalogMessage {
+                        Text(pricingCatalogMessage)
+                            .font(.system(size: 11))
+                            .foregroundStyle(pricingCatalogMessageIsError ? Color.red : Color.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Button {
+                        pricingCatalogMessage = nil
+                        Task {
+                            let succeeded = await appState.usageService.refreshPricingCatalog()
+                            pricingCatalogMessageIsError = !succeeded
+                            pricingCatalogMessage = succeeded
+                                ? tr("Updated", "已更新")
+                                : tr("Update failed", "更新失败")
+                        }
+                    } label: {
+                        if appState.usageService.isRefreshingPricingCatalog {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(tr("Update", "更新"))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(appState.usageService.isRefreshingPricingCatalog)
+                }
             }
             PrefsRow(
                 label: "Recalculate usage",

@@ -429,6 +429,116 @@ final class QuotaParsingTests: XCTestCase {
         ))
     }
 
+    func testLiteLLMDecoderSeparatesStandardAndOpenAIPriorityRates() throws {
+        let data = Data(#"""
+        {
+          "gpt-future": {
+            "litellm_provider": "openai",
+            "input_cost_per_token": 0.000005,
+            "output_cost_per_token": 0.000030,
+            "cache_read_input_token_cost": 0.0000005,
+            "input_cost_per_token_priority": 0.000010,
+            "output_cost_per_token_priority": 0.000060,
+            "cache_read_input_token_cost_priority": 0.000001
+          },
+          "claude-future": {
+            "litellm_provider": "anthropic",
+            "input_cost_per_token": 0.000005,
+            "output_cost_per_token": 0.000025,
+            "input_cost_per_token_priority": 0.000010,
+            "output_cost_per_token_priority": 0.000050
+          }
+        }
+        """#.utf8)
+
+        let decoded = try LiteLLMPricingDecoder.decode(data)
+        XCTAssertEqual(decoded.standard["gpt-future"], ModelPrice(
+            input: 5,
+            output: 30,
+            cacheRead: 0.5,
+            cacheCreation: 0
+        ))
+        XCTAssertEqual(decoded.codexFast["gpt-future"], ModelPrice(
+            input: 10,
+            output: 60,
+            cacheRead: 1,
+            cacheCreation: 0
+        ))
+        XCTAssertNil(decoded.codexFast["claude-future"])
+        XCTAssertTrue(decoded.claudeFast.isEmpty)
+    }
+
+    func testModelsDevDecoderReadsOfficialFastModeAndIgnoresReseller() throws {
+        let data = Data(#"""
+        {
+          "anthropic": {
+            "models": {
+              "claude-opus-5": {
+                "cost": {
+                  "input": 5,
+                  "output": 25,
+                  "cache_read": 0.5,
+                  "cache_write": 6.25
+                },
+                "experimental": {
+                  "modes": {
+                    "fast": {
+                      "cost": {
+                        "input": 10,
+                        "output": 50,
+                        "cache_read": 1,
+                        "cache_write": 12.5
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "reseller": {
+            "models": {
+              "claude-opus-5": {
+                "cost": {"input": 1, "output": 1},
+                "experimental": {
+                  "modes": {
+                    "fast": {"cost": {"input": 2, "output": 2}}
+                  }
+                }
+              }
+            }
+          }
+        }
+        """#.utf8)
+
+        let decoded = try ModelsDevPricingDecoder.decode(data)
+        XCTAssertEqual(decoded.standard["claude-opus-5"], ModelPrice(
+            input: 5,
+            output: 25,
+            cacheRead: 0.5,
+            cacheCreation: 6.25
+        ))
+        XCTAssertEqual(decoded.claudeFast["claude-opus-5"], ModelPrice(
+            input: 10,
+            output: 50,
+            cacheRead: 1,
+            cacheCreation: 12.5
+        ))
+        XCTAssertNil(decoded.codexFast["claude-opus-5"])
+    }
+
+    func testMissingPriceRefreshSkipsUnknownTierAndIntentionalInternalModel() {
+        XCTAssertFalse(Pricing.needsRemotePriceRefresh(
+            model: "future-model",
+            app: .codex,
+            speed: .unknown
+        ))
+        XCTAssertFalse(Pricing.needsRemotePriceRefresh(
+            model: "codex-auto-review",
+            app: .codex,
+            speed: .standard
+        ))
+    }
+
     func testGPT55StandardLongContextProAndFastRates() throws {
         let standardShort = try XCTUnwrap(Pricing.costBreakdown(
             app: .codex,
@@ -815,7 +925,8 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(ScanState.currentVersion, 9)
         XCTAssertEqual(UsageRollupPayload.currentVersion, 8)
         XCTAssertEqual(ConversationRollupPayload.currentVersion, 5)
-        XCTAssertEqual(Pricing.fingerprint(knownModels: []).count, 64)
+        XCTAssertEqual(PricingCatalogCachePayload.currentVersion, 2)
+        XCTAssertEqual(Pricing.fingerprint(knownUsage: []).count, 64)
     }
 
     private func codexRoot(

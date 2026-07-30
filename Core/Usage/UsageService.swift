@@ -8,6 +8,7 @@ final class UsageService {
     let aggregator = UsageAggregator()
     let conversationAggregator = ConversationAggregator()
     private(set) var isScanning = false
+    private(set) var isRefreshingPricingCatalog = false
     private(set) var lastScanAt: Date?
     private(set) var lastError: String?
 
@@ -63,8 +64,8 @@ final class UsageService {
             // 借用量扫描的既有节奏当远端价格目录 24h 到期检查的心跳，不新开定时器；非阻塞。
             PricingCatalogStore.shared.refreshIfNeeded()
             PricingCatalogStore.shared.commitPending()
-            let knownModels = Set(aggregator.snapshot().map { $0.model })
-            let cacheResult = await resolveScanState(knownModels: knownModels)
+            let knownUsage = pricingUsageKeys(from: aggregator.snapshot())
+            let cacheResult = await resolveScanState(knownUsage: knownUsage)
             if case .invalidated = cacheResult {
                 cachedScanState = nil
                 aggregator.load(from: [])
@@ -74,6 +75,10 @@ final class UsageService {
             }
             if await runScan(prev: cacheResult.state) {
                 requiresFullRebuild = false
+                if await refreshMissingPricingIfNeeded() {
+                    // 已在本轮结束的安全边界提交新价格；下一轮会因指纹变化自动全量重算。
+                    scanQueued = true
+                }
             }
         } while scanQueued
     }
@@ -83,17 +88,17 @@ final class UsageService {
     /// 价格指纹须与当前 active 价格目录一致（commitPending 提交新价格后指纹变化，
     /// 照旧触发全量重建）。只有冷启动且两份 rollup 恢复成功时，
     /// 首轮需要读盘取得与它们同代的 ScanState。
-    private func resolveScanState(knownModels: Set<String>) async -> ScanCacheLoadResult {
+    private func resolveScanState(knownUsage: Set<PricingUsageKey>) async -> ScanCacheLoadResult {
         if requiresFullRebuild { return .invalidated }
         if let cached = cachedScanState {
             if cached.generationID == loadedRollupGeneration,
-               cached.pricingFingerprint == Pricing.fingerprint(knownModels: knownModels) {
+               cached.pricingFingerprint == Pricing.fingerprint(knownUsage: knownUsage) {
                 return .valid(cached)
             }
             return .invalidated
         }
         let loaded = await Task.detached(priority: .utility) {
-            ScanCache.load(knownModels: knownModels)
+            ScanCache.load(knownUsage: knownUsage)
         }.value
         if case .valid(let state) = loaded, state.generationID == loadedRollupGeneration {
             return loaded
@@ -125,7 +130,32 @@ final class UsageService {
         requiresFullRebuild = true
         if await runScan(prev: ScanState()) {
             requiresFullRebuild = false
+            if await refreshMissingPricingIfNeeded() {
+                // 强制重算没有 scanNow 的 repeat 循环；缺价刷新拿到新价格后就在这里
+                // 立即再做一次全量扫描，避免必须等待下一次定时扫描。
+                cachedScanState = nil
+                aggregator.load(from: [])
+                conversationAggregator.load(infos: [], buckets: [])
+                loadedRollupGeneration = nil
+                publishTotals()
+                requiresFullRebuild = true
+                if await runScan(prev: ScanState()) {
+                    requiresFullRebuild = false
+                }
+            }
         }
+    }
+
+    /// 设置页手动更新在线价格目录：绕过 24 小时，到扫描安全边界提交并按需重算。
+    @discardableResult
+    func refreshPricingCatalog() async -> Bool {
+        guard !isRefreshingPricingCatalog else { return false }
+        isRefreshingPricingCatalog = true
+        defer { isRefreshingPricingCatalog = false }
+        let succeeded = await PricingCatalogStore.shared.forceRefresh()
+        guard succeeded else { return false }
+        await scanNow()
+        return true
     }
 
     @discardableResult
@@ -157,7 +187,7 @@ final class UsageService {
 
         // 没有真实用量或档案变化时沿用现有代次，只提交轻量 watermark。
         let buckets = aggregator.snapshot()
-        let fingerprint = Pricing.fingerprint(knownModels: Set(buckets.map { $0.model }))
+        let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: buckets))
         let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty
         let shouldWriteRollups = loadedRollupGeneration == nil || hasNewEntries || conversationChanged
         let generationID = shouldWriteRollups ? UUID().uuidString : loadedRollupGeneration!
@@ -232,6 +262,35 @@ final class UsageService {
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
         print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); elapsed=\(elapsed)")
         return true
+    }
+
+    /// 只把“已有 Standard/Fast 用量但当前所有可靠价格源都未命中”的桶视为刷新候选。
+    /// Unknown 档位和已知模型的请求级限制（例如 Codex Fast >272K）不会造成无休止刷新。
+    private func refreshMissingPricingIfNeeded() async -> Bool {
+        let buckets = aggregator.snapshot()
+        let missing = Set(buckets.compactMap { bucket -> PricingUsageKey? in
+            guard bucket.hasUnpricedUsage else { return nil }
+            guard Pricing.needsRemotePriceRefresh(
+                model: bucket.model,
+                app: bucket.app,
+                speed: bucket.speed
+            ) else { return nil }
+            return PricingUsageKey(app: bucket.app, model: bucket.model, speed: bucket.speed)
+        })
+        guard !missing.isEmpty else { return false }
+
+        let knownUsage = pricingUsageKeys(from: buckets)
+        let before = Pricing.fingerprint(knownUsage: knownUsage)
+        guard await PricingCatalogStore.shared.refreshForMissing(missing) else { return false }
+        PricingCatalogStore.shared.commitPending()
+        let after = Pricing.fingerprint(knownUsage: knownUsage)
+        return before != after
+    }
+
+    private func pricingUsageKeys(from buckets: [UsageBucket]) -> Set<PricingUsageKey> {
+        Set(buckets.map {
+            PricingUsageKey(app: $0.app, model: $0.model, speed: $0.speed)
+        })
     }
 
     private func publishTotals() {

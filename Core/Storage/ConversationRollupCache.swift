@@ -22,8 +22,10 @@ enum ConversationRollupCache {
               payload.version == ConversationRollupPayload.currentVersion else {
             return ConversationRollupPayload()
         }
-        let knownModels = Set(payload.buckets.map { $0.model })
-        guard payload.pricingFingerprint == Pricing.fingerprint(knownModels: knownModels) else {
+        let knownUsage = Set(payload.buckets.map {
+            PricingUsageKey(app: $0.app, model: $0.model, speed: $0.speed)
+        })
+        guard payload.pricingFingerprint == Pricing.fingerprint(knownUsage: knownUsage) else {
             return ConversationRollupPayload()
         }
         return payload
