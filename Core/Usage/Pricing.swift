@@ -94,8 +94,8 @@ nonisolated enum Pricing {
     private static let codexFastPrices: [String: ModelPrice] = [
         "gpt-5.6":       .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
         "gpt-5.6-sol":   .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
-        "gpt-5.6-terra": .init(input: 5,    output: 30,  cacheRead: 0.5,  cacheCreation: 6.25),
-        "gpt-5.6-luna":  .init(input: 2,    output: 12,  cacheRead: 0.2,  cacheCreation: 2.5),
+        "gpt-5.6-terra": .init(input: 4,    output: 24,  cacheRead: 0.4,  cacheCreation: 5),
+        "gpt-5.6-luna":  .init(input: 0.4,  output: 2.4, cacheRead: 0.04, cacheCreation: 0.5),
         "gpt-5.5":       .init(input: 12.5, output: 75,  cacheRead: 1.25, cacheCreation: 0),
         "gpt-5.5-codex": .init(input: 12.5, output: 75,  cacheRead: 1.25, cacheCreation: 0),
         "gpt-5.4":       .init(input: 5,    output: 30,  cacheRead: 0.5,  cacheCreation: 0),
@@ -159,13 +159,13 @@ nonisolated enum Pricing {
         ),
         "gpt-5.6-terra": .init(
             longContextThreshold: 272_000,
-            shortContext: .init(input: 2.5, output: 15, cacheRead: 0.25, cacheCreation: 3.125),
-            longContext: .init(input: 5, output: 22.5, cacheRead: 0.5, cacheCreation: 6.25)
+            shortContext: .init(input: 2, output: 12, cacheRead: 0.2, cacheCreation: 2.5),
+            longContext: .init(input: 4, output: 18, cacheRead: 0.4, cacheCreation: 5)
         ),
         "gpt-5.6-luna": .init(
             longContextThreshold: 272_000,
-            shortContext: .init(input: 1, output: 6, cacheRead: 0.1, cacheCreation: 1.25),
-            longContext: .init(input: 2, output: 9, cacheRead: 0.2, cacheCreation: 2.5)
+            shortContext: .init(input: 0.2, output: 1.2, cacheRead: 0.02, cacheCreation: 0.25),
+            longContext: .init(input: 0.4, output: 1.8, cacheRead: 0.04, cacheCreation: 0.5)
         ),
         "gpt-5.5": .init(
             longContextThreshold: 272_000,
