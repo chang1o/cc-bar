@@ -41,14 +41,14 @@
 
 1. 到 [Releases](https://github.com/nanvon/cc-bar/releases) 下载最新 `CCBar.app.zip`,解压后把 `CCBar.app` 拖入 `/Applications`。
 
-2. CCBar 未做 Apple 付费公证,首次启动会被 Gatekeeper 拦下,需手动放行一次。打开「终端」,粘贴回车:
+2. CCBar 未做 Apple 付费公证,首次启动会被 Gatekeeper 拦下,需手动放行一次。双击打开被拦截后,到 **系统设置 → 隐私与安全性**,下滑找到 CCBar 的提示,点**「仍要打开」**。
+   (macOS Sequoia 起,旧的「右键 → 打开」已失效,只能用上面这种方式。)
+
+   若上述方式仍无效(例如提示"应用程序已损坏"),可打开「终端」手动放行:
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/CCBar.app
    ```
-
-   然后双击打开。若仍被拦,到 **系统设置 → 隐私与安全性**,下滑找到 CCBar 的提示,点**「仍要打开」**。
-   (macOS Sequoia 起,旧的「右键 → 打开」已失效,只能用上面这种方式。)
 
 3. 若本机无 `~/.claude/.credentials.json`,会弹出说明后请求 Keychain 授权,请选「**始终允许**」。
 

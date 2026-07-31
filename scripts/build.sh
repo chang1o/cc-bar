@@ -36,11 +36,21 @@ xcodebuild \
 
 [[ -d "$APP" ]] || { echo "❌ 构建产物未找到: $APP" >&2; exit 1; }
 
-echo "==> [3/4] 清扩展属性并校验签名"
+echo "==> [3/4] 签名并校验"
 xattr -cr "$APP"
-codesign --verify --deep --strict --verbose=2 "$APP" \
-  && echo "   ✅ 签名校验通过" \
-  || echo "   ⚠️ 签名校验有告警(ad-hoc 包通常仍可正常运行,可忽略)"
+
+# 内嵌的 CCBarClaudeWatchdog 已经在 Xcode 的 Embed 脚本阶段单独签过了;
+# 这里对整个 CCBar.app 做一次外层签名,封装 Bundle 的 sealed resources,
+# 否则 CODE_SIGNING_ALLOWED=NO 下主可执行文件只有裸 ad-hoc 签名、没有资源封装,
+# Gatekeeper 会报 "应用程序已损坏"。
+echo "   -> 对 Bundle 做最终签名(ad-hoc,封装资源)"
+codesign --force --sign - \
+  --entitlements "$REPO_ROOT/CCBar.entitlements" \
+  --options runtime --timestamp=none \
+  "$APP"
+
+codesign --verify --deep --strict --verbose=2 "$APP"
+echo "   ✅ 签名校验通过"
 codesign -dv --verbose=2 "$APP" 2>&1 | grep -E "Identifier|Signature" || true
 
 echo "==> [4/4] 打包"
