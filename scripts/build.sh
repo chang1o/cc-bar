@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build.sh — 命令行「不签名」构建 CCBar 并打包成可分发的 zip。
+# build.sh — 命令行构建 CCBar 并同时打包成可分发的 DMG 和 zip。
 #
 # 思路和主流免费开源 Mac App(如 Burrow)一致:不用付费证书、不做公证,
 # 用 CODE_SIGNING_ALLOWED=NO 让工具链自动给 arm64 打上 ad-hoc 签名,
@@ -10,7 +10,7 @@
 # 所以也不需要事后重签脚本。
 #
 # 用法:
-#   scripts/build.sh            # 产物输出到 ./dist/CCBar.app.zip
+#   scripts/build.sh            # 产物输出到 ./dist/CCBar.dmg 和 ./dist/CCBar.app.zip
 #   scripts/build.sh <输出目录>
 #
 set -euo pipefail
@@ -53,12 +53,31 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 echo "   ✅ 签名校验通过"
 codesign -dv --verbose=2 "$APP" 2>&1 | grep -E "Identifier|Signature" || true
 
-echo "==> [4/4] 打包"
+echo "==> [4/4] 打包 DMG 和 zip"
 mkdir -p "$OUT_DIR"
 ZIP="$OUT_DIR/CCBar.app.zip"
+DMG="$OUT_DIR/CCBar.dmg"
 rm -f "$ZIP"
+rm -f "$DMG"
 ditto -c -k --keepParent "$APP" "$ZIP"
 
+# DMG 内放入 Applications 快捷方式，用户打开后可直接拖拽安装。
+DMG_STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/CCBar-dmg.XXXXXX")"
+trap 'rm -rf "$DMG_STAGING_DIR"' EXIT
+ditto "$APP" "$DMG_STAGING_DIR/CCBar.app"
+ln -s /Applications "$DMG_STAGING_DIR/Applications"
+hdiutil create \
+  -volname "CCBar" \
+  -srcfolder "$DMG_STAGING_DIR" \
+  -ov \
+  -format UDZO \
+  "$DMG"
+
+[[ -f "$ZIP" ]] || { echo "❌ ZIP 产物未找到: $ZIP" >&2; exit 1; }
+[[ -f "$DMG" ]] || { echo "❌ DMG 产物未找到: $DMG" >&2; exit 1; }
+
 echo
-echo "✅ 完成: $ZIP"
+echo "✅ 完成:"
+echo "   - $DMG"
+echo "   - $ZIP"
 echo "   上传到 GitHub Release 即可。用户首次需按 README「安装」一节手动放行一次。"

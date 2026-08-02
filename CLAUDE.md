@@ -85,8 +85,8 @@ xcodebuild -project ccbar.xcodeproj -scheme ccbar -configuration Debug -destinat
 
 - 首次需要把命令行工具指向完整 Xcode（一次性）：`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`。
 - 脚本用 `CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO` 做 Release 构建，工具链自动 ad-hoc 签名，可在任意 Mac 运行，不需要付费 Developer ID 证书或公证。
-- **产物固定输出到 `dist/CCBar.app.zip`**（`dist/` 已在 `.gitignore` 里，不进版本库）。脚本会先清空 `build/` 目录再重新构建。
-- 打包好的 zip 上传到 GitHub Release 即可分发；不要直接替换用户本机 `/Applications/CCBar.app`——那是覆盖用户正在使用的安装，属于有风险操作，要打包验证就在 `dist/` 里解压看，不要动 `/Applications`。
+- **产物固定输出到 `dist/CCBar.dmg` 和 `dist/CCBar.app.zip`**（`dist/` 已在 `.gitignore` 里，不进版本库）。脚本会先清空 `build/` 目录再重新构建。
+- 打包好的 DMG 和 zip 上传到 GitHub Release 即可分发；不要直接替换用户本机 `/Applications/CCBar.app`——那是覆盖用户正在使用的安装，属于有风险操作，要打包验证就在 `dist/` 或临时目录里查看，不要动 `/Applications`。
 - 完整背景说明见 [README.md](README.md#从源码构建) 和 [docs/打包发布.md](docs/打包发布.md)（该文档里的 Archive / Developer ID 流程只是给需要公证发布给别人用的场景保留的可选项，日常打包不要用）。
 
 ### 标准发布流程（用户说「提交代码、版本号+1、构建打包」时）
@@ -95,7 +95,7 @@ xcodebuild -project ccbar.xcodeproj -scheme ccbar -configuration Debug -destinat
 
 1. **提交代码**：把当前工作区未提交的改动按仓库惯例的 commit message 风格提交（可用 `git-commit-messages` skill；无关改动分开提交，不要混在一起）。
 2. **版本号 +1**：修改 `ccbar.xcodeproj/project.pbxproj` 里两处 `MARKETING_VERSION`（Debug/Release 配置各一处，要同时改），patch 位 +1（如 `1.0.0` → `1.0.1`），除非用户明确要求升 minor/major。单独提交，message 形如 `chore: 版本号升至 vX.Y.Z`。
-3. **构建打包**：推送分支 + 打带 `v` 前缀的 tag 触发 [.github/workflows/release.yml](.github/workflows/release.yml)，在 GitHub 的 macOS runner 上自动跑 `scripts/build.sh` 并把 `dist/CCBar.app.zip` 挂到同名 GitHub Release：
+3. **构建打包**：推送分支 + 打带 `v` 前缀的 tag 触发 [.github/workflows/release.yml](.github/workflows/release.yml)，在 GitHub 的 macOS runner 上自动跑 `scripts/build.sh` 并把 `dist/CCBar.dmg` 与 `dist/CCBar.app.zip` 挂到同名 GitHub Release：
    ```bash
    git push origin main
    git tag vX.Y.Z

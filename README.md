@@ -39,7 +39,7 @@
 
 要求 macOS 14 Sonoma 或更新版本。Codex / Claude Code 需已通过终端登录；Antigravity 需安装官方 App 或 IDE，并在运行时提供本地额度服务。
 
-1. 到 [Releases](https://github.com/nanvon/cc-bar/releases) 下载最新 `CCBar.app.zip`,解压后把 `CCBar.app` 拖入 `/Applications`。
+1. 到 [Releases](https://github.com/nanvon/cc-bar/releases) 下载最新 `CCBar.dmg`,打开后把 `CCBar.app` 拖入 `/Applications`。Release 中也会同时提供 `CCBar.app.zip` 备用。
 
 2. CCBar 未做 Apple 付费公证,首次启动会被 Gatekeeper 拦下,需手动放行一次。双击打开被拦截后,到 **系统设置 → 隐私与安全性**,下滑找到 CCBar 的提示,点**「仍要打开」**。
    (macOS Sequoia 起,旧的「右键 → 打开」已失效,只能用上面这种方式。)
@@ -79,9 +79,9 @@ cc-bar 是 vibe coding 出来满足个人需求的小工具,并非商业化产�
    ```
 
    脚本会以 `CODE_SIGNING_ALLOWED=NO` 做 Release 构建(工具链自动 ad-hoc 签名),
-   清理扩展属性并打包,产物输出到 `dist/CCBar.app.zip`。
+   清理扩展属性并同时打包,产物输出到 `dist/CCBar.dmg` 和 `dist/CCBar.app.zip`。
 
-3. 把 `dist/CCBar.app.zip` 上传到 GitHub Release 即可。用户首次安装按上方「安装」一节手动放行一次。
+3. 把 `dist/CCBar.dmg` 和 `dist/CCBar.app.zip` 上传到 GitHub Release 即可。用户首次安装按上方「安装」一节手动放行一次。
 
 > 不要用 Xcode 的 Archive 导出分发:那会引入 "Apple Development" 开发证书,只能在本机运行,拷给别人会打不开。
 
