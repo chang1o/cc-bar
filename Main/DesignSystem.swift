@@ -17,6 +17,26 @@ extension QuotaApp {
     }
 }
 
+// MARK: - UsageApp 识别色与名称
+
+extension UsageApp {
+    var tintColor: Color {
+        switch self {
+        case .codex: .codexAccent
+        case .claude: .claudeAccent
+        case .pi: .piAccent
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .codex: "Codex"
+        case .claude: "Claude Code"
+        case .pi: "Pi"
+        }
+    }
+}
+
 // MARK: - Status color
 
 /// 按剩余百分比解析 4 档状态色:>50% → normal / 20~50% → warning / <20% → low / <=0 → empty。

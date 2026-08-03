@@ -246,6 +246,7 @@ struct ConversationStatsView: View {
         case .all: return nil
         case .codex: return .codex
         case .claude: return .claude
+        case .pi: return .pi
         }
     }
 
@@ -335,7 +336,7 @@ private struct ConversationListRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 7) {
-                ServiceMark(color: summary.info.app == .codex ? .codexAccent : .claudeAccent, size: 8)
+                ServiceMark(color: summary.info.app.tintColor, size: 8)
                 Text(summary.info.title ?? tr("Untitled", "（无标题）"))
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
@@ -406,8 +407,8 @@ private struct ConversationDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                ServiceMark(color: detail.info.app == .codex ? .codexAccent : .claudeAccent, size: 9)
-                Text(detail.info.app == .codex ? "Codex" : "Claude Code")
+                ServiceMark(color: detail.info.app.tintColor, size: 9)
+                Text(detail.info.app.displayName)
                     .font(.system(size: 11.5, weight: .semibold))
                 Text(tr("All time", "全部时间"))
                     .font(.system(size: 10, weight: .medium))

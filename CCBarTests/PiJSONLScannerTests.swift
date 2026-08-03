@@ -1,0 +1,192 @@
+import XCTest
+@testable import CCBar
+
+/// PiJSONLScanner 脱敏 fixture 测试：全量解析、增量 watermark、跨文件去重、compaction 计入。
+final class PiJSONLScannerTests: XCTestCase {
+    private var tempDir: URL!
+
+    override func setUpWithError() throws {
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pi-scan-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let tempDir {
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+    }
+
+    private func write(_ name: String, _ content: String) throws -> URL {
+        let url = tempDir.appendingPathComponent(name)
+        // 真实 pi 会话文件每行（含末行）都以 \n 结尾；JSONLLineReader 依赖整行消费。
+        try (content + "\n").write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    private let header = #"{"type":"session","version":3,"id":"019fc5c5-db1f-7e9a-acbd-6762c05e364e","timestamp":"2026-08-03T03:58:26.079Z","cwd":"/Users/nanvon/Code/cc-bar"}"#
+
+    private func assistantLine(
+        id: String,
+        timestamp: String = "2026-08-03T03:58:27.906Z",
+        input: Int = 100,
+        output: Int = 50,
+        cacheRead: Int = 20,
+        cacheWrite: Int = 0,
+        costTotal: Double = 0.0017
+    ) -> String {
+        """
+        {"type":"message","id":"\(id)","parentId":null,"timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"provider":"deepseek","model":"deepseek-v4-flash","usage":{"input":\(input),"output":\(output),"cacheRead":\(cacheRead),"cacheWrite":\(cacheWrite),"totalTokens":\(input + output + cacheRead + cacheWrite),"cost":{"input":0.001,"output":0.0005,"cacheRead":0.0002,"cacheWrite":0,"total":\(costTotal)}},"stopReason":"stop","timestamp":1784270307906}}
+        """
+    }
+
+    private func userLine(id: String, text: String) -> String {
+        #"{"type":"message","id":"\#(id)","parentId":null,"timestamp":"2026-08-03T03:58:26.500Z","message":{"role":"user","content":"\#(text)"}}"#
+    }
+
+    // MARK: - 全量扫描
+
+    func testFullScanParsesAssistantMessagesAndSeed() throws {
+        let content = [
+            header,
+            userLine(id: "a1b2c3d1", text: "帮我重构一下登录模块"),
+            assistantLine(id: "a1b2c3d2"),
+            assistantLine(id: "a1b2c3d3", input: 200, output: 80, cacheRead: 0, costTotal: 0.001),
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+
+        XCTAssertEqual(result.entries.count, 2)
+        let first = result.entries[0]
+        XCTAssertEqual(first.app, .pi)
+        XCTAssertEqual(first.conversationKey, "pi:019fc5c5-db1f-7e9a-acbd-6762c05e364e")
+        XCTAssertEqual(first.model, "deepseek/deepseek-v4-flash")
+        XCTAssertEqual(first.speed, .standard)
+        XCTAssertEqual(first.inputTokens, 100)
+        XCTAssertEqual(first.outputTokens, 50)
+        XCTAssertEqual(first.cacheReadTokens, 20)
+        XCTAssertEqual(first.cacheCreationTokens, 0)
+        XCTAssertEqual(first.costUSD, Decimal(string: "0.0017"))
+        XCTAssertEqual(first.costBreakdown?.total, Decimal(string: "0.0017"))
+
+        let second = result.entries[1]
+        XCTAssertEqual(second.inputTokens, 200)
+        XCTAssertEqual(second.outputTokens, 80)
+
+        XCTAssertEqual(result.conversationSeeds.count, 1)
+        let seed = result.conversationSeeds[0]
+        XCTAssertEqual(seed.key, "pi:019fc5c5-db1f-7e9a-acbd-6762c05e364e")
+        XCTAssertEqual(seed.title, "帮我重构一下登录模块")
+        XCTAssertEqual(seed.project.name, "cc-bar")
+        // source 取决于测试机文件系统（cwd 为真实 git 仓库时是 .gitRoot），只验证 name。
+
+        XCTAssertEqual(result.newState.count, 1)
+        XCTAssertEqual(result.newSeenIds.count, 2)
+    }
+
+    // MARK: - 增量扫描
+
+    func testIncrementalScanSkipsUnchangedFileAndPicksUpAppends() throws {
+        let initial = [
+            header,
+            userLine(id: "a1b2c3d1", text: "hello"),
+            assistantLine(id: "a1b2c3d2"),
+        ].joined(separator: "\n")
+        let url = try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", initial)
+
+        let first = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+        XCTAssertEqual(first.entries.count, 1)
+
+        // 文件未变化 → 无新条目
+        let second = PiJSONLScanner.scan(previous: first.newState, seenEntryIds: first.newSeenIds, root: tempDir)
+        XCTAssertEqual(second.entries.count, 0)
+        XCTAssertEqual(second.linesParsed, 0)
+
+        // 追加一条 assistant 消息 → 只解析新增行
+        sleep(1)
+        var appended = initial
+        appended += "\n" + assistantLine(id: "a1b2c3d3", output: 30, costTotal: 0.0005)
+        try (appended + "\n").write(to: url, atomically: true, encoding: .utf8)
+
+        let third = PiJSONLScanner.scan(previous: second.newState, seenEntryIds: second.newSeenIds, root: tempDir)
+        XCTAssertEqual(third.entries.count, 1)
+        XCTAssertEqual(third.entries[0].outputTokens, 30)
+        XCTAssertEqual(third.entries[0].costUSD, Decimal(string: "0.0005"))
+    }
+
+    // MARK: - 跨文件去重（fork / clone 复制旧行）
+
+    func testForkCopyDoesNotDoubleCount() throws {
+        let line = assistantLine(id: "a1b2c3d2")
+        let original = [
+            header,
+            userLine(id: "a1b2c3d1", text: "hello"),
+            line,
+            // 原文件独有的消息，保证两个会话都有 ≥1 条用量（去重归属不依赖文件枚举顺序）
+            assistantLine(id: "a1b2c3d5", costTotal: 0.0009),
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", original)
+        // fork 出的新会话文件复制了旧行（同 entry id + ISO timestamp）
+        let forkHeader = #"{"type":"session","version":3,"id":"019fc5d0-aaaa-4bbb-8ccc-000000000000","timestamp":"2026-08-03T04:00:00.000Z","cwd":"/Users/nanvon/Code/cc-bar","parentSession":"/original/path.jsonl"}"#
+        let fork = [
+            forkHeader,
+            userLine(id: "a1b2c3d1", text: "hello"),
+            line,
+            assistantLine(id: "e1f2a3b4", costTotal: 0.001),
+        ].joined(separator: "\n")
+        try write("2026-08-03T04-00-00-000Z_019fc5d0-aaaa-4bbb-8ccc-000000000000.jsonl", fork)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+
+        // 重复的 a1b2c3d2 只计一次：2 个文件共 4 条 assistant，去重后 3 条
+        XCTAssertEqual(result.entries.count, 3)
+        let conversations = Set(result.entries.map(\.conversationKey))
+        XCTAssertEqual(conversations, ["pi:019fc5c5-db1f-7e9a-acbd-6762c05e364e", "pi:019fc5d0-aaaa-4bbb-8ccc-000000000000"])
+    }
+
+    // MARK: - compaction / branch_summary 计入
+
+    func testCompactionUsageCounted() throws {
+        let compaction = #"{"type":"compaction","id":"f6g7h8i9","parentId":"a1b2c3d2","timestamp":"2026-08-03T04:10:00.000Z","summary":"...","tokensBefore":50000,"usage":{"input":3000,"output":200,"cacheRead":500,"cacheWrite":0,"totalTokens":3700,"cost":{"input":0.01,"output":0.002,"cacheRead":0.001,"cacheWrite":0,"total":0.013}}}"#
+        let branchSummary = #"{"type":"branch_summary","id":"g7h8i9j0","parentId":"a1b2c3d1","timestamp":"2026-08-03T04:15:00.000Z","fromId":"a1b2c3d2","summary":"...","usage":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0,"totalTokens":150,"cost":{"input":0.001,"output":0.0005,"cacheRead":0,"cacheWrite":0,"total":0.0015}}}"#
+        let content = [
+            header,
+            userLine(id: "a1b2c3d1", text: "hello"),
+            assistantLine(id: "a1b2c3d2"),
+            compaction,
+            branchSummary,
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+
+        XCTAssertEqual(result.entries.count, 3)
+        let totalTokens = result.entries.reduce(0) { $0 + $1.inputTokens + $1.outputTokens + $1.cacheReadTokens + $1.cacheCreationTokens }
+        XCTAssertEqual(totalTokens, 170 + 3700 + 150)
+        let totalCost = result.entries.reduce(Decimal(0)) { $0 + ($1.costUSD ?? 0) }
+        XCTAssertEqual(totalCost, Decimal(string: "0.0017")! + Decimal(string: "0.013")! + Decimal(string: "0.0015")!)
+        // compaction / branch_summary 沿用最近 assistant 的模型标签
+        XCTAssertTrue(result.entries.dropFirst().allSatisfy { $0.model == "deepseek/deepseek-v4-flash" })
+    }
+
+    // MARK: - 非 assistant 消息忽略
+
+    func testIgnoresToolResultAndOtherEntryTypes() throws {
+        let toolResult = #"{"type":"message","id":"c3d4e5f6","parentId":"a1b2c3d2","timestamp":"2026-08-03T03:58:28.000Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"ok"}],"isError":false,"timestamp":1784270308000}}"#
+        let modelChange = #"{"type":"model_change","id":"d4e5f6g7","parentId":"c3d4e5f6","timestamp":"2026-08-03T03:59:00.000Z","provider":"deepseek","modelId":"deepseek-v4-flash"}"#
+        let content = [
+            header,
+            userLine(id: "a1b2c3d1", text: "hello"),
+            assistantLine(id: "a1b2c3d2"),
+            toolResult,
+            modelChange,
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+
+        XCTAssertEqual(result.entries.count, 1)
+        XCTAssertEqual(result.linesParsed, 5)
+    }
+}

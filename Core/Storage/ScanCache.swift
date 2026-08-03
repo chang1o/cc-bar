@@ -21,7 +21,8 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
 nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
     /// v9: Claude 流式半成品不再入账；旧 seen / rollup 可能已污染，必须全量重建。
-    static let currentVersion: Int = 9
+    /// v10: 新增 pi 扫描 watermark（`pi` / `piSeenEntryIds`）。
+    static let currentVersion: Int = 10
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownUsage:)` 不一致即视为缓存失效、全量重扫重算。
@@ -30,6 +31,9 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     var codex: [String: ScanFileState] = [:]
     /// 跨文件的 Claude message.id 去重集合（同一条 assistant 消息可能被 sidechain / subagent 在多个 jsonl 里重复引用）。
     var claudeSeenMessageIds: [String] = []
+    /// pi 扫描 watermark；pi 会话树分支/复制场景按 (entryID@ISO timestamp) 全局去重。
+    var pi: [String: ScanFileState] = [:]
+    var piSeenEntryIds: [String] = []
 }
 
 /// 扫描缓存的读取结论。缓存文件缺失、损坏、版本不符或价格指纹变化都必须显式标为失效，

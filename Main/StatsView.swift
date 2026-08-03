@@ -109,12 +109,14 @@ enum StatsServiceFilter: Hashable, CaseIterable {
     case all
     case codex
     case claude
+    case pi
 
     var englishLabel: String {
         switch self {
         case .all: return "All"
         case .codex: return "Codex"
         case .claude: return "Claude Code"
+        case .pi: return "Pi"
         }
     }
 
@@ -123,6 +125,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return "全部"
         case .codex: return "Codex"
         case .claude: return "Claude Code"
+        case .pi: return "Pi"
         }
     }
 
@@ -131,6 +134,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return nil
         case .codex: return .codexAccent
         case .claude: return .claudeAccent
+        case .pi: return .piAccent
         }
     }
 }
@@ -400,28 +404,41 @@ struct StatsView: View {
             KPICard(
                 english: "Codex",
                 chinese: "Codex",
-                value: serviceFilter == .claude
+                value: serviceFilter == .claude || serviceFilter == .pi
                     ? "—"
                     : StatsFormatter.tierCost(
                         currentTotals(.codex).costUSD,
                         hasUnpricedUsage: currentTotals(.codex).hasUnpricedUsage
                     ),
-                delta: serviceFilter == .claude ? nil : costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
+                delta: serviceFilter == .claude || serviceFilter == .pi ? nil : costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
                 tint: .codexAccent,
-                dimmed: serviceFilter == .claude
+                dimmed: serviceFilter == .claude || serviceFilter == .pi
             )
             KPICard(
                 english: "Claude Code",
                 chinese: "Claude Code",
-                value: serviceFilter == .codex
+                value: serviceFilter == .codex || serviceFilter == .pi
                     ? "—"
                     : StatsFormatter.tierCost(
                         currentTotals(.claude).costUSD,
                         hasUnpricedUsage: currentTotals(.claude).hasUnpricedUsage
                     ),
-                delta: serviceFilter == .codex ? nil : costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
+                delta: serviceFilter == .codex || serviceFilter == .pi ? nil : costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
                 tint: .claudeAccent,
-                dimmed: serviceFilter == .codex
+                dimmed: serviceFilter == .codex || serviceFilter == .pi
+            )
+            KPICard(
+                english: "Pi",
+                chinese: "Pi",
+                value: serviceFilter == .codex || serviceFilter == .claude
+                    ? "—"
+                    : StatsFormatter.tierCost(
+                        currentTotals(.pi).costUSD,
+                        hasUnpricedUsage: currentTotals(.pi).hasUnpricedUsage
+                    ),
+                delta: serviceFilter == .codex || serviceFilter == .claude ? nil : costDelta(current: currentTotals(.pi), previous: previousTotals(.pi)),
+                tint: .piAccent,
+                dimmed: serviceFilter == .codex || serviceFilter == .claude
             )
         }
     }
@@ -453,6 +470,7 @@ struct StatsView: View {
                 }
                 LegendChip(color: .codexAccent, label: "Codex")
                 LegendChip(color: .claudeAccent, label: "Claude Code")
+                LegendChip(color: .piAccent, label: "Pi")
             }
         )) {
             VStack(spacing: 6) {
@@ -482,6 +500,16 @@ struct StatsView: View {
                                 stacking: .standard
                             )
                             .foregroundStyle(Color.claudeAccent)
+                            .opacity(barOpacity(for: sample))
+                            .cornerRadius(2)
+
+                            BarMark(
+                                x: .value("Day", sample.day, unit: .day),
+                                y: .value("Cost", sample.piCost.doubleValue),
+                                width: .fixed(dailyBarWidth),
+                                stacking: .standard
+                            )
+                            .foregroundStyle(Color.piAccent)
                             .opacity(barOpacity(for: sample))
                             .cornerRadius(2)
                         }
@@ -543,6 +571,16 @@ struct StatsView: View {
                     speed: currentSpeedBreakdown(.claude)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
+                ByServiceRow(
+                    title: "Pi",
+                    subtitle: "pi.dev",
+                    tint: .piAccent,
+                    value: currentTotals(.pi).costUSD,
+                    totalValue: currentTotalsAll.costUSD,
+                    totals: currentTotals(.pi),
+                    speed: currentSpeedBreakdown(.pi)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -552,14 +590,20 @@ struct StatsView: View {
     private var byModelPanel: some View {
         Panel(title: "By model", chinese: "按模型") {
             VStack(alignment: .leading, spacing: 10) {
-                if serviceFilter != .claude {
+                if serviceFilter != .claude && serviceFilter != .pi {
                     modelGroup(title: "Codex", tint: .codexAccent, rows: modelRows(for: .codex))
                 }
-                if serviceFilter != .codex && serviceFilter != .claude {
+                if serviceFilter == .all {
                     Divider()
                 }
-                if serviceFilter != .codex {
+                if serviceFilter != .codex && serviceFilter != .pi {
                     modelGroup(title: "Claude Code", tint: .claudeAccent, rows: modelRows(for: .claude))
+                }
+                if serviceFilter == .all {
+                    Divider()
+                }
+                if serviceFilter != .codex && serviceFilter != .claude {
+                    modelGroup(title: "Pi", tint: .piAccent, rows: modelRows(for: .pi))
                 }
             }
         }
@@ -584,6 +628,8 @@ struct StatsView: View {
     }
 
     private var timelineSections: [QuotaTimelineSection] {
+        // pi 无订阅额度，时间线仅展示 codex / claude 的额度变化。
+        guard serviceFilter != .pi else { return [] }
         var sections: [QuotaTimelineSection] = []
 
         if serviceFilter != .claude {
@@ -746,6 +792,8 @@ struct StatsView: View {
             return buckets.filter { $0.app == .codex }
         case .claude:
             return buckets.filter { $0.app == .claude }
+        case .pi:
+            return buckets.filter { $0.app == .pi }
         }
     }
 
@@ -797,6 +845,7 @@ struct StatsView: View {
         for b in buckets {
             if serviceFilter == .codex && b.app != .codex { continue }
             if serviceFilter == .claude && b.app != .claude { continue }
+            if serviceFilter == .pi && b.app != .pi { continue }
             t.add(b)
         }
         return t
@@ -823,18 +872,19 @@ struct StatsView: View {
 
     private var dailySamples: [DailySample] {
         let (from, to) = chartBounds
-        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals)] = [:]
+        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, pi: UsageTotals)] = [:]
         for b in filteredBuckets(from: from, to: to) {
-            var pair = byDay[b.day] ?? (.zero, .zero)
+            var pair = byDay[b.day] ?? (.zero, .zero, .zero)
             switch b.app {
             case .codex: pair.codex.add(b)
             case .claude: pair.claude.add(b)
+            case .pi: pair.pi.add(b)
             }
             byDay[b.day] = pair
         }
         return byDay
             .map {
-                DailySample(day: $0.key, codex: $0.value.codex, claude: $0.value.claude)
+                DailySample(day: $0.key, codex: $0.value.codex, claude: $0.value.claude, pi: $0.value.pi)
             }
             .sorted { $0.day < $1.day }
     }
@@ -965,6 +1015,10 @@ private struct DailyTooltip: View {
             serviceRow(color: .claudeAccent, label: "Claude Code", value: StatsFormatter.tierCost(
                 sample.claudeCost,
                 hasUnpricedUsage: sample.claude.hasUnpricedUsage
+            ))
+            serviceRow(color: .piAccent, label: "Pi", value: StatsFormatter.tierCost(
+                sample.piCost,
+                hasUnpricedUsage: sample.pi.hasUnpricedUsage
             ))
 
             Divider()
@@ -1576,21 +1630,23 @@ private struct DailySample: Identifiable {
     let day: Date
     let codex: UsageTotals
     let claude: UsageTotals
+    let pi: UsageTotals
 
     var codexCost: Decimal { codex.costUSD }
     var claudeCost: Decimal { claude.costUSD }
-    var totalCost: Decimal { codexCost + claudeCost }
+    var piCost: Decimal { pi.costUSD }
+    var totalCost: Decimal { codexCost + claudeCost + piCost }
     var totalTokens: Int { totalUsage.totalTokens }
 
-    /// codex + claude 合并后的口径,供每日悬浮明细展示 token 拆分 + 命中率。
+    /// codex + claude + pi 合并后的口径,供每日悬浮明细展示 token 拆分 + 命中率。
     var totalUsage: UsageTotals {
         var t = UsageTotals.zero
-        t.inputTokens = codex.inputTokens + claude.inputTokens
-        t.outputTokens = codex.outputTokens + claude.outputTokens
-        t.cacheReadTokens = codex.cacheReadTokens + claude.cacheReadTokens
-        t.cacheCreationTokens = codex.cacheCreationTokens + claude.cacheCreationTokens
+        t.inputTokens = codex.inputTokens + claude.inputTokens + pi.inputTokens
+        t.outputTokens = codex.outputTokens + claude.outputTokens + pi.outputTokens
+        t.cacheReadTokens = codex.cacheReadTokens + claude.cacheReadTokens + pi.cacheReadTokens
+        t.cacheCreationTokens = codex.cacheCreationTokens + claude.cacheCreationTokens + pi.cacheCreationTokens
         t.costUSD = totalCost
-        t.hasUnpricedUsage = codex.hasUnpricedUsage || claude.hasUnpricedUsage
+        t.hasUnpricedUsage = codex.hasUnpricedUsage || claude.hasUnpricedUsage || pi.hasUnpricedUsage
         return t
     }
 }

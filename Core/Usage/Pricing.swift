@@ -258,6 +258,7 @@ nonisolated enum Pricing {
                 switch app {
                 case .codex: return codexFastPrices[key]
                 case .claude: return claudeFastPrices[key]
+                case .pi: return nil
                 }
             }
             switch app {
@@ -269,6 +270,9 @@ nonisolated enum Pricing {
             case .claude:
                 return PricingCatalogStore.shared.rate(for: key, app: app, speed: .fast)
                     ?? claudeFastPrices[key]
+            case .pi:
+                // pi 会话自带 cost 字段，不走本地/在线价格表。
+                return nil
             }
         }
     }
@@ -380,6 +384,8 @@ nonisolated enum Pricing {
         let key = normalize(model: model)
         guard speed != .unknown else { return false }
         if app == .codex, key == "codex-auto-review" { return false }
+        // pi 会话自带 cost 字段，不走本地/在线价格表；缺价无需（也不应）触发远端刷新。
+        if app == .pi { return false }
         return price(for: key, app: app, speed: speed, at: Date(), inputTotal: 0) == nil
     }
 
@@ -398,6 +404,9 @@ nonisolated enum Pricing {
                 return codexFastMultipliers[key]
             case .claude:
                 return claudeFastMultipliers[key] ?? derivedClaudeFastMultiplier(for: key)
+            case .pi:
+                // pi 无 Fast 档位概念。
+                return nil
             }
         }
     }

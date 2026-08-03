@@ -168,15 +168,20 @@ final class UsageService {
         async let codexTask = Task.detached(priority: .utility) {
             CodexJSONLScanner.scan(previous: prev.codex)
         }.value
+        async let piTask = Task.detached(priority: .utility) {
+            PiJSONLScanner.scan(previous: prev.pi, seenEntryIds: prev.piSeenEntryIds)
+        }.value
 
         let claude = await claudeTask
         let codex = await codexTask
+        let pi = await piTask
 
         aggregator.ingest(claude.entries)
         aggregator.ingest(codex.entries)
+        aggregator.ingest(pi.entries)
         let conversationChanged = conversationAggregator.ingest(
-            entries: claude.entries + codex.entries,
-            seeds: claude.conversationSeeds + codex.conversationSeeds
+            entries: claude.entries + codex.entries + pi.entries,
+            seeds: claude.conversationSeeds + codex.conversationSeeds + pi.conversationSeeds
         )
 
         // 个人历史用量一次性补录：缓存失效路径会清空聚合器，若只在 bootstrap 合并，
@@ -188,7 +193,7 @@ final class UsageService {
         // 没有真实用量或档案变化时沿用现有代次，只提交轻量 watermark。
         let buckets = aggregator.snapshot()
         let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: buckets))
-        let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty
+        let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty || !pi.entries.isEmpty
         let shouldWriteRollups = loadedRollupGeneration == nil || hasNewEntries || conversationChanged
         let generationID = shouldWriteRollups ? UUID().uuidString : loadedRollupGeneration!
         let newScanState = ScanState(
@@ -196,7 +201,9 @@ final class UsageService {
             pricingFingerprint: fingerprint,
             claude: claude.newState,
             codex: codex.newState,
-            claudeSeenMessageIds: claude.newSeenIds
+            claudeSeenMessageIds: claude.newSeenIds,
+            pi: pi.newState,
+            piSeenEntryIds: pi.newSeenIds
         )
         let shouldWriteScanState = newScanState != prev
 
@@ -260,7 +267,7 @@ final class UsageService {
         publishTotals()
 
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
-        print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); elapsed=\(elapsed)")
+        print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); pi files=\(pi.filesScanned) lines=\(pi.linesParsed) new=\(pi.entries.count); elapsed=\(elapsed)")
         return true
     }
 
@@ -297,5 +304,6 @@ final class UsageService {
         guard let appState else { return }
         appState.codexTodayCost = aggregator.todayCost(for: .codex)
         appState.claudeTodayCost = aggregator.todayCost(for: .claude)
+        appState.piTodayCost = aggregator.todayCost(for: .pi)
     }
 }
