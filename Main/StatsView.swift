@@ -485,7 +485,7 @@ struct StatsView: View {
                         ForEach(dailySamples) { sample in
                             BarMark(
                                 x: .value("Day", sample.day, unit: .day),
-                                y: .value("Cost", sample.codexCost.doubleValue),
+                                y: .value("Tokens", Double(sample.codex.totalTokens)),
                                 width: .fixed(dailyBarWidth),
                                 stacking: .standard
                             )
@@ -495,7 +495,7 @@ struct StatsView: View {
 
                             BarMark(
                                 x: .value("Day", sample.day, unit: .day),
-                                y: .value("Cost", sample.claudeCost.doubleValue),
+                                y: .value("Tokens", Double(sample.claude.totalTokens)),
                                 width: .fixed(dailyBarWidth),
                                 stacking: .standard
                             )
@@ -505,7 +505,7 @@ struct StatsView: View {
 
                             BarMark(
                                 x: .value("Day", sample.day, unit: .day),
-                                y: .value("Cost", sample.piCost.doubleValue),
+                                y: .value("Tokens", Double(sample.pi.totalTokens)),
                                 width: .fixed(dailyBarWidth),
                                 stacking: .standard
                             )
