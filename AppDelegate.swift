@@ -6,11 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-
-        // SMAppService 的开机自启继续静默；用户从 Dock、应用程序、Launchpad
-        // 或 Raycast 冷启动时，待 SwiftUI 的 openWindow 环境就绪后打开统计页。
-        guard !Self.wasLaunchedAsLoginItem else { return }
-        requestOpenStatisticsWindow()
+        // 冷启动（含开机自启、Dock/应用程序/Launchpad/Raycast 手动启动）一律静默，
+        // 只驻留菜单栏；主窗口只在用户点 Dock 图标触发 reopen 时才打开。
     }
 
     func applicationShouldHandleReopen(
@@ -34,11 +31,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         openStatisticsWindow()
-    }
-
-    private static var wasLaunchedAsLoginItem: Bool {
-        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
-        return event.eventID == kAEOpenApplication
-            && event.paramDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
     }
 }
