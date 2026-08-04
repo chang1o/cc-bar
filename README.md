@@ -1,10 +1,26 @@
-# cc-bar
+<p align="center">
+  <img src="Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="CCBar 图标">
+</p>
 
-> macOS 菜单栏小工具 —— 一眼看清 Codex、Claude Code 与 Antigravity 的剩余额度。
+<h1 align="center">cc-bar</h1>
 
-<p>
-  <img alt="platform" src="https://img.shields.io/badge/macOS-14+-blue.svg">
-  <img alt="swift" src="https://img.shields.io/badge/Swift-5.9-orange.svg">
+<p align="center">macOS 菜单栏工具:实时显示 Codex、Claude Code 与 Antigravity 的剩余额度,<br>并统计本机的 Token 用量与费用。</p>
+
+<p align="center">
+  <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white">
+  <img alt="swiftui" src="https://img.shields.io/badge/SwiftUI-F05138?logo=swift&logoColor=white">
+  <a href="https://github.com/nanvon/cc-bar/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/nanvon/cc-bar?color=brightgreen"></a>
+  <img alt="downloads" src="https://img.shields.io/github/downloads/nanvon/cc-bar/total?color=blue">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-orange">
+</p>
+
+<p align="center">
+  <a href="https://github.com/nanvon/cc-bar/releases/latest">下载</a> ·
+  <a href="#-安装">安装</a> ·
+  <a href="#-从源码构建">从源码构建</a> ·
+  <a href="#-相关项目">相关项目</a> ·
+  <a href="https://github.com/nanvon/cc-bar/issues">反馈</a> ·
+  <a href="README_EN.md">English</a>
 </p>
 
 <p align="center">
@@ -12,17 +28,20 @@
   <img src="docs/Screenshots/popover-dark.png" width="360" alt="Popover 总览 - 深色模式">
 </p>
 
-## 功能
+## ✨ 功能
 
-- **额度显示** —— Codex、Claude Code 与 Antigravity 的 5 小时 / 周窗口剩余额度,实时同步
-- **菜单栏 + 悬浮窗** —— 状态栏图标显示剩余百分比;可选桌面悬浮 HUD,可拖动、边缘吸附、置顶不抢焦
-- **多 Codex 账号** —— 支持导入多个 Codex 账号,主副账号在 Popover 同屏展示;设置页可查看每个账号的额外重置次数与到期时间
-- **Token 与费用统计** —— 按今天 / 昨天 / 本周 / 本月 / 本年 / 7 天 / 30 天 / 全部 / 自定义切换;KPI、堆叠柱状图、按服务占比、按模型明细
-- **丰富的设置** —— 账号开关、菜单栏显示项、悬浮窗、刷新间隔、重置时间显示、中英双语、开机自动启动
+- **额度总览** —— Codex、Claude Code、Antigravity 的 5 小时 / 周窗口剩余额度,菜单栏图标直接显示剩余百分比
+- **悬浮 HUD** —— 可选的桌面悬浮窗,可拖动、边缘吸附、置顶且不抢焦点
+- **多 Codex 账号** —— 导入多个 Codex 账号,主副账号在 Popover 同屏展示;设置页可查看每个账号的额外重置次数与到期时间
+- **用量统计** —— 汇总 Codex、Claude Code 与 Pi 的 Token 用量与费用,按今天 / 昨天 / 本周 / 本月 / 本年 / 近 7 天 / 近 30 天 / 全部 / 自定义范围切换,支持按服务、按模型、按单个对话拆分
+- **额度时间线** —— 5 小时窗口额度随时间变化的记录
+- **设置项** —— 账号开关、菜单栏显示内容、悬浮窗、刷新间隔、重置时间显示、中英双语、开机自启
+
+### 📸 界面预览
 
 <p align="center">
   <img src="docs/Screenshots/statistics-overview.png" width="720" alt="用量统计 - 概览"><br>
-  <sub>概览:本月 Token / 花费汇总、按服务与模型拆分</sub>
+  <sub>概览:Token / 费用汇总,按服务与模型拆分</sub>
 </p>
 
 <p align="center">
@@ -35,64 +54,76 @@
   <sub>时间线:5 小时窗口额度随时间变化</sub>
 </p>
 
-## 安装
+## 📦 安装
 
-要求 macOS 14 Sonoma 或更新版本。Codex / Claude Code 需已通过终端登录；Antigravity 需安装官方 App 或 IDE，并在运行时提供本地额度服务。
+🍎 要求 macOS 14 (Sonoma) 或更新版本。Codex / Claude Code 需已在终端完成登录;Antigravity 需安装官方 App 或 IDE,并在运行时提供本地额度服务。
 
-1. 到 [Releases](https://github.com/nanvon/cc-bar/releases) 下载最新 `CCBar.dmg`,打开后把 `CCBar.app` 拖入 `/Applications`。Release 中也会同时提供 `CCBar.app.zip` 备用。
+1. 从 [Releases](https://github.com/nanvon/cc-bar/releases/latest) 下载 `CCBar.dmg`(或备用的 `CCBar.app.zip`),把 `CCBar.app` 拖入 `/Applications`。
+2. CCBar 未做 Apple 公证,首次启动会被 Gatekeeper 拦截:双击打开被拦下后,到 **系统设置 → 隐私与安全性**,下滑找到 CCBar 的提示,点 **「仍要打开」**。
+3. 若本机没有 `~/.claude/.credentials.json`,应用会在弹出说明后请求 Keychain 授权,请选 **「始终允许」**。
 
-2. CCBar 未做 Apple 付费公证,首次启动会被 Gatekeeper 拦下,需手动放行一次。双击打开被拦截后,到 **系统设置 → 隐私与安全性**,下滑找到 CCBar 的提示,点**「仍要打开」**。
-   (macOS Sequoia 起,旧的「右键 → 打开」已失效,只能用上面这种方式。)
+> [!NOTE]
+> macOS Sequoia 起,旧的「右键 → 打开」放行方式已失效,只能通过上面的系统设置放行。
+> 若仍提示「应用程序已损坏」,可在终端手动去除隔离属性:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/CCBar.app
+> ```
 
-   若上述方式仍无效(例如提示"应用程序已损坏"),可打开「终端」手动放行:
+## 🔒 数据与安全
 
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/CCBar.app
-   ```
+cc-bar 是为个人需求开发的开源小工具。为了查询额度,它会读取本地凭据:
 
-3. 若本机无 `~/.claude/.credentials.json`,会弹出说明后请求 Keychain 授权,请选「**始终允许**」。
+- Codex:`~/.codex/auth.json`
+- Claude Code:`~/.claude/.credentials.json` 与 macOS Keychain
+- Antigravity:仅连接官方进程在 `127.0.0.1` 暴露的本地 Language Server,不保存 Google OAuth 凭据,不启动 CLI,也不发送模型请求
 
-## 关于本项目与安全性
+用量统计基于扫描 Codex、Claude Code 与 Pi(pi coding agent,日志位于 `~/.pi/agent/sessions`)的本机会话日志(JSONL)得出。
 
-cc-bar 是 vibe coding 出来满足个人需求的小工具,并非商业化产品。为了显示额度,它需要读取本地的登录凭据:Codex 的 `~/.codex/auth.json`、Claude Code 的 `~/.claude/.credentials.json` 以及 macOS Keychain。Antigravity 只连接官方进程在 `127.0.0.1` 暴露的本地 Language Server,不保存 Google OAuth 凭据,也不会启动 CLI 或发送模型请求。
+> [!TIP]
+> 发布的 `CCBar.app` 为 ad-hoc 签名、未做 Apple 公证;如果介意,可以自行审阅代码后[从源码构建](#-从源码构建),不依赖发布的二进制包。
 
-发布的 `CCBar.app` 未做 Apple 付费公证(详见上方「安装」)。如果你介意安全性,完全可以**自己用 AI 审阅本仓库代码**,确认无误后**按下方教程自行构建**,不依赖我发布的二进制包。
+## 🔧 从源码构建
 
-## 从源码构建
+需要完整版 Xcode(仅 Command Line Tools 不够)。
 
-需要安装完整 Xcode(非仅 Command Line Tools)。
+**日常开发**:双击 `ccbar.xcodeproj`,选择 scheme `ccbar` 与「My Mac」,⌘R 运行。
 
-**日常开发**:双击 `ccbar.xcodeproj`,选 scheme `ccbar` 与「My Mac」,按 **⌘R** 运行调试。
+**打包分发**:
 
-**打包分发**:用命令行不签名构建,产物为 ad-hoc 签名,可在任意 Mac 上运行,无需付费证书或公证。
+```bash
+# 首次需将命令行工具指向完整 Xcode(一次性)
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-1. 首次需把命令行工具指向完整 Xcode(一次性):
+# Release 构建 + 打包,产物输出到 dist/CCBar.dmg 与 dist/CCBar.app.zip
+./scripts/build.sh
+```
 
-   ```bash
-   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-   ```
+脚本以 `CODE_SIGNING_ALLOWED=NO` 构建,产物为 ad-hoc 签名,可在任意 Mac 上运行,无需付费证书或公证。
 
-2. 在项目根目录执行构建脚本:
+> [!WARNING]
+> 不要用 Xcode 的 Archive 导出分发:那会引入 "Apple Development" 开发证书,产物只能在本机运行。
 
-   ```bash
-   ./scripts/build.sh
-   ```
+## 🔗 相关项目
 
-   脚本会以 `CODE_SIGNING_ALLOWED=NO` 做 Release 构建(工具链自动 ad-hoc 签名),
-   清理扩展属性并同时打包,产物输出到 `dist/CCBar.dmg` 和 `dist/CCBar.app.zip`。
+同一作者的三个应用,共享同一套额度口径与视觉语言:
 
-3. 把 `dist/CCBar.dmg` 和 `dist/CCBar.app.zip` 上传到 GitHub Release 即可。用户首次安装按上方「安装」一节手动放行一次。
+|                                                                  |                                        |
+| ---------------------------------------------------------------- | -------------------------------------- |
+| **cc-bar**(本仓库)                                             | macOS 原生菜单栏版(SwiftUI)          |
+| [**CC Trace**](https://github.com/nanvon/cc-trace)               | 桌面端 · macOS 菜单栏 / Windows 托盘   |
+| [**CC Trace Mobile**](https://github.com/nanvon/cc-trace-mobile) | 移动端 · iOS / Android                 |
 
-> 不要用 Xcode 的 Archive 导出分发:那会引入 "Apple Development" 开发证书,只能在本机运行,拷给别人会打不开。
+CC Trace 在 cc-bar 的功能基础上用 Tauri 重构,同时支持 macOS 与 Windows。三个应用相互独立,数据与设置不互通。
 
-## 反馈
+## 🙏 致谢
 
-请到 [Issues](https://github.com/nanvon/cc-bar/issues) 留言。
+设计与实现参考了以下开源项目:
 
-## 致谢
-
-cc-bar 在设计与实现上参考了以下优秀的开源项目,在此特别感谢:
-
-- [cc-switch](https://github.com/farion1231/cc-switch) —— 多 Provider 账号切换器,启发了本项目的多账号管理与导入流程
+- [cc-switch](https://github.com/farion1231/cc-switch) —— 多 Provider 账号切换器,启发了多账号管理与导入流程
 - [cockpit-tools](https://github.com/jlcodes99/cockpit-tools) —— 多平台 AI 编码助手仪表盘,在额度与刷新策略上提供了参考
 - [CodexBar](https://github.com/steipete/CodexBar) —— macOS 菜单栏 AI 用量监控,在菜单栏交互与本地解析思路上多有借鉴
+
+## 📄 许可证
+
+[MIT](LICENSE)
