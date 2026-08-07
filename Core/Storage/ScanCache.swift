@@ -22,7 +22,8 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
     /// v9: Claude 流式半成品不再入账；旧 seen / rollup 可能已污染，必须全量重建。
     /// v10: 新增 pi 扫描 watermark（`pi` / `piSeenEntryIds`）。
-    static let currentVersion: Int = 10
+    /// v11: 新增 opencode 扫描 watermark（`opencodeLastMessageTime` / `opencodeSeenMessageIds`）。
+    static let currentVersion: Int = 11
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownUsage:)` 不一致即视为缓存失效、全量重扫重算。
@@ -34,6 +35,10 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// pi 扫描 watermark；pi 会话树分支/复制场景按 (entryID@ISO timestamp) 全局去重。
     var pi: [String: ScanFileState] = [:]
     var piSeenEntryIds: [String] = []
+    /// opencode 扫描 watermark：max(message.time_created)（Unix 毫秒），消息只追加。
+    var opencodeLastMessageTime: Int64 = 0
+    /// 跨会话的 opencode message.id 去重集合（compaction 重写 / 时间戳回跳兜底）。
+    var opencodeSeenMessageIds: [String] = []
 }
 
 /// 扫描缓存的读取结论。缓存文件缺失、损坏、版本不符或价格指纹变化都必须显式标为失效，

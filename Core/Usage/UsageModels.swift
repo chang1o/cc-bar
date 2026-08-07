@@ -4,6 +4,7 @@ nonisolated enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
     case codex
     case claude
     case pi
+    case opencode
 }
 
 /// 单次请求实际使用的服务速度档位。`unknown` 只用于日志缺失或出现未来新值时，不能静默按 Standard 计价。

@@ -247,6 +247,7 @@ struct ConversationStatsView: View {
         case .codex: return .codex
         case .claude: return .claude
         case .pi: return .pi
+        case .opencode: return .opencode
         }
     }
 

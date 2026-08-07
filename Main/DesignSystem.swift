@@ -25,6 +25,7 @@ extension UsageApp {
         case .codex: .codexAccent
         case .claude: .claudeAccent
         case .pi: .piAccent
+        case .opencode: .opencodeAccent
         }
     }
 
@@ -33,6 +34,7 @@ extension UsageApp {
         case .codex: "Codex"
         case .claude: "Claude Code"
         case .pi: "Pi"
+        case .opencode: "OpenCode"
         }
     }
 }

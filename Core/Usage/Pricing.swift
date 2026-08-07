@@ -259,6 +259,7 @@ nonisolated enum Pricing {
                 case .codex: return codexFastPrices[key]
                 case .claude: return claudeFastPrices[key]
                 case .pi: return nil
+                case .opencode: return nil
                 }
             }
             switch app {
@@ -273,6 +274,9 @@ nonisolated enum Pricing {
             case .pi:
                 // pi 会话自带 cost 字段，不走本地/在线价格表。
                 return nil
+            case .opencode:
+                // opencode 会话自带官方 cost 字段，不走本地/在线价格表。
+                return nil
             }
         }
     }
@@ -286,6 +290,10 @@ nonisolated enum Pricing {
         }
         if m.hasPrefix("deepseek/") {
             m.removeFirst("deepseek/".count)
+        }
+        // OpenCode 的模型标签形如 `opencode-go/deepseek-v4-flash`，剥 provider 前缀后与本地表/远端目录对齐。
+        if m.hasPrefix("opencode-go/") {
+            m.removeFirst("opencode-go/".count)
         }
         // Vertex 风格：`name@YYYYMMDD`
         if let at = m.firstIndex(of: "@") {
@@ -384,8 +392,9 @@ nonisolated enum Pricing {
         let key = normalize(model: model)
         guard speed != .unknown else { return false }
         if app == .codex, key == "codex-auto-review" { return false }
-        // pi 会话自带 cost 字段，不走本地/在线价格表；缺价无需（也不应）触发远端刷新。
+        // pi / opencode 会话自带 cost 字段，不走本地/在线价格表；缺价无需（也不应）触发远端刷新。
         if app == .pi { return false }
+        if app == .opencode { return false }
         return price(for: key, app: app, speed: speed, at: Date(), inputTotal: 0) == nil
     }
 
@@ -406,6 +415,9 @@ nonisolated enum Pricing {
                 return claudeFastMultipliers[key] ?? derivedClaudeFastMultiplier(for: key)
             case .pi:
                 // pi 无 Fast 档位概念。
+                return nil
+            case .opencode:
+                // opencode 无 Fast 档位概念。
                 return nil
             }
         }
