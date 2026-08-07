@@ -111,6 +111,11 @@ final class SettingsStore {
         didSet { saveProviderDisplaySettings() }
     }
 
+    // 统计页按服务统计的显示配置(Codex / Claude Code / Pi / OpenCode),默认全开。
+    var usageServiceVisibility: [UsageApp: Bool] {
+        didSet { saveUsageServiceVisibility() }
+    }
+
     // 兼容现有调用方的语义化入口。
     var showCodex: Bool {
         get { isProviderEnabled(.codex) }
@@ -183,6 +188,7 @@ final class SettingsStore {
     private init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         providerDisplaySettings = Self.loadProviderDisplaySettings(defaults: defaults)
+        usageServiceVisibility = Self.loadUsageServiceVisibility(defaults: defaults)
         // 菜单栏
         let mbWindowRaw = defaults.string(forKey: Keys.menuBarWindow) ?? MenuBarWindowChoice.primary.rawValue
         if mbWindowRaw == "fiveHour" {
@@ -292,6 +298,50 @@ final class SettingsStore {
         }
     }
 
+    // MARK: - Usage service visibility (Stats by-service)
+
+    /// 该服务是否计入统计页(全站过滤:KPI / Token 拆分 / 按服务 / 按模型 / 每日用量 / 对话页)。
+    func isUsageServiceVisible(_ app: UsageApp) -> Bool {
+        usageServiceVisibility[app, default: true]
+    }
+
+    func setUsageServiceVisible(_ visible: Bool, for app: UsageApp) {
+        usageServiceVisibility[app] = visible
+    }
+
+    /// 按固定顺序(Codex → Claude → Pi → OpenCode)返回可见服务。
+    var visibleUsageApps: [UsageApp] {
+        UsageApp.allCases.filter { isUsageServiceVisible($0) }
+    }
+
+    private static func loadUsageServiceVisibility(
+        defaults: UserDefaults
+    ) -> [UsageApp: Bool] {
+        var result: [UsageApp: Bool] = [:]
+        if let data = defaults.data(forKey: Keys.usageServiceVisibility),
+           let stored = try? JSONDecoder().decode([String: Bool].self, from: data)
+        {
+            for (raw, visible) in stored {
+                if let app = UsageApp(rawValue: raw) {
+                    result[app] = visible
+                }
+            }
+        }
+        for app in UsageApp.allCases where result[app] == nil {
+            result[app] = true
+        }
+        return result
+    }
+
+    private func saveUsageServiceVisibility() {
+        let stored = Dictionary(uniqueKeysWithValues: usageServiceVisibility.map {
+            ($0.key.rawValue, $0.value)
+        })
+        if let data = try? JSONEncoder().encode(stored) {
+            defaults.set(data, forKey: Keys.usageServiceVisibility)
+        }
+    }
+
     /// 把 `appLanguage` 解析为最终渲染语言。`.system` 看系统首选语言是否以 `zh` 开头。
     /// 不用 `Locale.current`:它返回的是 App 当前生效的本地化语言,工程未添加中文资源时会回退到开发语言 `en`,
     /// 导致即便系统设为中文也判定为英文。`Locale.preferredLanguages.first` 反映用户在系统设置中排首位的语言,
@@ -379,6 +429,7 @@ final class SettingsStore {
 
     private enum Keys {
         static let providerDisplaySettings = "ccbar.settings.providerDisplaySettings.v1"
+        static let usageServiceVisibility = "ccbar.settings.usageServiceVisibility.v1"
         // 旧 key 仅用于首次迁移，后续不再写入。
         static let showCodex = "ccbar.settings.showCodex"
         static let showClaude = "ccbar.settings.showClaude"

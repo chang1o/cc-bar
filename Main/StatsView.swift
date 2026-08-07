@@ -141,6 +141,16 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .opencode: return .opencodeAccent
         }
     }
+
+    var usageApp: UsageApp? {
+        switch self {
+        case .all: return nil
+        case .codex: return .codex
+        case .claude: return .claude
+        case .pi: return .pi
+        case .opencode: return .opencode
+        }
+    }
 }
 
 enum StatsViewMode: Hashable {
@@ -184,6 +194,10 @@ struct StatsView: View {
                     }
                 }
             }
+        }
+        .onAppear { reconcileServiceFilter() }
+        .onChange(of: SettingsStore.shared.usageServiceVisibility) { _, _ in
+            reconcileServiceFilter()
         }
     }
 
@@ -238,10 +252,35 @@ struct StatsView: View {
 
     // MARK: Sidebar
 
+    private var visibleUsageApps: [UsageApp] {
+        SettingsStore.shared.visibleUsageApps
+    }
+
+    private var visibleServiceFilters: [StatsServiceFilter] {
+        [.all] + visibleUsageApps.map { filter(for: $0) }
+    }
+
+    private func filter(for app: UsageApp) -> StatsServiceFilter {
+        switch app {
+        case .codex: return .codex
+        case .claude: return .claude
+        case .pi: return .pi
+        case .opencode: return .opencode
+        }
+    }
+
+    /// 设置里被关闭的服务,其 sidebar 项不再显示;若当前选中了被关闭的服务则回退到全部。
+    private func reconcileServiceFilter() {
+        if case .all = serviceFilter { return }
+        if let app = serviceFilter.usageApp, !SettingsStore.shared.isUsageServiceVisible(app) {
+            serviceFilter = .all
+        }
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 16) {
             sidebarGroup(title: "Service", chinese: "服务") {
-                ForEach(StatsServiceFilter.allCases, id: \.self) { item in
+                ForEach(visibleServiceFilters, id: \.self) { item in
                     sidebarItem(
                         english: item.englishLabel,
                         chinese: item.chineseLabel,
@@ -383,81 +422,76 @@ struct StatsView: View {
 
     // MARK: KPI row
 
+    /// 服务卡 ≤ 3 时保持单行(2 合计 + N 服务);超过 3 个则两列网格换行,
+    /// 每张卡占半行宽、两两对齐铺满。
+    @ViewBuilder
     private var kpiRow: some View {
-        HStack(spacing: 12) {
-            KPICard(
-                english: "Total tokens",
-                chinese: "总 Tokens",
-                value: StatsFormatter.compactToken(currentTotalsAll.totalTokens),
-                delta: deltaPercent(current: Double(currentTotalsAll.totalTokens),
-                                    previous: Double(previousTotalsAll.totalTokens)),
-                tint: nil,
-                dimmed: false
-            )
-            KPICard(
-                english: "Total spend",
-                chinese: "总花费",
-                value: StatsFormatter.tierCost(
-                    currentTotalsAll.costUSD,
-                    hasUnpricedUsage: currentTotalsAll.hasUnpricedUsage
-                ),
-                delta: costDelta(current: currentTotalsAll, previous: previousTotalsAll),
-                tint: nil,
-                dimmed: false
-            )
-            KPICard(
-                english: "Codex",
-                chinese: "Codex",
-                value: serviceFilter == .claude || serviceFilter == .pi || serviceFilter == .opencode
-                    ? "—"
-                    : StatsFormatter.tierCost(
-                        currentTotals(.codex).costUSD,
-                        hasUnpricedUsage: currentTotals(.codex).hasUnpricedUsage
-                    ),
-                delta: serviceFilter == .claude || serviceFilter == .pi || serviceFilter == .opencode ? nil : costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
-                tint: .codexAccent,
-                dimmed: serviceFilter == .claude || serviceFilter == .pi || serviceFilter == .opencode
-            )
-            KPICard(
-                english: "Claude Code",
-                chinese: "Claude Code",
-                value: serviceFilter == .codex || serviceFilter == .pi || serviceFilter == .opencode
-                    ? "—"
-                    : StatsFormatter.tierCost(
-                        currentTotals(.claude).costUSD,
-                        hasUnpricedUsage: currentTotals(.claude).hasUnpricedUsage
-                    ),
-                delta: serviceFilter == .codex || serviceFilter == .pi || serviceFilter == .opencode ? nil : costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
-                tint: .claudeAccent,
-                dimmed: serviceFilter == .codex || serviceFilter == .pi || serviceFilter == .opencode
-            )
-            KPICard(
-                english: "Pi",
-                chinese: "Pi",
-                value: serviceFilter == .codex || serviceFilter == .claude || serviceFilter == .opencode
-                    ? "—"
-                    : StatsFormatter.tierCost(
-                        currentTotals(.pi).costUSD,
-                        hasUnpricedUsage: currentTotals(.pi).hasUnpricedUsage
-                    ),
-                delta: serviceFilter == .codex || serviceFilter == .claude || serviceFilter == .opencode ? nil : costDelta(current: currentTotals(.pi), previous: previousTotals(.pi)),
-                tint: .piAccent,
-                dimmed: serviceFilter == .codex || serviceFilter == .claude || serviceFilter == .opencode
-            )
-            KPICard(
-                english: "OpenCode",
-                chinese: "OpenCode",
-                value: serviceFilter == .codex || serviceFilter == .claude || serviceFilter == .pi
-                    ? "—"
-                    : StatsFormatter.tierCost(
-                        currentTotals(.opencode).costUSD,
-                        hasUnpricedUsage: currentTotals(.opencode).hasUnpricedUsage
-                    ),
-                delta: serviceFilter == .codex || serviceFilter == .claude || serviceFilter == .pi ? nil : costDelta(current: currentTotals(.opencode), previous: previousTotals(.opencode)),
-                tint: .opencodeAccent,
-                dimmed: serviceFilter == .codex || serviceFilter == .claude || serviceFilter == .pi
-            )
+        if visibleUsageApps.count > 3 {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 12),
+                    GridItem(.flexible(), spacing: 12)
+                ],
+                spacing: 12
+            ) {
+                totalTokensCard
+                totalSpendCard
+                ForEach(visibleUsageApps, id: \.self) { app in
+                    serviceCard(for: app)
+                }
+            }
+        } else {
+            HStack(spacing: 12) {
+                totalTokensCard
+                totalSpendCard
+                ForEach(visibleUsageApps, id: \.self) { app in
+                    serviceCard(for: app)
+                }
+            }
         }
+    }
+
+    private var totalTokensCard: some View {
+        KPICard(
+            english: "Total tokens",
+            chinese: "总 Tokens",
+            value: StatsFormatter.compactToken(currentTotalsAll.totalTokens),
+            delta: deltaPercent(current: Double(currentTotalsAll.totalTokens),
+                                previous: Double(previousTotalsAll.totalTokens)),
+            tint: nil,
+            dimmed: false
+        )
+    }
+
+    private var totalSpendCard: some View {
+        KPICard(
+            english: "Total spend",
+            chinese: "总花费",
+            value: StatsFormatter.tierCost(
+                currentTotalsAll.costUSD,
+                hasUnpricedUsage: currentTotalsAll.hasUnpricedUsage
+            ),
+            delta: costDelta(current: currentTotalsAll, previous: previousTotalsAll),
+            tint: nil,
+            dimmed: false
+        )
+    }
+
+    private func serviceCard(for app: UsageApp) -> some View {
+        let isDimmed = serviceFilter.usageApp != nil && serviceFilter.usageApp != app
+        return KPICard(
+            english: app.displayName,
+            chinese: app.displayName,
+            value: isDimmed
+                ? "—"
+                : StatsFormatter.tierCost(
+                    currentTotals(app).costUSD,
+                    hasUnpricedUsage: currentTotals(app).hasUnpricedUsage
+                ),
+            delta: isDimmed ? nil : costDelta(current: currentTotals(app), previous: previousTotals(app)),
+            tint: app.tintColor,
+            dimmed: isDimmed
+        )
     }
 
     // MARK: Token breakdown panel
@@ -485,10 +519,9 @@ struct StatsView: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(.tertiary)
                 }
-                LegendChip(color: .codexAccent, label: "Codex")
-                LegendChip(color: .claudeAccent, label: "Claude Code")
-                LegendChip(color: .piAccent, label: "Pi")
-                LegendChip(color: .opencodeAccent, label: "OpenCode")
+                ForEach(visibleUsageApps, id: \.self) { app in
+                    LegendChip(color: app.tintColor, label: app.displayName)
+                }
             }
         )) {
             VStack(spacing: 6) {
@@ -501,45 +534,17 @@ struct StatsView: View {
                 } else {
                     Chart {
                         ForEach(dailySamples) { sample in
-                            BarMark(
-                                x: .value("Day", sample.day, unit: .day),
-                                y: .value("Tokens", Double(sample.codex.totalTokens)),
-                                width: .fixed(dailyBarWidth),
-                                stacking: .standard
-                            )
-                            .foregroundStyle(Color.codexAccent)
-                            .opacity(barOpacity(for: sample))
-                            .cornerRadius(2)
-
-                            BarMark(
-                                x: .value("Day", sample.day, unit: .day),
-                                y: .value("Tokens", Double(sample.claude.totalTokens)),
-                                width: .fixed(dailyBarWidth),
-                                stacking: .standard
-                            )
-                            .foregroundStyle(Color.claudeAccent)
-                            .opacity(barOpacity(for: sample))
-                            .cornerRadius(2)
-
-                            BarMark(
-                                x: .value("Day", sample.day, unit: .day),
-                                y: .value("Tokens", Double(sample.pi.totalTokens)),
-                                width: .fixed(dailyBarWidth),
-                                stacking: .standard
-                            )
-                            .foregroundStyle(Color.piAccent)
-                            .opacity(barOpacity(for: sample))
-                            .cornerRadius(2)
-
-                            BarMark(
-                                x: .value("Day", sample.day, unit: .day),
-                                y: .value("Tokens", Double(sample.opencode.totalTokens)),
-                                width: .fixed(dailyBarWidth),
-                                stacking: .standard
-                            )
-                            .foregroundStyle(Color.opencodeAccent)
-                            .opacity(barOpacity(for: sample))
-                            .cornerRadius(2)
+                            ForEach(visibleUsageApps, id: \.self) { app in
+                                BarMark(
+                                    x: .value("Day", sample.day, unit: .day),
+                                    y: .value("Tokens", Double(sample.totals(for: app).totalTokens)),
+                                    width: .fixed(dailyBarWidth),
+                                    stacking: .standard
+                                )
+                                .foregroundStyle(app.tintColor)
+                                .opacity(barOpacity(for: sample))
+                                .cornerRadius(2)
+                            }
                         }
 
                         if let selected = selectedSample {
@@ -551,7 +556,7 @@ struct StatsView: View {
                                     spacing: 6,
                                     overflowResolution: .init(x: .fit(to: .plot), y: .disabled)
                                 ) {
-                                    DailyTooltip(sample: selected)
+                                    DailyTooltip(sample: selected, visibleApps: visibleUsageApps)
                                 }
                         }
                     }
@@ -578,48 +583,36 @@ struct StatsView: View {
 
     private var byServicePanel: some View {
         Panel(title: "By service", chinese: "按服务") {
-            HStack(alignment: .top, spacing: 16) {
-                ByServiceRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    tint: .codexAccent,
-                    value: currentTotals(.codex).costUSD,
-                    totalValue: currentTotalsAll.costUSD,
-                    totals: currentTotals(.codex),
-                    speed: currentSpeedBreakdown(.codex)
+            if visibleUsageApps.isEmpty {
+                placeholderHeight(
+                    60,
+                    message: tr("No services selected · enable in Settings → Stats services", "未选择任何服务 · 到「设置 → 统计服务」开启")
                 )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                ByServiceRow(
-                    title: "Claude Code",
-                    subtitle: "Anthropic",
-                    tint: .claudeAccent,
-                    value: currentTotals(.claude).costUSD,
-                    totalValue: currentTotalsAll.costUSD,
-                    totals: currentTotals(.claude),
-                    speed: currentSpeedBreakdown(.claude)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                ByServiceRow(
-                    title: "Pi",
-                    subtitle: "pi.dev",
-                    tint: .piAccent,
-                    value: currentTotals(.pi).costUSD,
-                    totalValue: currentTotalsAll.costUSD,
-                    totals: currentTotals(.pi),
-                    speed: currentSpeedBreakdown(.pi)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                ByServiceRow(
-                    title: "OpenCode",
-                    subtitle: "opencode.ai",
-                    tint: .opencodeAccent,
-                    value: currentTotals(.opencode).costUSD,
-                    totalValue: currentTotalsAll.costUSD,
-                    totals: currentTotals(.opencode),
-                    speed: currentSpeedBreakdown(.opencode)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(visibleUsageApps, id: \.self) { app in
+                        ByServiceRow(
+                            title: app.displayName,
+                            subtitle: serviceSubtitle(app),
+                            tint: app.tintColor,
+                            value: currentTotals(app).costUSD,
+                            totalValue: currentTotalsAll.costUSD,
+                            totals: currentTotals(app),
+                            speed: currentSpeedBreakdown(app)
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
+        }
+    }
+
+    private func serviceSubtitle(_ app: UsageApp) -> String {
+        switch app {
+        case .codex: return "OpenAI"
+        case .claude: return "Anthropic"
+        case .pi: return "pi.dev"
+        case .opencode: return "opencode.ai"
         }
     }
 
@@ -628,29 +621,22 @@ struct StatsView: View {
     private var byModelPanel: some View {
         Panel(title: "By model", chinese: "按模型") {
             VStack(alignment: .leading, spacing: 10) {
-                if serviceFilter != .claude && serviceFilter != .pi && serviceFilter != .opencode {
-                    modelGroup(title: "Codex", tint: .codexAccent, rows: modelRows(for: .codex))
-                }
-                if serviceFilter == .all {
-                    Divider()
-                }
-                if serviceFilter != .codex && serviceFilter != .pi && serviceFilter != .opencode {
-                    modelGroup(title: "Claude Code", tint: .claudeAccent, rows: modelRows(for: .claude))
-                }
-                if serviceFilter == .all {
-                    Divider()
-                }
-                if serviceFilter != .codex && serviceFilter != .claude && serviceFilter != .opencode {
-                    modelGroup(title: "Pi", tint: .piAccent, rows: modelRows(for: .pi))
-                }
-                if serviceFilter == .all {
-                    Divider()
-                }
-                if serviceFilter != .codex && serviceFilter != .claude && serviceFilter != .pi {
-                    modelGroup(title: "OpenCode", tint: .opencodeAccent, rows: modelRows(for: .opencode))
+                ForEach(Array(visibleUsageApps.enumerated()), id: \.element) { index, app in
+                    if index > 0 {
+                        Divider()
+                    }
+                    if showsModelGroup(app) {
+                        modelGroup(title: app.displayName, tint: app.tintColor, rows: modelRows(for: app))
+                    }
                 }
             }
         }
+    }
+
+    /// 单服务过滤时只显示该服务的模型组;「全部」时显示所有可见服务。
+    private func showsModelGroup(_ app: UsageApp) -> Bool {
+        guard let filter = serviceFilter.usageApp else { return true }
+        return filter == app
     }
 
     // MARK: Timeline
@@ -829,6 +815,7 @@ struct StatsView: View {
     private func filteredBuckets(from: Date, to: Date) -> [UsageBucket] {
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.day >= from && $0.day < to }
+            .filter { SettingsStore.shared.isUsageServiceVisible($0.app) }
         switch serviceFilter {
         case .all:
             return buckets
@@ -887,6 +874,7 @@ struct StatsView: View {
         guard let bounds = previousRangeBounds else { return .zero }
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.day >= bounds.from && $0.day < bounds.to }
+            .filter { SettingsStore.shared.isUsageServiceVisible($0.app) }
         var t = UsageTotals.zero
         for b in buckets {
             if serviceFilter == .codex && b.app != .codex { continue }
@@ -899,6 +887,7 @@ struct StatsView: View {
     }
 
     private func previousTotals(_ app: UsageApp) -> UsageTotals {
+        guard SettingsStore.shared.isUsageServiceVisible(app) else { return .zero }
         guard let bounds = previousRangeBounds else { return .zero }
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.app == app && $0.day >= bounds.from && $0.day < bounds.to }
@@ -1055,6 +1044,7 @@ private struct LegendChip: View {
 /// 每日用量柱状图的悬浮浮层:展示某天各服务花费、合计花费与合计 tokens。
 private struct DailyTooltip: View {
     let sample: DailySample
+    let visibleApps: [UsageApp]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1062,22 +1052,12 @@ private struct DailyTooltip: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            serviceRow(color: .codexAccent, label: "Codex", value: StatsFormatter.tierCost(
-                sample.codexCost,
-                hasUnpricedUsage: sample.codex.hasUnpricedUsage
-            ))
-            serviceRow(color: .claudeAccent, label: "Claude Code", value: StatsFormatter.tierCost(
-                sample.claudeCost,
-                hasUnpricedUsage: sample.claude.hasUnpricedUsage
-            ))
-            serviceRow(color: .piAccent, label: "Pi", value: StatsFormatter.tierCost(
-                sample.piCost,
-                hasUnpricedUsage: sample.pi.hasUnpricedUsage
-            ))
-            serviceRow(color: .opencodeAccent, label: "OpenCode", value: StatsFormatter.tierCost(
-                sample.opencodeCost,
-                hasUnpricedUsage: sample.opencode.hasUnpricedUsage
-            ))
+            ForEach(visibleApps, id: \.self) { app in
+                serviceRow(color: app.tintColor, label: app.displayName, value: StatsFormatter.tierCost(
+                    sample.cost(for: app),
+                    hasUnpricedUsage: sample.totals(for: app).hasUnpricedUsage
+                ))
+            }
 
             Divider()
 
@@ -1697,6 +1677,24 @@ private struct DailySample: Identifiable {
     var opencodeCost: Decimal { opencode.costUSD }
     var totalCost: Decimal { codexCost + claudeCost + piCost + opencodeCost }
     var totalTokens: Int { totalUsage.totalTokens }
+
+    func totals(for app: UsageApp) -> UsageTotals {
+        switch app {
+        case .codex: return codex
+        case .claude: return claude
+        case .pi: return pi
+        case .opencode: return opencode
+        }
+    }
+
+    func cost(for app: UsageApp) -> Decimal {
+        switch app {
+        case .codex: return codexCost
+        case .claude: return claudeCost
+        case .pi: return piCost
+        case .opencode: return opencodeCost
+        }
+    }
 
     /// codex + claude + pi + opencode 合并后的口径,供每日悬浮明细展示 token 拆分 + 命中率。
     var totalUsage: UsageTotals {

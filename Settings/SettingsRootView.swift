@@ -23,6 +23,7 @@ struct SettingsRootView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 accountsGroup(settings: settings)
+                statsServicesGroup(settings: settings)
                 menuBarGroup(settings: settings)
                 floatingGroup(settings: settings)
                 refreshGroup(settings: settings)
@@ -144,6 +145,33 @@ struct SettingsRootView: View {
             switch result {
             case .success(let fetched): codexResetCreditsState = .success(fetched)
             case .failure(let err): codexResetCreditsState = .failure(err.description)
+            }
+        }
+    }
+
+    // MARK: Stats services
+
+    private func statsServicesGroup(settings: SettingsStore) -> some View {
+        PrefsGroup(
+            title: "Stats services",
+            chinese: "统计服务",
+            desc: "Choose which services count in usage statistics.",
+            chineseDesc: "勾选要计入用量统计的服务,关闭后从统计中隐藏"
+        ) {
+            ForEach(UsageApp.allCases, id: \.self) { app in
+                PrefsRow(
+                    label: app.displayName,
+                    chinese: app.displayName,
+                    leading: AnyView(ServiceMark(color: app.tintColor, size: 8))
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { settings.isUsageServiceVisible(app) },
+                        set: { settings.setUsageServiceVisible($0, for: app) }
+                    ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(.green)
+                }
             }
         }
     }
@@ -550,12 +578,14 @@ private struct PrefsGroup<Content: View>: View {
 private struct PrefsRow<Trailing: View>: View {
     let label: String
     let chinese: String
+    var leading: AnyView? = nil
     var desc: String? = nil
     var chineseDesc: String? = nil
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
+            if let leading { leading }
             VStack(alignment: .leading, spacing: 1) {
                 Text(tr(label, chinese))
                     .font(.system(size: 12.5))
