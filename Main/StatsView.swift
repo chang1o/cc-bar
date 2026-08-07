@@ -422,31 +422,12 @@ struct StatsView: View {
 
     // MARK: KPI row
 
-    /// 服务卡 ≤ 3 时保持单行(2 合计 + N 服务);超过 3 个则两列网格换行,
-    /// 每张卡占半行宽、两两对齐铺满。
-    @ViewBuilder
     private var kpiRow: some View {
-        if visibleUsageApps.count > 3 {
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 12),
-                    GridItem(.flexible(), spacing: 12)
-                ],
-                spacing: 12
-            ) {
-                totalTokensCard
-                totalSpendCard
-                ForEach(visibleUsageApps, id: \.self) { app in
-                    serviceCard(for: app)
-                }
-            }
-        } else {
-            HStack(spacing: 12) {
-                totalTokensCard
-                totalSpendCard
-                ForEach(visibleUsageApps, id: \.self) { app in
-                    serviceCard(for: app)
-                }
+        HStack(spacing: 12) {
+            totalTokensCard
+            totalSpendCard
+            ForEach(visibleUsageApps, id: \.self) { app in
+                serviceCard(for: app)
             }
         }
     }
@@ -581,6 +562,9 @@ struct StatsView: View {
 
     // MARK: By service panel
 
+    /// 服务数 ≤ 3 时单行排列;超过 3 个(全开时 4 个)改两列网格,
+    /// 每列占半行宽、两两对齐铺满。
+    @ViewBuilder
     private var byServicePanel: some View {
         Panel(title: "By service", chinese: "按服务") {
             if visibleUsageApps.isEmpty {
@@ -588,23 +572,40 @@ struct StatsView: View {
                     60,
                     message: tr("No services selected · enable in Settings → Stats services", "未选择任何服务 · 到「设置 → 统计服务」开启")
                 )
+            } else if visibleUsageApps.count > 3 {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 16),
+                        GridItem(.flexible(), spacing: 16)
+                    ],
+                    alignment: .leading,
+                    spacing: 16
+                ) {
+                    ForEach(visibleUsageApps, id: \.self) { app in
+                        serviceRow(for: app)
+                    }
+                }
             } else {
                 HStack(alignment: .top, spacing: 16) {
                     ForEach(visibleUsageApps, id: \.self) { app in
-                        ByServiceRow(
-                            title: app.displayName,
-                            subtitle: serviceSubtitle(app),
-                            tint: app.tintColor,
-                            value: currentTotals(app).costUSD,
-                            totalValue: currentTotalsAll.costUSD,
-                            totals: currentTotals(app),
-                            speed: currentSpeedBreakdown(app)
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        serviceRow(for: app)
                     }
                 }
             }
         }
+    }
+
+    private func serviceRow(for app: UsageApp) -> some View {
+        ByServiceRow(
+            title: app.displayName,
+            subtitle: serviceSubtitle(app),
+            tint: app.tintColor,
+            value: currentTotals(app).costUSD,
+            totalValue: currentTotalsAll.costUSD,
+            totals: currentTotals(app),
+            speed: currentSpeedBreakdown(app)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func serviceSubtitle(_ app: UsageApp) -> String {
