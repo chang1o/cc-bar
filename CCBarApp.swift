@@ -19,7 +19,7 @@ struct CCBarApp: App {
             MainWindowRootView()
                 .environment(appState)
         }
-        .defaultSize(width: 1280, height: 680)
+        .defaultSize(width: 1600, height: 1100)
         .commands {
             AppCommands(appState: appState)
         }
