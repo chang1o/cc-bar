@@ -67,7 +67,10 @@ struct SettingsRootView: View {
                         plan: appState.codexAccount?.planType,
                         availability: appState.codexAccount == nil ? .notDetected : .connected,
                         canToggle: appState.codexAccount != nil,
-                        isOn: Binding(get: { settings.showCodex }, set: { settings.showCodex = $0 }),
+                        isOn: Binding(
+                            get: { appState.codexAccount == nil ? false : settings.showCodex },
+                            set: { settings.showCodex = $0 }
+                        ),
                         accessory: appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
                     )
                     if codexResetCreditsExpanded, let state = codexResetCreditsState {
@@ -84,7 +87,10 @@ struct SettingsRootView: View {
                     plan: appState.claudeAccount?.subscriptionType,
                     availability: appState.claudeAccount == nil ? .notDetected : .connected,
                     canToggle: appState.claudeAccount != nil,
-                    isOn: Binding(get: { settings.showClaude }, set: { settings.showClaude = $0 })
+                    isOn: Binding(
+                        get: { appState.claudeAccount == nil ? false : settings.showClaude },
+                        set: { settings.showClaude = $0 }
+                    )
                 )
                 AccountRow(
                     title: "Antigravity",
