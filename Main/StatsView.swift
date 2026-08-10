@@ -156,6 +156,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
 enum StatsViewMode: Hashable {
     case overview
     case conversations
+    case cycles
     case timeline
 }
 
@@ -199,6 +200,9 @@ struct StatsView: View {
         .onChange(of: SettingsStore.shared.usageServiceVisibility) { _, _ in
             reconcileServiceFilter()
         }
+        .onChange(of: viewMode) { _, _ in
+            reconcileServiceFilter()
+        }
     }
 
     /// 宽度断点:主画布达到该宽度时,时间线的折线图与表格改为左右并排;
@@ -213,6 +217,8 @@ struct StatsView: View {
             overviewContent
         case .conversations:
             EmptyView()
+        case .cycles:
+            CycleStatsView(serviceFilter: serviceFilter)
         case .timeline:
             timelineContent(isWide: isWide)
         }
@@ -257,7 +263,10 @@ struct StatsView: View {
     }
 
     private var visibleServiceFilters: [StatsServiceFilter] {
-        [.all] + visibleUsageApps.map { filter(for: $0) }
+        let apps = viewMode == .cycles
+            ? visibleUsageApps.filter { $0 == .codex || $0 == .claude }
+            : visibleUsageApps
+        return [.all] + apps.map { filter(for: $0) }
     }
 
     private func filter(for app: UsageApp) -> StatsServiceFilter {
@@ -272,6 +281,10 @@ struct StatsView: View {
     /// 设置里被关闭的服务,其 sidebar 项不再显示;若当前选中了被关闭的服务则回退到全部。
     private func reconcileServiceFilter() {
         if case .all = serviceFilter { return }
+        if viewMode == .cycles, serviceFilter == .pi || serviceFilter == .opencode {
+            serviceFilter = .all
+            return
+        }
         if let app = serviceFilter.usageApp, !SettingsStore.shared.isUsageServiceVisible(app) {
             serviceFilter = .all
         }
@@ -316,6 +329,14 @@ struct StatsView: View {
                     active: viewMode == .timeline
                 ) {
                     viewMode = .timeline
+                }
+                sidebarItem(
+                    english: "Cycles",
+                    chinese: "周期",
+                    icon: "arrow.triangle.2.circlepath",
+                    active: viewMode == .cycles
+                ) {
+                    viewMode = .cycles
                 }
             }
 

@@ -7,7 +7,9 @@ import Observation
 final class UsageService {
     let aggregator = UsageAggregator()
     let conversationAggregator = ConversationAggregator()
+    let cycleAggregator = CycleUsageAggregator()
     private(set) var isScanning = false
+    private(set) var isCycleRebuilding = false
     private(set) var isRefreshingPricingCatalog = false
     private(set) var lastScanAt: Date?
     private(set) var lastError: String?
@@ -16,6 +18,8 @@ final class UsageService {
     private var scanQueued = false
     private var requiresFullRebuild = false
     private var loadedRollupGeneration: String?
+    private var loadedCycleGeneration: String?
+    private var cycleInitialRebuildCompletedAt: Date?
     /// 上一轮成功提交的 ScanState 常驻内存，避免每轮扫描都从磁盘重读重解码
     /// scan-state.json（随文件数和 seen ID 增长，本地实测已近 1MB）。
     /// 冷启动首轮才从磁盘恢复；持久化失败时清空内存副本，
@@ -24,21 +28,35 @@ final class UsageService {
 
     func bootstrap(appState: AppState) {
         self.appState = appState
-        // 只有两份 rollup 同代才允许恢复，避免部分写入后把旧桶和新 watermark 混用。
+        // 日聚合与对话两份主 rollup 必须同代；周期 rollup 也只在同代、同价格指纹时恢复。
         let payload = UsageRollupCache.load()
         let conversationPayload = ConversationRollupCache.load()
+        let cyclePayload = CycleUsageRollupCache.load()
         let generationsMatch = !payload.generationID.isEmpty
             && payload.generationID == conversationPayload.generationID
         if generationsMatch {
             aggregator.load(from: payload.buckets)
             conversationAggregator.load(infos: conversationPayload.infos, buckets: conversationPayload.buckets)
             loadedRollupGeneration = payload.generationID
+            if cyclePayload.generationID == payload.generationID,
+               cyclePayload.pricingFingerprint == payload.pricingFingerprint {
+                cycleAggregator.load(from: cyclePayload.buckets)
+                loadedCycleGeneration = cyclePayload.generationID
+                cycleInitialRebuildCompletedAt = cyclePayload.initialRebuildCompletedAt
+            } else {
+                cycleAggregator.load(from: [])
+                loadedCycleGeneration = nil
+                cycleInitialRebuildCompletedAt = nil
+            }
             lastScanAt = max(payload.updatedAt, conversationPayload.updatedAt)
         } else {
             aggregator.load(from: [])
             conversationAggregator.load(infos: [], buckets: [])
+            cycleAggregator.load(from: [])
             requiresFullRebuild = true
             loadedRollupGeneration = nil
+            loadedCycleGeneration = nil
+            cycleInitialRebuildCompletedAt = nil
             lastScanAt = nil
         }
         // 个人历史用量一次性补录：见 ImportedUsageBackfill 注释。这里先合并一次保证扫描前即可展示；
@@ -70,7 +88,10 @@ final class UsageService {
                 cachedScanState = nil
                 aggregator.load(from: [])
                 conversationAggregator.load(infos: [], buckets: [])
+                cycleAggregator.load(from: [])
                 loadedRollupGeneration = nil
+                loadedCycleGeneration = nil
+                cycleInitialRebuildCompletedAt = nil
                 publishTotals()
             }
             if await runScan(prev: cacheResult.state) {
@@ -83,10 +104,72 @@ final class UsageService {
         } while scanQueued
     }
 
+    /// 周期边界首次建立或滚动后，只从周期功能启用时间起重建精确请求归属。
+    /// 使用空 watermark 读取 JSONL，但账号时间段会排除启用前日志，且不读取日聚合或补录数据。
+    func invalidateCycleRebuild() {
+        cycleInitialRebuildCompletedAt = nil
+    }
+
+    func rebuildCycleUsageIfNeeded() async {
+        guard cycleInitialRebuildCompletedAt == nil else { return }
+        guard let appState, !appState.quotaCycles.records.isEmpty else { return }
+        while isScanning || isCycleRebuilding {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if cycleInitialRebuildCompletedAt != nil { return }
+        }
+
+        isCycleRebuilding = true
+        isScanning = true
+        defer {
+            isCycleRebuilding = false
+            isScanning = false
+            if scanQueued {
+                Task { await scanNow() }
+            }
+        }
+        let started = Date()
+        async let claudeTask = Task.detached(priority: .utility) {
+            ClaudeJSONLScanner.scan(previous: [:], seenMessageIds: [])
+        }.value
+        async let codexTask = Task.detached(priority: .utility) {
+            CodexJSONLScanner.scan(previous: [:])
+        }.value
+        let claude = await claudeTask
+        let codex = await codexTask
+        let completedAt = Date()
+
+        cycleAggregator.rebuild(
+            exactEntries: claude.entries + codex.entries,
+            cycles: appState.quotaCycles.records,
+            accountSegments: appState.quotaCycles.accountSegments
+        )
+        let generationID = loadedRollupGeneration ?? UUID().uuidString
+        let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: aggregator.snapshot()))
+        let rollup = CycleUsageRollupPayload(
+            generationID: generationID,
+            pricingFingerprint: fingerprint,
+            buckets: cycleAggregator.snapshot(),
+            initialRebuildCompletedAt: completedAt,
+            updatedAt: completedAt
+        )
+        do {
+            try await Task.detached(priority: .utility) {
+                try CycleUsageRollupCache.save(rollup)
+            }.value
+            loadedCycleGeneration = generationID
+            cycleInitialRebuildCompletedAt = completedAt
+            let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
+            print("[CycleUsage 周期用量] initial rebuild completed elapsed=\(elapsed)")
+        } catch {
+            lastError = "cycle usage rebuild failed: \(error)"
+            print("[CycleUsage 周期用量] initial rebuild failed: \(error)")
+        }
+    }
+
     /// 决定本轮扫描的起点状态。优先用内存里上一轮已提交的 ScanState；
     /// 内存路径与磁盘路径执行同样的校验——generationID 须与已加载 rollup 同代、
     /// 价格指纹须与当前 active 价格目录一致（commitPending 提交新价格后指纹变化，
-    /// 照旧触发全量重建）。只有冷启动且两份 rollup 恢复成功时，
+    /// 照旧触发全量重建）。只有冷启动且日聚合、对话两份主 rollup 恢复成功时，
     /// 首轮需要读盘取得与它们同代的 ScanState。
     private func resolveScanState(knownUsage: Set<PricingUsageKey>) async -> ScanCacheLoadResult {
         if requiresFullRebuild { return .invalidated }
@@ -125,7 +208,10 @@ final class UsageService {
         cachedScanState = nil
         aggregator.load(from: [])
         conversationAggregator.load(infos: [], buckets: [])
+        cycleAggregator.load(from: [])
         loadedRollupGeneration = nil
+        loadedCycleGeneration = nil
+        cycleInitialRebuildCompletedAt = nil
         publishTotals()
         requiresFullRebuild = true
         if await runScan(prev: ScanState()) {
@@ -136,7 +222,9 @@ final class UsageService {
                 cachedScanState = nil
                 aggregator.load(from: [])
                 conversationAggregator.load(infos: [], buckets: [])
+                cycleAggregator.load(from: [])
                 loadedRollupGeneration = nil
+                loadedCycleGeneration = nil
                 publishTotals()
                 requiresFullRebuild = true
                 if await runScan(prev: ScanState()) {
@@ -187,6 +275,7 @@ final class UsageService {
         aggregator.ingest(codex.entries)
         aggregator.ingest(pi.entries)
         aggregator.ingest(opencode.entries)
+        let cycleEntries = claude.entries + codex.entries
         let conversationChanged = conversationAggregator.ingest(
             entries: claude.entries + codex.entries + pi.entries + opencode.entries,
             seeds: claude.conversationSeeds + codex.conversationSeeds + pi.conversationSeeds + opencode.conversationSeeds
@@ -197,6 +286,24 @@ final class UsageService {
         // 每轮扫描都按天去重重新合并，保证快照与指纹始终包含补录数据。
         let existingClaudeDays = Set(aggregator.snapshot().filter { $0.app == .claude }.map(\.day))
         aggregator.ingest(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
+
+        let cycles = appState?.quotaCycles.records ?? []
+        let cycleChanged: Bool
+        if prev.generationID.isEmpty, !cycles.isEmpty {
+            cycleAggregator.rebuild(
+                exactEntries: cycleEntries,
+                cycles: cycles,
+                accountSegments: appState?.quotaCycles.accountSegments ?? []
+            )
+            cycleInitialRebuildCompletedAt = Date()
+            cycleChanged = true
+        } else {
+            cycleChanged = cycleAggregator.ingest(
+                entries: cycleEntries,
+                cycles: cycles,
+                accountSegments: appState?.quotaCycles.accountSegments ?? []
+            )
+        }
 
         // 没有真实用量或档案变化时沿用现有代次，只提交轻量 watermark。
         let buckets = aggregator.snapshot()
@@ -219,6 +326,7 @@ final class UsageService {
 
         let rollup: UsageRollupPayload?
         let conversationRollup: ConversationRollupPayload?
+        let cycleRollup: CycleUsageRollupPayload?
         if shouldWriteRollups {
             let updatedAt = Date()
             let conversationSnapshot = conversationAggregator.snapshot()
@@ -235,9 +343,27 @@ final class UsageService {
                 buckets: conversationSnapshot.buckets,
                 updatedAt: updatedAt
             )
+            cycleRollup = CycleUsageRollupPayload(
+                generationID: generationID,
+                pricingFingerprint: fingerprint,
+                buckets: cycleAggregator.snapshot(),
+                initialRebuildCompletedAt: cycleInitialRebuildCompletedAt,
+                updatedAt: updatedAt
+            )
         } else {
             rollup = nil
             conversationRollup = nil
+            if cycleChanged || loadedCycleGeneration == nil {
+                cycleRollup = CycleUsageRollupPayload(
+                    generationID: generationID,
+                    pricingFingerprint: fingerprint,
+                    buckets: cycleAggregator.snapshot(),
+                    initialRebuildCompletedAt: cycleInitialRebuildCompletedAt,
+                    updatedAt: Date()
+                )
+            } else {
+                cycleRollup = nil
+            }
         }
 
         let persistenceError: String? = await Task.detached(priority: .utility) {
@@ -246,6 +372,9 @@ final class UsageService {
                     // 聚合结果先落盘，watermark 最后提交；generationID 用于启动时识别中断写入。
                     try UsageRollupCache.save(rollup)
                     try ConversationRollupCache.save(conversationRollup)
+                }
+                if let cycleRollup {
+                    try CycleUsageRollupCache.save(cycleRollup)
                 }
                 if shouldWriteScanState {
                     try ScanCache.save(newScanState)
@@ -271,6 +400,9 @@ final class UsageService {
         }
 
         loadedRollupGeneration = generationID
+        if cycleRollup != nil {
+            loadedCycleGeneration = generationID
+        }
         cachedScanState = newScanState
         lastScanAt = Date()
         lastError = nil

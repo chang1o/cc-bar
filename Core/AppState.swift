@@ -82,6 +82,7 @@ final class AppState {
         set { updatePrimaryState(.antigravity) { $0.refresh = newValue } }
     }
     var quotaHistory = QuotaHistoryPayload()
+    var quotaCycles = QuotaCyclePayload()
 
     var codexTodayCost: Decimal?
     var claudeTodayCost: Decimal?
@@ -122,11 +123,13 @@ final class AppState {
         subscribeToDelegatedRefreshSuccess()
         loadQuotaCache()
         loadQuotaHistory()
+        loadQuotaCycles()
         reloadImportedCodexAccounts()
         usageService.bootstrap(appState: self)
         await loadCodex()
         maybeShowKeychainPrompt()
         await loadClaude()
+        recordCachedQuotaCycleObservations()
         antigravityAvailability = await AntigravityQuotaClient.detectAvailability()
         logCredentialSummary()
 
@@ -141,7 +144,10 @@ final class AppState {
             usageInterval: settings.usageInterval.seconds
         )
         // 启动后台触发一次 JSONL 扫描，让今日 cost 立刻更新（不阻塞 bootstrap）
-        Task { await usageService.scanNow() }
+        Task {
+            await usageService.scanNow()
+            await usageService.rebuildCycleUsageIfNeeded()
+        }
         // 启动后异步拉一次服务状态;后续由 Scheduler 5 分钟刷新一次
         Task { await refreshServiceStatus() }
     }
@@ -291,6 +297,32 @@ final class AppState {
     private func loadQuotaHistory() {
         quotaHistory = QuotaHistoryStore.load()
         saveQuotaHistory()
+    }
+
+    private func loadQuotaCycles() {
+        quotaCycles = QuotaCycleStore.load()
+    }
+
+    private func recordCachedQuotaCycleObservations() {
+        let observedAt = Date()
+        if let record = quotaCache.codex, codexAccount != nil {
+            recordQuotaCycles(
+                accountKey: QuotaHistoryAccountKey.codexPrimary(accountId: codexAccount?.accountId),
+                app: .codex,
+                snapshot: record.snapshot,
+                source: .cache,
+                sampledAt: observedAt
+            )
+        }
+        if let record = quotaCache.claude, claudeAccount != nil {
+            recordQuotaCycles(
+                accountKey: QuotaHistoryAccountKey.claudePrimary(),
+                app: .claude,
+                snapshot: record.snapshot,
+                source: .cache,
+                sampledAt: observedAt
+            )
+        }
     }
 
     // MARK: - Imported Codex accounts
@@ -776,6 +808,51 @@ final class AppState {
         }
     }
 
+    private func recordQuotaCycles(
+        accountKey: String,
+        app: UsageApp,
+        snapshot: QuotaSnapshot,
+        source: QuotaSnapshotSource,
+        sampledAt: Date
+    ) {
+        let next = QuotaCycleStore.record(
+            payload: quotaCycles,
+            accountKey: accountKey,
+            app: app,
+            snapshot: snapshot,
+            source: source,
+            sampledAt: sampledAt
+        )
+        guard next != quotaCycles else { return }
+        let previousPartition = cycleUsagePartition(for: quotaCycles)
+        let previousAccountSegments = quotaCycles.accountSegments
+        quotaCycles = next
+        do {
+            try QuotaCycleStore.save(next)
+        } catch {
+            print("[QuotaCycle 周期历史] save failed: \(error)")
+        }
+        if cycleUsagePartition(for: next) != previousPartition
+            || next.accountSegments != previousAccountSegments
+        {
+            usageService.invalidateCycleRebuild()
+            Task { await usageService.rebuildCycleUsageIfNeeded() }
+        }
+    }
+
+    private func cycleUsagePartition(for payload: QuotaCyclePayload) -> [String] {
+        payload.records.flatMap { cycle in
+            let cycleBoundary = [
+                "cycle|\(cycle.id)|\(cycle.startAt.timeIntervalSince1970)|\(cycle.endAt.timeIntervalSince1970)",
+            ]
+            let allowanceBoundaries = cycle.allowanceSegments.map { segment in
+                "allowance|\(segment.id)|\(segment.startAt.timeIntervalSince1970)|\(segment.endAt?.timeIntervalSince1970 ?? -1)"
+            }
+            return cycleBoundary + allowanceBoundaries
+        }
+        .sorted()
+    }
+
     private func loadCodex() async {
         do {
             var next = try await Task.detached(priority: .utility) {
@@ -1096,6 +1173,13 @@ final class AppState {
         quotaCache.codex = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
         saveQuotaCache()
         recordCodexQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
+        recordQuotaCycles(
+            accountKey: QuotaHistoryAccountKey.codexPrimary(accountId: codexAccount?.accountId),
+            app: .codex,
+            snapshot: mergedSnapshot,
+            source: source,
+            sampledAt: updatedAt
+        )
     }
 
     private func storeClaude(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
@@ -1113,6 +1197,13 @@ final class AppState {
         quotaCache.claude = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
         saveQuotaCache()
         recordClaudeQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
+        recordQuotaCycles(
+            accountKey: QuotaHistoryAccountKey.claudePrimary(),
+            app: .claude,
+            snapshot: mergedSnapshot,
+            source: source,
+            sampledAt: updatedAt
+        )
     }
 
     private func storeAntigravity(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {

@@ -163,6 +163,645 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(payload.lastSamples["codex:primary"]?.limitKind, .fiveHour)
     }
 
+    func testCycleStoreRecordsFiveHourAndWeeklyButExcludesModelWeekly() {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let fiveHourEnd = sampledAt.addingTimeInterval(18_000)
+        let weeklyEnd = sampledAt.addingTimeInterval(604_800)
+        let snapshot = QuotaSnapshot(
+            app: .claude,
+            primaryLimit: .standard(
+                kind: .fiveHour,
+                window: QuotaWindow(usedPercent: 12, resetsAt: fiveHourEnd, windowSeconds: 18_000)
+            ),
+            secondaryLimit: .standard(
+                kind: .weekly,
+                window: QuotaWindow(usedPercent: 34, resetsAt: weeklyEnd, windowSeconds: 604_800)
+            ),
+            modelLimits: [
+                .model(
+                    id: "opus",
+                    displayName: "Opus",
+                    window: QuotaWindow(usedPercent: 50, resetsAt: weeklyEnd, windowSeconds: 604_800),
+                    isActive: true
+                )
+            ],
+            planType: nil,
+            fetchedAt: sampledAt
+        )
+
+        let result = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot,
+            source: .api,
+            sampledAt: sampledAt
+        )
+
+        XCTAssertEqual(Set(result.records.map(\.limitKind)), Set([.fiveHour, .weekly]))
+        XCTAssertEqual(result.records.count, 2)
+    }
+
+    func testCycleStoreDeduplicatesSnapshotsAndRollsAtNewReset() {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let firstReset = sampledAt.addingTimeInterval(18_000)
+        var payload = QuotaCyclePayload(trackingStartedAt: sampledAt)
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "codex:primary:test",
+            app: .codex,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 10, reset: firstReset),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "codex:primary:test",
+            app: .codex,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 25, reset: firstReset),
+            source: .api,
+            sampledAt: sampledAt.addingTimeInterval(60)
+        )
+        XCTAssertEqual(payload.records.count, 1)
+        XCTAssertEqual(payload.records.first?.latestUsedPercent, 25)
+        XCTAssertEqual(payload.records.first?.latestAllowanceSegment?.maximumUsedPercent, 25)
+
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "codex:primary:test",
+            app: .codex,
+            snapshot: snapshot(
+                kind: .fiveHour,
+                usedPercent: 1,
+                reset: firstReset.addingTimeInterval(18_000)
+            ),
+            source: .api,
+            sampledAt: firstReset.addingTimeInterval(60)
+        )
+        XCTAssertEqual(payload.records.count, 2)
+    }
+
+    func testCycleStoreCreatesNewAllowanceWhenUsageResetsWithoutChangingResetTime() throws {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let resetAt = sampledAt.addingTimeInterval(18_000)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 80, reset: resetAt),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        let benefitResetAt = sampledAt.addingTimeInterval(60)
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 0, reset: resetAt),
+            source: .api,
+            sampledAt: benefitResetAt
+        )
+
+        let cycle = try XCTUnwrap(payload.records.first)
+        XCTAssertEqual(payload.records.count, 1)
+        XCTAssertEqual(cycle.latestUsedPercent, 0)
+        XCTAssertEqual(cycle.extraResetCount, 1)
+        XCTAssertEqual(cycle.allowanceSegments.count, 2)
+        XCTAssertEqual(cycle.allowanceSegments[0].endAt, benefitResetAt)
+        XCTAssertEqual(cycle.allowanceSegments[1].startReason, .extraReset)
+        XCTAssertEqual(cycle.allowanceSegments[1].baselineUsedPercent, 0)
+    }
+
+    func testCycleStoreDoesNotTreatSmallPercentageCorrectionAsExtraReset() throws {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let resetAt = sampledAt.addingTimeInterval(18_000)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 25, reset: resetAt),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 24, reset: resetAt),
+            source: .api,
+            sampledAt: sampledAt.addingTimeInterval(60)
+        )
+
+        let cycle = try XCTUnwrap(payload.records.first)
+        XCTAssertEqual(cycle.extraResetCount, 0)
+        XCTAssertEqual(cycle.latestUsedPercent, 24)
+        XCTAssertEqual(cycle.latestAllowanceSegment?.maximumUsedPercent, 25)
+    }
+
+    func testCycleStoreClosesOverlappingCycleWhenOfficialResetTimeChanges() throws {
+        let firstStart = Date(timeIntervalSince1970: 100_000)
+        let firstReset = firstStart.addingTimeInterval(604_800)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: firstStart),
+            accountKey: "codex:primary:test",
+            app: .codex,
+            snapshot: snapshot(kind: .weekly, usedPercent: 40, reset: firstReset),
+            source: .api,
+            sampledAt: firstStart
+        )
+        let newStart = firstStart.addingTimeInterval(3_600)
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "codex:primary:test",
+            app: .codex,
+            snapshot: snapshot(
+                kind: .weekly,
+                usedPercent: 0,
+                reset: newStart.addingTimeInterval(604_800)
+            ),
+            source: .api,
+            sampledAt: newStart
+        )
+
+        XCTAssertEqual(payload.records.count, 2)
+        let oldCycle = try XCTUnwrap(payload.records.first { $0.scheduledEndAt == firstReset })
+        XCTAssertEqual(oldCycle.endAt, newStart)
+        XCTAssertEqual(oldCycle.allowanceSegments.last?.endAt, newStart)
+    }
+
+    func testCycleStoreCreatesAccountSegmentsWithoutBackdatingSwitchedAccount() {
+        let firstSample = Date(timeIntervalSince1970: 100_000)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: firstSample),
+            accountKey: "codex:primary:a",
+            app: .codex,
+            snapshot: snapshot(
+                kind: .weekly,
+                usedPercent: 20,
+                reset: firstSample.addingTimeInterval(604_800)
+            ),
+            source: .api,
+            sampledAt: firstSample
+        )
+        let switchedAt = firstSample.addingTimeInterval(3_600)
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "codex:primary:b",
+            app: .codex,
+            snapshot: snapshot(
+                kind: .weekly,
+                usedPercent: 5,
+                reset: firstSample.addingTimeInterval(604_800)
+            ),
+            source: .api,
+            sampledAt: switchedAt
+        )
+
+        XCTAssertEqual(payload.accountSegments.count, 2)
+        XCTAssertEqual(payload.accountSegments[0].startAt, firstSample)
+        XCTAssertEqual(payload.accountSegments[0].endAt, switchedAt)
+        XCTAssertEqual(payload.accountSegments[1].startAt, switchedAt)
+        XCTAssertNil(payload.accountSegments[1].endAt)
+    }
+
+    func testCycleStoreRequiresResetAndMarksMissingWindowLengthAsInferred() {
+        let sampledAt = Date(timeIntervalSince1970: 100_000)
+        let missingReset = QuotaSnapshot(
+            app: .codex,
+            primaryLimit: .standard(
+                kind: .weekly,
+                window: QuotaWindow(usedPercent: 10, resetsAt: nil, windowSeconds: 604_800)
+            ),
+            secondaryLimit: nil,
+            planType: nil,
+            fetchedAt: sampledAt
+        )
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "codex:primary:a",
+            app: .codex,
+            snapshot: missingReset,
+            source: .api,
+            sampledAt: sampledAt
+        )
+        XCTAssertTrue(payload.records.isEmpty)
+
+        let missingLength = QuotaSnapshot(
+            app: .codex,
+            primaryLimit: .standard(
+                kind: .weekly,
+                window: QuotaWindow(
+                    usedPercent: 10,
+                    resetsAt: sampledAt.addingTimeInterval(604_800),
+                    windowSeconds: nil
+                )
+            ),
+            secondaryLimit: nil,
+            planType: nil,
+            fetchedAt: sampledAt
+        )
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "codex:primary:a",
+            app: .codex,
+            snapshot: missingLength,
+            source: .api,
+            sampledAt: sampledAt
+        )
+        XCTAssertEqual(payload.records.first?.boundaryQuality, .inferred)
+    }
+
+    func testQuotaCycleV2RecordMigratesIntoInitialAllowanceSegment() throws {
+        let data = Data(#"""
+        {
+          "id": "legacy",
+          "accountKey": "codex:primary:test",
+          "app": "codex",
+          "limitID": "weekly",
+          "limitKind": "weekly",
+          "startAt": 0,
+          "endAt": 604800,
+          "firstSampleAt": 0,
+          "lastSampleAt": 60,
+          "maximumUsedPercent": 37,
+          "source": "api",
+          "boundaryQuality": "observed"
+        }
+        """#.utf8)
+
+        let cycle = try JSONDecoder().decode(QuotaCycleRecord.self, from: data)
+        XCTAssertEqual(cycle.scheduledEndAt, cycle.endAt)
+        XCTAssertEqual(cycle.latestUsedPercent, 37)
+        XCTAssertEqual(cycle.allowanceSegments.count, 1)
+        XCTAssertEqual(cycle.latestAllowanceSegment?.maximumUsedPercent, 37)
+    }
+
+    @MainActor
+    func testCycleUsageUsesHalfOpenBoundariesAndDoesNotCrossAccounts() {
+        let start = Date(timeIntervalSince1970: 10_000)
+        let first = cycleRecord(
+            id: "first",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: start.addingTimeInterval(100)
+        )
+        let second = cycleRecord(
+            id: "second",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: first.endAt,
+            end: first.endAt.addingTimeInterval(100)
+        )
+        let otherAccount = cycleRecord(
+            id: "other",
+            accountKey: "codex:primary:b",
+            app: .codex,
+            start: start,
+            end: second.endAt
+        )
+        let entry = UsageEntry(
+            app: .codex,
+            conversationKey: "codex:test",
+            model: "gpt-5.6",
+            speed: .standard,
+            day: UsageDay.startOfDay(for: first.endAt),
+            timestamp: first.endAt,
+            inputTokens: 100,
+            outputTokens: 20,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            costUSD: 1,
+            costBreakdown: nil
+        )
+        let aggregator = CycleUsageAggregator()
+        aggregator.ingest(
+            entries: [entry],
+            cycles: [first, second, otherAccount],
+            accountSegments: [QuotaCycleAccountSegment(
+                id: "a",
+                accountKey: "codex:primary:a",
+                app: .codex,
+                startAt: start,
+                endAt: nil
+            )]
+        )
+
+        XCTAssertEqual(aggregator.snapshot().count, 1)
+        XCTAssertEqual(aggregator.snapshot().first?.cycleID, "second")
+    }
+
+    @MainActor
+    func testCycleUsageRebuildKeepsEntriesInTheirAccountSegments() {
+        let start = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 200_000))
+        let switchedAt = start.addingTimeInterval(3_600)
+        let end = start.addingTimeInterval(7_200)
+        let oldCycle = cycleRecord(
+            id: "old-account",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: end
+        )
+        let newCycle = cycleRecord(
+            id: "new-account",
+            accountKey: "codex:primary:b",
+            app: .codex,
+            start: start,
+            end: end
+        )
+        func entry(at timestamp: Date) -> UsageEntry {
+            UsageEntry(
+                app: .codex,
+                conversationKey: "codex:test",
+                model: "gpt-5.6",
+                speed: .standard,
+                day: start,
+                timestamp: timestamp,
+                inputTokens: 10,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                costUSD: 1,
+                costBreakdown: nil
+            )
+        }
+        let aggregator = CycleUsageAggregator()
+        aggregator.ingest(
+            entries: [entry(at: start.addingTimeInterval(60)), entry(at: switchedAt.addingTimeInterval(60))],
+            cycles: [oldCycle, newCycle],
+            accountSegments: [
+                QuotaCycleAccountSegment(
+                    id: "a",
+                    accountKey: oldCycle.accountKey,
+                    app: .codex,
+                    startAt: start,
+                    endAt: switchedAt
+                ),
+                QuotaCycleAccountSegment(
+                    id: "b",
+                    accountKey: newCycle.accountKey,
+                    app: .codex,
+                    startAt: switchedAt,
+                    endAt: nil
+                ),
+            ]
+        )
+
+        XCTAssertEqual(Set(aggregator.snapshot().map(\.cycleID)), Set(["old-account", "new-account"]))
+        XCTAssertEqual(aggregator.snapshot().reduce(0) { $0 + $1.inputTokens }, 20)
+    }
+
+    func testCycleForecastRequiresTenPercentObservedUsage() {
+        let cycle = cycleRecord(
+            id: "forecast",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: Date(timeIntervalSince1970: 1_000),
+            end: Date(timeIntervalSince1970: 2_000),
+            usedPercent: 20
+        )
+        var totals = UsageTotals.zero
+        totals.inputTokens = 1_000
+        totals.costUSD = 40
+        let summary = CycleUsageSummary(
+            cycle: cycle,
+            totals: totals,
+            currentAllowanceTotals: totals,
+            quality: .exact
+        )
+        XCTAssertEqual(summary.projectedFullCycleTokens, 5_000)
+        XCTAssertEqual(summary.projectedFullCycleCostUSD, 200)
+        XCTAssertEqual(summary.forecastConfidence, .rough)
+
+        var lowUsage = cycle
+        lowUsage.latestUsedPercent = 9.9
+        lowUsage.allowanceSegments[0].latestUsedPercent = 9.9
+        lowUsage.allowanceSegments[0].maximumUsedPercent = 9.9
+        let lowSummary = CycleUsageSummary(
+            cycle: lowUsage,
+            totals: totals,
+            currentAllowanceTotals: totals,
+            quality: .exact
+        )
+        XCTAssertNil(lowSummary.projectedFullCycleTokens)
+        XCTAssertNil(lowSummary.projectedFullCycleCostUSD)
+        XCTAssertNil(lowSummary.forecastConfidence)
+    }
+
+    func testCycleForecastUsesObservedDeltaAfterNonzeroBaseline() {
+        var cycle = cycleRecord(
+            id: "baseline",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: Date(timeIntervalSince1970: 1_000),
+            end: Date(timeIntervalSince1970: 2_000),
+            usedPercent: 40
+        )
+        cycle.allowanceSegments[0].baselineUsedPercent = 20
+        var totals = UsageTotals.zero
+        totals.inputTokens = 1_000
+        totals.costUSD = 20
+        let summary = CycleUsageSummary(
+            cycle: cycle,
+            totals: totals,
+            currentAllowanceTotals: totals,
+            quality: .exact
+        )
+
+        XCTAssertEqual(summary.forecastObservedPercent, 20)
+        XCTAssertEqual(summary.projectedFullCycleTokens, 5_000)
+        XCTAssertEqual(summary.projectedFullCycleCostUSD, 100)
+
+        let incompleteSummary = CycleUsageSummary(
+            cycle: cycle,
+            totals: totals,
+            currentAllowanceTotals: totals,
+            quality: .incomplete
+        )
+        XCTAssertNil(incompleteSummary.projectedFullCycleTokens)
+        XCTAssertNil(incompleteSummary.projectedFullCycleCostUSD)
+        XCTAssertNil(incompleteSummary.forecastConfidence)
+    }
+
+    func testCycleForecastKeepsActualUsageBeforeExtraReset() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let resetAt = Date(timeIntervalSince1970: 1_500)
+        var cycle = cycleRecord(
+            id: "benefit-reset",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: start,
+            end: Date(timeIntervalSince1970: 2_000),
+            usedPercent: 80
+        )
+        cycle.allowanceSegments[0].endAt = resetAt
+        cycle.allowanceSegments.append(QuotaCycleAllowanceSegment(
+            id: "benefit-reset-current",
+            startAt: resetAt,
+            endAt: nil,
+            baselineUsedPercent: 0,
+            latestUsedPercent: 20,
+            maximumUsedPercent: 20,
+            firstSampleAt: resetAt,
+            lastSampleAt: resetAt.addingTimeInterval(60),
+            startReason: .extraReset
+        ))
+        cycle.latestUsedPercent = 20
+        var total = UsageTotals.zero
+        total.inputTokens = 5_000
+        total.costUSD = 50
+        var current = UsageTotals.zero
+        current.inputTokens = 1_000
+        current.costUSD = 10
+        let summary = CycleUsageSummary(
+            cycle: cycle,
+            totals: total,
+            currentAllowanceTotals: current,
+            quality: .estimated
+        )
+
+        XCTAssertEqual(summary.projectedFullCycleTokens, 9_000)
+        XCTAssertEqual(summary.projectedFullCycleCostUSD, 90)
+    }
+
+    @MainActor
+    func testCycleUsageAggregatorSeparatesUsageAcrossAllowanceReset() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let benefitResetAt = Date(timeIntervalSince1970: 1_500)
+        var cycle = cycleRecord(
+            id: "allowance-buckets",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: start,
+            end: Date(timeIntervalSince1970: 2_000),
+            usedPercent: 80
+        )
+        cycle.allowanceSegments[0].endAt = benefitResetAt
+        cycle.allowanceSegments.append(QuotaCycleAllowanceSegment(
+            id: "allowance-buckets-current",
+            startAt: benefitResetAt,
+            endAt: nil,
+            baselineUsedPercent: 0,
+            latestUsedPercent: 20,
+            maximumUsedPercent: 20,
+            firstSampleAt: benefitResetAt,
+            lastSampleAt: benefitResetAt.addingTimeInterval(60),
+            startReason: .extraReset
+        ))
+        cycle.latestUsedPercent = 20
+        func entry(at timestamp: Date, tokens: Int) -> UsageEntry {
+            UsageEntry(
+                app: .claude,
+                conversationKey: "claude:test",
+                model: "claude-sonnet-5",
+                speed: .standard,
+                day: UsageDay.startOfDay(for: timestamp),
+                timestamp: timestamp,
+                inputTokens: tokens,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                costUSD: Decimal(tokens) / 100,
+                costBreakdown: nil
+            )
+        }
+        let aggregator = CycleUsageAggregator()
+        aggregator.ingest(
+            entries: [
+                entry(at: Date(timeIntervalSince1970: 1_200), tokens: 400),
+                entry(at: Date(timeIntervalSince1970: 1_600), tokens: 100),
+            ],
+            cycles: [cycle],
+            accountSegments: [QuotaCycleAccountSegment(
+                id: "claude",
+                accountKey: cycle.accountKey,
+                app: .claude,
+                startAt: start,
+                endAt: nil
+            )]
+        )
+
+        let summary = try XCTUnwrap(aggregator.summaries(
+            cycles: [cycle],
+            kind: .weekly,
+            app: .claude,
+            now: cycle.endAt.addingTimeInterval(1)
+        ).first)
+        XCTAssertEqual(summary.totals.totalTokens, 500)
+        XCTAssertEqual(summary.currentAllowanceTotals.totalTokens, 100)
+        XCTAssertEqual(summary.projectedFullCycleTokens, 900)
+    }
+
+    func testCycleSummaryDistinguishesEmptyInferredHistory() {
+        let cycle = cycleRecord(
+            id: "empty-history",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: Date(timeIntervalSince1970: 1_000),
+            end: Date(timeIntervalSince1970: 2_000)
+        )
+        let empty = CycleUsageSummary(cycle: cycle, totals: .zero, quality: .estimated)
+        XCTAssertFalse(empty.hasLocalUsage)
+        XCTAssertNil(empty.projectedFullCycleTokens)
+        XCTAssertNil(empty.projectedFullCycleCostUSD)
+        XCTAssertNil(empty.forecastConfidence)
+
+        var unpriced = UsageTotals.zero
+        unpriced.requestCount = 1
+        unpriced.hasUnpricedUsage = true
+        XCTAssertTrue(CycleUsageSummary(cycle: cycle, totals: unpriced, quality: .estimated).hasLocalUsage)
+    }
+
+    @MainActor
+    func testCycleRebuildIgnoresEntriesBeforeFeatureTrackingStarted() throws {
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 100_000))
+        let cycle = cycleRecord(
+            id: "weekly-residual",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: day,
+            end: Calendar.current.date(byAdding: .day, value: 1, to: day)!
+        )
+        let beforeTracking = UsageEntry(
+            app: .claude,
+            conversationKey: "claude:test",
+            model: "claude-opus-4-8",
+            speed: .standard,
+            day: day,
+            timestamp: day.addingTimeInterval(60),
+            inputTokens: 40,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            costUSD: 4,
+            costBreakdown: nil
+        )
+        var afterTracking = beforeTracking
+        afterTracking.timestamp = day.addingTimeInterval(180)
+        let aggregator = CycleUsageAggregator()
+        aggregator.rebuild(
+            exactEntries: [beforeTracking, afterTracking],
+            cycles: [cycle],
+            accountSegments: [QuotaCycleAccountSegment(
+                id: "claude",
+                accountKey: "claude:primary",
+                app: .claude,
+                startAt: day.addingTimeInterval(120),
+                endAt: nil
+            )]
+        )
+        let summary = try XCTUnwrap(aggregator.summaries(
+            cycles: [cycle],
+            kind: .weekly,
+            app: .claude,
+            now: cycle.endAt.addingTimeInterval(1)
+        ).first)
+
+        XCTAssertEqual(summary.totals.totalTokens, 40)
+        XCTAssertEqual(summary.totals.costUSD, 4)
+    }
+
     func testClaudeAssistantUsageMapsFastStandardAndMissingSpeed() throws {
         let fast = try XCTUnwrap(ClaudeJSONLScanner.parseAssistantLine(claudeAssistantLine(
             messageID: "msg-fast",
@@ -908,7 +1547,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(second.entries.count, 1)
         XCTAssertEqual(streamed.speed, .fast)
         XCTAssertEqual(streamed.cacheCreationTokens, 50)
-        XCTAssertEqual(streamed.costBreakdown?.cacheCreation, 0.00085)
+        XCTAssertEqual(streamed.costBreakdown?.cacheCreation, Decimal(plainString: "0.00085"))
         XCTAssertEqual(second.newSeenIds.filter { $0 == "msg-stream" }.count, 1)
 
         let unchanged = ClaudeJSONLScanner.scan(
@@ -925,6 +1564,8 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(ScanState.currentVersion, 11)
         XCTAssertEqual(UsageRollupPayload.currentVersion, 8)
         XCTAssertEqual(ConversationRollupPayload.currentVersion, 5)
+        XCTAssertEqual(QuotaCyclePayload.currentVersion, 3)
+        XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 3)
         XCTAssertEqual(PricingCatalogCachePayload.currentVersion, 2)
         XCTAssertEqual(Pricing.fingerprint(knownUsage: []).count, 64)
     }
@@ -974,6 +1615,42 @@ final class QuotaParsingTests: XCTestCase {
             secondaryLimit: nil,
             planType: "plus",
             fetchedAt: Date(timeIntervalSince1970: 1_000)
+        )
+    }
+
+    private func cycleRecord(
+        id: String,
+        accountKey: String,
+        app: UsageApp,
+        start: Date,
+        end: Date,
+        usedPercent: Double = 25
+    ) -> QuotaCycleRecord {
+        QuotaCycleRecord(
+            id: id,
+            accountKey: accountKey,
+            app: app,
+            limitID: "weekly",
+            limitKind: .weekly,
+            startAt: start,
+            endAt: end,
+            scheduledEndAt: end,
+            firstSampleAt: start,
+            lastSampleAt: end,
+            latestUsedPercent: usedPercent,
+            allowanceSegments: [QuotaCycleAllowanceSegment(
+                id: "\(id)-allowance",
+                startAt: start,
+                endAt: nil,
+                baselineUsedPercent: 0,
+                latestUsedPercent: usedPercent,
+                maximumUsedPercent: usedPercent,
+                firstSampleAt: start,
+                lastSampleAt: end,
+                startReason: .initial
+            )],
+            source: .api,
+            boundaryQuality: .observed
         )
     }
 
