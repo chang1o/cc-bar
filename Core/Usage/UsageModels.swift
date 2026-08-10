@@ -7,6 +7,17 @@ nonisolated enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
     case opencode
 }
 
+/// 扫描进度快照，供设置页"重新计算"等耗时操作期间展示。
+/// `filesTotal == 0` 表示该数据源无法预知总量（如 SQLite 库按消息行回报）。
+nonisolated struct ScanProgress: Equatable, Sendable {
+    var app: UsageApp
+    var filesCompleted: Int
+    var filesTotal: Int
+    var linesParsed: Int
+}
+
+typealias ScanProgressCallback = @Sendable (ScanProgress) -> Void
+
 /// 单次请求实际使用的服务速度档位。`unknown` 只用于日志缺失或出现未来新值时，不能静默按 Standard 计价。
 nonisolated enum UsageSpeed: String, Sendable, Codable, Hashable, CaseIterable {
     case standard

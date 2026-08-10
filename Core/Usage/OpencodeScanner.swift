@@ -39,20 +39,25 @@ enum OpencodeScanner {
 
     nonisolated static func scan(
         lastMessageTime: Int64,
-        seenMessageIds: [String]
+        seenMessageIds: [String],
+        onProgress: ScanProgressCallback? = nil
     ) -> Result {
         scan(
             lastMessageTime: lastMessageTime,
             seenMessageIds: seenMessageIds,
-            databaseURL: defaultDatabaseURL()
+            databaseURL: defaultDatabaseURL(),
+            onProgress: onProgress
         )
     }
 
     /// 可注入库路径，供测试用临时 SQLite fixture 验证真实增量链路。
+    /// - Parameter onProgress: 非 nil 时按约每 200 条消息回报一次扫描进度。
+    ///   SQLite 库无法预知总行数，`filesTotal` 固定为 0 表示未知。
     nonisolated static func scan(
         lastMessageTime: Int64,
         seenMessageIds: [String],
-        databaseURL: URL
+        databaseURL: URL,
+        onProgress: ScanProgressCallback? = nil
     ) -> Result {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             return Result(
@@ -106,6 +111,14 @@ enum OpencodeScanner {
 
         while sqlite3_step(stmt) == SQLITE_ROW {
             messagesRead += 1
+            if messagesRead % 200 == 0 {
+                onProgress?(ScanProgress(
+                    app: .opencode,
+                    filesCompleted: messagesRead,
+                    filesTotal: 0,
+                    linesParsed: messagesRead
+                ))
+            }
             guard let messageID = columnText(stmt, 0),
                   let sessionID = columnText(stmt, 1) else { continue }
             let timeCreated = sqlite3_column_int64(stmt, 2)

@@ -666,6 +666,125 @@ final class QuotaParsingTests: XCTestCase {
     }
 
     @MainActor
+    func testCycleUsageRebuildRangeKeepsHistoryBucketsAndRefillsAffectedOnes() {
+        let start = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 300_000))
+        let oldCycle = cycleRecord(
+            id: "old-cycle",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start.addingTimeInterval(-30 * 24 * 3_600),
+            end: start.addingTimeInterval(-25 * 24 * 3_600)
+        )
+        let affectedCycle = cycleRecord(
+            id: "affected-cycle",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: start.addingTimeInterval(7_200)
+        )
+        func entry(at timestamp: Date, input: Int) -> UsageEntry {
+            UsageEntry(
+                app: .codex,
+                conversationKey: "codex:test",
+                model: "gpt-5.6",
+                speed: .standard,
+                day: UsageDay.startOfDay(for: timestamp),
+                timestamp: timestamp,
+                inputTokens: input,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                costUSD: 1,
+                costBreakdown: nil
+            )
+        }
+        let segment = QuotaCycleAccountSegment(
+            id: "a",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            startAt: start.addingTimeInterval(-30 * 24 * 3_600),
+            endAt: nil
+        )
+        let aggregator = CycleUsageAggregator()
+        // 先灌入历史桶（100 tokens）+ 受影响窗口桶（10 tokens）
+        aggregator.ingest(
+            entries: [
+                entry(at: oldCycle.startAt.addingTimeInterval(60), input: 100),
+                entry(at: affectedCycle.startAt.addingTimeInterval(60), input: 10),
+            ],
+            cycles: [oldCycle, affectedCycle],
+            accountSegments: [segment]
+        )
+        XCTAssertEqual(aggregator.snapshot().count, 2)
+
+        // 受限重建：只重算 affected-cycle，用新条目（50 tokens）重灌
+        aggregator.rebuildRange(
+            exactEntries: [
+                entry(at: affectedCycle.startAt.addingTimeInterval(120), input: 50),
+            ],
+            cycles: [oldCycle, affectedCycle],
+            accountSegments: [segment],
+            affectedCycleIDs: ["affected-cycle"]
+        )
+
+        let byID = Dictionary(grouping: aggregator.snapshot(), by: \.cycleID)
+        XCTAssertEqual(byID["old-cycle"]?.first?.inputTokens, 100, "窗口外的历史桶必须原样保留")
+        XCTAssertEqual(byID["affected-cycle"]?.first?.inputTokens, 50, "受影响周期内的桶应被新扫描结果重灌")
+        XCTAssertEqual(aggregator.snapshot().count, 2)
+    }
+
+    @MainActor
+    func testCycleUsageRebuildRangeWithEmptyAffectedSetAppendsOnly() {
+        let start = Date(timeIntervalSince1970: 400_000)
+        let cycle = cycleRecord(
+            id: "cycle",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: start.addingTimeInterval(3_600)
+        )
+        func entry(at timestamp: Date, input: Int) -> UsageEntry {
+            UsageEntry(
+                app: .codex,
+                conversationKey: "codex:test",
+                model: "gpt-5.6",
+                speed: .standard,
+                day: UsageDay.startOfDay(for: timestamp),
+                timestamp: timestamp,
+                inputTokens: input,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                costUSD: 1,
+                costBreakdown: nil
+            )
+        }
+        let segment = QuotaCycleAccountSegment(
+            id: "a",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            startAt: start,
+            endAt: nil
+        )
+        let aggregator = CycleUsageAggregator()
+        aggregator.ingest(
+            entries: [entry(at: start.addingTimeInterval(60), input: 100)],
+            cycles: [cycle],
+            accountSegments: [segment]
+        )
+        // 空受影响集合 = 不清任何桶，仅追加
+        aggregator.rebuildRange(
+            exactEntries: [entry(at: start.addingTimeInterval(120), input: 50)],
+            cycles: [cycle],
+            accountSegments: [segment],
+            affectedCycleIDs: []
+        )
+        let snapshot = aggregator.snapshot()
+        XCTAssertEqual(snapshot.count, 1)
+        XCTAssertEqual(snapshot.first?.inputTokens, 150)
+    }
+
+    @MainActor
     func testCycleUsageAggregatorSeparatesUsageAcrossAllowanceReset() throws {
         let start = Date(timeIntervalSince1970: 1_000)
         let benefitResetAt = Date(timeIntervalSince1970: 1_500)
@@ -1444,7 +1563,7 @@ final class QuotaParsingTests: XCTestCase {
     }
 
     @MainActor
-    func testCodexFixtureScansTierTransitionsIncrementallyAndAfterTruncation() throws {
+    func testCodexFixtureScansTierTransitionsIncrementallyAndAfterTruncation() async throws {
         let temporary = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporary) }
         let sessions = temporary.appendingPathComponent("sessions", isDirectory: true)
@@ -1457,7 +1576,7 @@ final class QuotaParsingTests: XCTestCase {
             to: sessions.appendingPathComponent("rollout-2026-07-16T00-00-00-\(conversationID).jsonl")
         )
 
-        let first = CodexJSONLScanner.scan(previous: [:], roots: [sessions, archived], indexedTitles: [:])
+        let first = await CodexJSONLScanner.scan(previous: [:], roots: [sessions, archived], indexedTitles: [:])
         XCTAssertEqual(first.entries.map(\.speed), [.standard, .fast, .standard])
         XCTAssertEqual(first.entries.map(\.requestCount).reduce(0, +), 3)
         XCTAssertEqual(first.newState[conversationID]?.lastServiceTier, .standard)
@@ -1469,12 +1588,12 @@ final class QuotaParsingTests: XCTestCase {
         {"timestamp":"2026-07-16T00:00:11Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":70,"reasoning_output_tokens":10,"total_tokens":570},"last_token_usage":{"input_tokens":150,"cached_input_tokens":30,"output_tokens":25,"reasoning_output_tokens":3,"total_tokens":175}}}}
         """, to: file)
 
-        let second = CodexJSONLScanner.scan(previous: first.newState, roots: [sessions, archived], indexedTitles: [:])
+        let second = await CodexJSONLScanner.scan(previous: first.newState, roots: [sessions, archived], indexedTitles: [:])
         XCTAssertEqual(second.entries.count, 1)
         XCTAssertEqual(second.entries.first?.speed, .fast)
         XCTAssertEqual(second.newState[conversationID]?.lastServiceTier, .fast)
 
-        let unchanged = CodexJSONLScanner.scan(previous: second.newState, roots: [sessions, archived], indexedTitles: [:])
+        let unchanged = await CodexJSONLScanner.scan(previous: second.newState, roots: [sessions, archived], indexedTitles: [:])
         XCTAssertTrue(unchanged.entries.isEmpty)
         XCTAssertEqual(unchanged.linesParsed, 0)
 
@@ -1487,7 +1606,7 @@ final class QuotaParsingTests: XCTestCase {
         """
         try Data(truncated.utf8).write(to: file, options: [.atomic])
 
-        let afterTruncation = CodexJSONLScanner.scan(previous: second.newState, roots: [sessions, archived], indexedTitles: [:])
+        let afterTruncation = await CodexJSONLScanner.scan(previous: second.newState, roots: [sessions, archived], indexedTitles: [:])
         XCTAssertEqual(afterTruncation.entries.count, 1)
         XCTAssertEqual(afterTruncation.entries.first?.model, "gpt-5.6-terra")
         XCTAssertEqual(afterTruncation.entries.first?.speed, .fast)

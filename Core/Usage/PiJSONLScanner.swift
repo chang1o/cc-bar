@@ -26,17 +26,28 @@ enum PiJSONLScanner {
         var linesParsed: Int
     }
 
-    nonisolated static func scan(previous: [String: ScanFileState], seenEntryIds: [String]) -> Result {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let root = home.appendingPathComponent(".pi/agent/sessions", isDirectory: true)
-        return scan(previous: previous, seenEntryIds: seenEntryIds, root: root)
-    }
-
-    /// 可注入日志根目录，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenEntryIds: [String],
-        root: URL
+        onProgress: ScanProgressCallback? = nil
+    ) -> Result {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let root = home.appendingPathComponent(".pi/agent/sessions", isDirectory: true)
+        return scan(
+            previous: previous,
+            seenEntryIds: seenEntryIds,
+            root: root,
+            onProgress: onProgress
+        )
+    }
+
+    /// 可注入日志根目录，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
+    /// - Parameter onProgress: 非 nil 时按约每 50 个文件回报一次扫描进度。
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        seenEntryIds: [String],
+        root: URL,
+        onProgress: ScanProgressCallback? = nil
     ) -> Result {
         let files = JSONLDirectoryEnumerator.files(at: root)
 
@@ -47,7 +58,16 @@ enum PiJSONLScanner {
         var seen = Set(seenEntryIds)
         var projectResolver = ConversationProjectResolver()
 
-        for url in files {
+        let totalFiles = files.count
+        for (index, url) in files.enumerated() {
+            if index % 50 == 0 || index == totalFiles - 1 {
+                onProgress?(ScanProgress(
+                    app: .pi,
+                    filesCompleted: index + 1,
+                    filesTotal: totalFiles,
+                    linesParsed: linesParsed
+                ))
+            }
             let path = url.path
             let attrs = try? FileManager.default.attributesOfItem(atPath: path)
             let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0

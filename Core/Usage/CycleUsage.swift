@@ -308,6 +308,22 @@ final class CycleUsageAggregator {
         _ = ingest(entries: exactEntries, cycles: cycles, accountSegments: accountSegments)
     }
 
+    /// 受限重建：只重算 `affectedCycleIDs` 内的桶，其余历史桶原样保留。
+    /// 用于周期窗口滚动后的增量修正——窗口外的历史归属早已固化，不需要重扫，
+    /// 只需把受影响周期内已聚合的数据清掉，用最近窗口扫描出的 entries 重新灌入。
+    /// 注意：`exactEntries` 只应包含能归属到受影响周期的条目（调用方按时间范围过滤扫描）。
+    func rebuildRange(
+        exactEntries: [UsageEntry],
+        cycles: [QuotaCycleRecord],
+        accountSegments: [QuotaCycleAccountSegment],
+        affectedCycleIDs: Set<String>
+    ) {
+        if !affectedCycleIDs.isEmpty {
+            buckets = buckets.filter { !affectedCycleIDs.contains($0.value.cycleID) }
+        }
+        _ = ingest(entries: exactEntries, cycles: cycles, accountSegments: accountSegments)
+    }
+
     func summaries(
         cycles: [QuotaCycleRecord],
         kind: QuotaLimitKind,

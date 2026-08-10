@@ -125,7 +125,7 @@ final class AppState {
         loadQuotaHistory()
         loadQuotaCycles()
         reloadImportedCodexAccounts()
-        usageService.bootstrap(appState: self)
+        await usageService.bootstrap(appState: self)
         await loadCodex()
         maybeShowKeychainPrompt()
         await loadClaude()
@@ -835,8 +835,8 @@ final class AppState {
         if cycleUsagePartition(for: next) != previousPartition
             || next.accountSegments != previousAccountSegments
         {
-            usageService.invalidateCycleRebuild()
-            Task { await usageService.rebuildCycleUsageIfNeeded() }
+            // 周期边界滚动后做受限重建（只重扫最近窗口），不再全量重扫历史日志。
+            Task { await usageService.rebuildCycleUsageForRecentChanges() }
         }
     }
 

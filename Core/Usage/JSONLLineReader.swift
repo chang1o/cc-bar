@@ -76,20 +76,30 @@ enum JSONLTimestamp {
 
 /// 递归列出某目录下后缀为 .jsonl 的文件。
 enum JSONLDirectoryEnumerator {
-    nonisolated static func files(at root: URL) -> [URL] {
+    /// - Parameter minimumMtime: 非 nil 时只返回修改时间不早于该时刻的文件。
+    ///   供周期用量的受限重建过滤"最近窗口之外"的旧日志使用；nil 时行为与原来一致。
+    nonisolated static func files(at root: URL, minimumMtime: Date? = nil) -> [URL] {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
             return []
         }
-        guard let it = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else {
+        guard let it = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
             return []
         }
         var result: [URL] = []
         for case let url as URL in it {
-            if url.pathExtension.lowercased() == "jsonl" {
-                result.append(url)
+            guard url.pathExtension.lowercased() == "jsonl" else { continue }
+            if let minimumMtime {
+                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate
+                guard let mtime, mtime >= minimumMtime else { continue }
             }
+            result.append(url)
         }
         return result
     }

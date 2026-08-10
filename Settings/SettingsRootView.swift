@@ -13,6 +13,27 @@ struct SettingsRootView: View {
     @State private var pricingCatalogMessage: String?
     @State private var pricingCatalogMessageIsError = false
 
+    /// 重算进度文案。`filesTotal == 0` 表示该数据源无总量概念（SQLite 按行回报）。
+    private func scanProgressText(_ progress: ScanProgress) -> String {
+        let appName: String
+        switch progress.app {
+        case .codex: appName = "Codex"
+        case .claude: appName = "Claude Code"
+        case .pi: appName = "Pi"
+        case .opencode: appName = "OpenCode"
+        }
+        if progress.filesTotal > 0 {
+            return tr(
+                "Scanning \(appName): \(progress.filesCompleted)/\(progress.filesTotal) files",
+                "正在扫描 \(appName)：\(progress.filesCompleted)/\(progress.filesTotal) 个文件"
+            )
+        }
+        return tr(
+            "Scanning \(appName): \(progress.linesParsed) items",
+            "正在扫描 \(appName)：已处理 \(progress.linesParsed) 条"
+        )
+    }
+
     /// 主账号额外重置 credit 的展开状态与懒加载结果(nil = 尚未加载)。
     @State private var codexResetCreditsExpanded = false
     @State private var codexResetCreditsState: CodexResetCreditsState?
@@ -387,23 +408,32 @@ struct SettingsRootView: View {
                 desc: "Rescan local logs and recompute cost with the current pricing table.",
                 chineseDesc: "重新扫描本地日志，按当前定价表重新计算费用"
             ) {
-                Button {
-                    isRecalculatingUsage = true
-                    Task {
-                        await appState.usageService.forceRescan()
-                        isRecalculatingUsage = false
+                HStack(spacing: 8) {
+                    if let progress = appState.usageService.scanProgress, isRecalculatingUsage {
+                        Text(scanProgressText(progress))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
                     }
-                } label: {
-                    if isRecalculatingUsage {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text(tr("Recalculate", "重新计算"))
+                    Button {
+                        isRecalculatingUsage = true
+                        Task {
+                            await appState.usageService.forceRescan()
+                            isRecalculatingUsage = false
+                        }
+                    } label: {
+                        if isRecalculatingUsage {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(tr("Recalculate", "重新计算"))
+                        }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isRecalculatingUsage)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isRecalculatingUsage)
             }
         }
     }

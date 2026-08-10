@@ -12,25 +12,37 @@ enum ClaudeJSONLScanner {
         var linesParsed: Int
     }
 
-    nonisolated static func scan(previous: [String: ScanFileState], seenMessageIds: [String]) -> Result {
+    nonisolated static func defaultRoot() -> URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let root = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        return home.appendingPathComponent(".claude/projects", isDirectory: true)
+    }
+
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        seenMessageIds: [String],
+        onProgress: ScanProgressCallback? = nil
+    ) -> Result {
         return scan(
             previous: previous,
             seenMessageIds: seenMessageIds,
-            root: root,
-            conversationIndex: ConversationTitleIndex.claudeIndex()
+            root: defaultRoot(),
+            conversationIndex: ConversationTitleIndex.claudeIndex(),
+            onProgress: onProgress
         )
     }
 
     /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
+    /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
+    /// - Parameter onProgress: 非 nil 时按约每 50 个文件回报一次扫描进度。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenMessageIds: [String],
         root: URL,
-        conversationIndex: ConversationTitleIndex.ClaudeIndex
+        conversationIndex: ConversationTitleIndex.ClaudeIndex,
+        minimumMtime: Date? = nil,
+        onProgress: ScanProgressCallback? = nil
     ) -> Result {
-        let files = JSONLDirectoryEnumerator.files(at: root)
+        let files = JSONLDirectoryEnumerator.files(at: root, minimumMtime: minimumMtime)
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []
@@ -40,7 +52,16 @@ enum ClaudeJSONLScanner {
         // 跨文件全局去重：同一 message.id 在 sidechain / subagent 文件中会反复出现。
         var seen = Set(seenMessageIds)
 
-        for url in files {
+        let totalFiles = files.count
+        for (index, url) in files.enumerated() {
+            if index % 50 == 0 || index == totalFiles - 1 {
+                onProgress?(ScanProgress(
+                    app: .claude,
+                    filesCompleted: index + 1,
+                    filesTotal: totalFiles,
+                    linesParsed: linesParsed
+                ))
+            }
             let path = url.path
             let projectContainer = projectContainerName(root: root, file: url)
             let attrs = try? FileManager.default.attributesOfItem(atPath: path)

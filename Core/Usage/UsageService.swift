@@ -13,6 +13,8 @@ final class UsageService {
     private(set) var isRefreshingPricingCatalog = false
     private(set) var lastScanAt: Date?
     private(set) var lastError: String?
+    /// 进行中的全量重算 / 周期重建进度；空闲时为 nil。设置页"重新计算"期间展示。
+    private(set) var scanProgress: ScanProgress?
 
     private weak var appState: AppState?
     private var scanQueued = false
@@ -26,12 +28,18 @@ final class UsageService {
     /// 由 requiresFullRebuild 强制下轮全量重建。
     private var cachedScanState: ScanState?
 
-    func bootstrap(appState: AppState) {
+    func bootstrap(appState: AppState) async {
         self.appState = appState
         // 日聚合与对话两份主 rollup 必须同代；周期 rollup 也只在同代、同价格指纹时恢复。
-        let payload = UsageRollupCache.load()
-        let conversationPayload = ConversationRollupCache.load()
-        let cyclePayload = CycleUsageRollupCache.load()
+        // rollup 可能较大（conversation-rollup 实测可达数 MB），三个 load 都是磁盘读取 +
+        // JSON 解码，统一放到后台线程，避免启动时阻塞主线程、菜单栏图标卡顿。
+        let (payload, conversationPayload, cyclePayload) = await Task.detached(priority: .utility) {
+            (
+                UsageRollupCache.load(),
+                ConversationRollupCache.load(),
+                CycleUsageRollupCache.load()
+            )
+        }.value
         let generationsMatch = !payload.generationID.isEmpty
             && payload.generationID == conversationPayload.generationID
         if generationsMatch {
@@ -104,10 +112,158 @@ final class UsageService {
         } while scanQueued
     }
 
-    /// 周期边界首次建立或滚动后，只从周期功能启用时间起重建精确请求归属。
-    /// 使用空 watermark 读取 JSONL，但账号时间段会排除启用前日志，且不读取日聚合或补录数据。
-    func invalidateCycleRebuild() {
-        cycleInitialRebuildCompletedAt = nil
+    /// 受限重建的日志回溯窗口。5h / weekly 周期滚动涉及的条目必然落在最近一个周期内，
+    /// 窗口外（大于此天数）的历史归属早已固化，不需要重扫，给足余量即可。
+    nonisolated private static let rebuildWindowDays = 8
+
+    /// 周期窗口滚动 / 账号段变化后的受限重建：只重扫最近 `rebuildWindowDays` 天的日志，
+    /// 仅重算受影响周期内的桶，历史桶保留。
+    /// 触发频率高（5h / weekly 滚动，每天数次），必须保持轻量；
+    /// 全量重建只在冷启动且 cycle rollup 无效时发生一次（见 `rebuildCycleUsageIfNeeded`）。
+    func rebuildCycleUsageForRecentChanges() async {
+        guard let appState, !appState.quotaCycles.records.isEmpty else { return }
+        while isScanning || isCycleRebuilding {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+
+        isCycleRebuilding = true
+        isScanning = true
+        defer {
+            isCycleRebuilding = false
+            isScanning = false
+            scanProgress = nil
+            if scanQueued {
+                Task { await scanNow() }
+            }
+        }
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date()
+        let dateFrom = calendar.date(
+            byAdding: .day,
+            value: -Self.rebuildWindowDays,
+            to: now
+        ) ?? now
+        let cycles = appState.quotaCycles.records
+        let accountSegments = appState.quotaCycles.accountSegments
+        let affectedCycleIDs = Set(cycles.filter { $0.startAt >= dateFrom }.map(\.id))
+        let codexRoots = Self.codexRoots(since: dateFrom, calendar: calendar, now: now)
+        let progress: ScanProgressCallback? = { [weak self] progress in
+            DispatchQueue.main.async { self?.scanProgress = progress }
+        }
+
+        async let claudeTask = Task.detached(priority: .utility) {
+            ClaudeJSONLScanner.scan(
+                previous: [:],
+                seenMessageIds: [],
+                root: ClaudeJSONLScanner.defaultRoot(),
+                // 重建只需要 entries，跳过标题索引构建（省一次索引文件解析）
+                conversationIndex: ConversationTitleIndex.ClaudeIndex(titles: [:], projects: [:]),
+                minimumMtime: dateFrom,
+                onProgress: progress
+            )
+        }.value
+        async let codexTask = Task.detached(priority: .utility) {
+            await CodexJSONLScanner.scan(
+                previous: [:],
+                roots: codexRoots,
+                indexedTitles: [:],
+                onProgress: progress
+            )
+        }.value
+        let claude = await claudeTask
+        let codex = await codexTask
+        await commitCycleAggregation(
+            exactEntries: claude.entries + codex.entries,
+            cycles: cycles,
+            accountSegments: accountSegments,
+            isInitialRebuild: false,
+            rebuildRange: affectedCycleIDs
+        )
+    }
+
+    /// 最近 `rebuildWindowDays` 天按 codex 的 `sessions/YYYY/MM/DD` 目录结构构造 root 列表。
+    /// 目录全不存在（路径结构变化）时回退默认全量 roots，避免重建静默变空。
+    nonisolated private static func codexRoots(
+        since dateFrom: Date,
+        calendar: Calendar,
+        now: Date
+    ) -> [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let baseRoots = [
+            home.appendingPathComponent(".codex/sessions", isDirectory: true),
+            home.appendingPathComponent(".codex/archived_sessions", isDirectory: true),
+        ]
+        let fm = FileManager.default
+        var roots: [URL] = []
+        let days = max(0, calendar.dateComponents([.day], from: dateFrom, to: now).day ?? 0)
+        for dayOffset in (0...days).reversed() {
+            guard let day = calendar.date(byAdding: .day, value: -dayOffset, to: now) else { continue }
+            let comps = calendar.dateComponents([.year, .month, .day], from: day)
+            guard let year = comps.year, let month = comps.month, let day = comps.day else { continue }
+            for base in baseRoots {
+                let dir = base
+                    .appendingPathComponent(String(format: "%04d", year), isDirectory: true)
+                    .appendingPathComponent(String(format: "%02d", month), isDirectory: true)
+                    .appendingPathComponent(String(format: "%02d", day), isDirectory: true)
+                if fm.fileExists(atPath: dir.path) {
+                    roots.append(dir)
+                }
+            }
+        }
+        return roots.isEmpty ? baseRoots : roots
+    }
+
+    /// 周期用量重建的公共收尾：聚合 → 落盘 rollup → 更新内存状态。
+    /// - Parameter isInitialRebuild: true 表示冷启动全量重建（完成后标记"初始重建完成"，
+    ///   该标记只有全量重建能置位，受限重建保持现值，确保聚合器未初始化时不会被跳过）。
+    /// - Parameter rebuildRange: 非 nil 表示受限重建，只重算这些周期内的桶。
+    private func commitCycleAggregation(
+        exactEntries: [UsageEntry],
+        cycles: [QuotaCycleRecord],
+        accountSegments: [QuotaCycleAccountSegment],
+        isInitialRebuild: Bool,
+        rebuildRange affectedCycleIDs: Set<String>? = nil
+    ) async {
+        let started = Date()
+        if let affectedCycleIDs {
+            cycleAggregator.rebuildRange(
+                exactEntries: exactEntries,
+                cycles: cycles,
+                accountSegments: accountSegments,
+                affectedCycleIDs: affectedCycleIDs
+            )
+        } else {
+            cycleAggregator.rebuild(
+                exactEntries: exactEntries,
+                cycles: cycles,
+                accountSegments: accountSegments
+            )
+        }
+        let completedAt = Date()
+        let generationID = loadedRollupGeneration ?? UUID().uuidString
+        let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: aggregator.snapshot()))
+        let rollup = CycleUsageRollupPayload(
+            generationID: generationID,
+            pricingFingerprint: fingerprint,
+            buckets: cycleAggregator.snapshot(),
+            initialRebuildCompletedAt: isInitialRebuild ? completedAt : cycleInitialRebuildCompletedAt,
+            updatedAt: completedAt
+        )
+        do {
+            try await Task.detached(priority: .utility) {
+                try CycleUsageRollupCache.save(rollup)
+            }.value
+            loadedCycleGeneration = generationID
+            if isInitialRebuild {
+                cycleInitialRebuildCompletedAt = completedAt
+            }
+            let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
+            let tag = isInitialRebuild ? "initial rebuild" : "range rebuild"
+            print("[CycleUsage 周期用量] \(tag) completed elapsed=\(elapsed)")
+        } catch {
+            lastError = "cycle usage rebuild failed: \(error)"
+            print("[CycleUsage 周期用量] cycle usage rebuild failed: \(error)")
+        }
     }
 
     func rebuildCycleUsageIfNeeded() async {
@@ -123,47 +279,32 @@ final class UsageService {
         defer {
             isCycleRebuilding = false
             isScanning = false
+            scanProgress = nil
             if scanQueued {
                 Task { await scanNow() }
             }
         }
-        let started = Date()
+        let progress: ScanProgressCallback? = { [weak self] progress in
+            DispatchQueue.main.async { self?.scanProgress = progress }
+        }
         async let claudeTask = Task.detached(priority: .utility) {
-            ClaudeJSONLScanner.scan(previous: [:], seenMessageIds: [])
+            ClaudeJSONLScanner.scan(
+                previous: [:],
+                seenMessageIds: [],
+                onProgress: progress
+            )
         }.value
         async let codexTask = Task.detached(priority: .utility) {
-            CodexJSONLScanner.scan(previous: [:])
+            await CodexJSONLScanner.scan(previous: [:], onProgress: progress)
         }.value
         let claude = await claudeTask
         let codex = await codexTask
-        let completedAt = Date()
-
-        cycleAggregator.rebuild(
+        await commitCycleAggregation(
             exactEntries: claude.entries + codex.entries,
             cycles: appState.quotaCycles.records,
-            accountSegments: appState.quotaCycles.accountSegments
+            accountSegments: appState.quotaCycles.accountSegments,
+            isInitialRebuild: true
         )
-        let generationID = loadedRollupGeneration ?? UUID().uuidString
-        let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: aggregator.snapshot()))
-        let rollup = CycleUsageRollupPayload(
-            generationID: generationID,
-            pricingFingerprint: fingerprint,
-            buckets: cycleAggregator.snapshot(),
-            initialRebuildCompletedAt: completedAt,
-            updatedAt: completedAt
-        )
-        do {
-            try await Task.detached(priority: .utility) {
-                try CycleUsageRollupCache.save(rollup)
-            }.value
-            loadedCycleGeneration = generationID
-            cycleInitialRebuildCompletedAt = completedAt
-            let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
-            print("[CycleUsage 周期用量] initial rebuild completed elapsed=\(elapsed)")
-        } catch {
-            lastError = "cycle usage rebuild failed: \(error)"
-            print("[CycleUsage 周期用量] initial rebuild failed: \(error)")
-        }
     }
 
     /// 决定本轮扫描的起点状态。优先用内存里上一轮已提交的 ScanState；
@@ -200,7 +341,10 @@ final class UsageService {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
         isScanning = true
-        defer { isScanning = false }
+        defer {
+            isScanning = false
+            scanProgress = nil
+        }
         PricingCatalogStore.shared.refreshIfNeeded()
         // 手动重算同样是一次完整扫描：先提交已经刷好的 pending，避免用户刚点击重算
         // 却仍按旧 active 价格扫描；本次刚发起的网络刷新则留给下一次扫描。
@@ -214,7 +358,7 @@ final class UsageService {
         cycleInitialRebuildCompletedAt = nil
         publishTotals()
         requiresFullRebuild = true
-        if await runScan(prev: ScanState()) {
+        if await runScan(prev: ScanState(), reportProgress: true) {
             requiresFullRebuild = false
             if await refreshMissingPricingIfNeeded() {
                 // 强制重算没有 scanNow 的 repeat 循环；缺价刷新拿到新价格后就在这里
@@ -227,7 +371,7 @@ final class UsageService {
                 loadedCycleGeneration = nil
                 publishTotals()
                 requiresFullRebuild = true
-                if await runScan(prev: ScanState()) {
+                if await runScan(prev: ScanState(), reportProgress: true) {
                     requiresFullRebuild = false
                 }
             }
@@ -247,22 +391,41 @@ final class UsageService {
     }
 
     @discardableResult
-    private func runScan(prev: ScanState) async -> Bool {
+    private func runScan(prev: ScanState, reportProgress: Bool = false) async -> Bool {
         let started = Date()
         let prevSeen = prev.claudeSeenMessageIds
+        let progress: ScanProgressCallback?
+        if reportProgress {
+            progress = { [weak self] (p: ScanProgress) in
+                DispatchQueue.main.async {
+                    self?.scanProgress = p
+                }
+            }
+        } else {
+            progress = nil
+        }
         async let claudeTask = Task.detached(priority: .utility) {
-            ClaudeJSONLScanner.scan(previous: prev.claude, seenMessageIds: prevSeen)
+            ClaudeJSONLScanner.scan(
+                previous: prev.claude,
+                seenMessageIds: prevSeen,
+                onProgress: progress
+            )
         }.value
         async let codexTask = Task.detached(priority: .utility) {
-            CodexJSONLScanner.scan(previous: prev.codex)
+            await CodexJSONLScanner.scan(previous: prev.codex, onProgress: progress)
         }.value
         async let piTask = Task.detached(priority: .utility) {
-            PiJSONLScanner.scan(previous: prev.pi, seenEntryIds: prev.piSeenEntryIds)
+            PiJSONLScanner.scan(
+                previous: prev.pi,
+                seenEntryIds: prev.piSeenEntryIds,
+                onProgress: progress
+            )
         }.value
         async let opencodeTask = Task.detached(priority: .utility) {
             OpencodeScanner.scan(
                 lastMessageTime: prev.opencodeLastMessageTime,
-                seenMessageIds: prev.opencodeSeenMessageIds
+                seenMessageIds: prev.opencodeSeenMessageIds,
+                onProgress: progress
             )
         }.value
 
