@@ -329,6 +329,55 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(oldCycle.allowanceSegments.last?.endAt, newStart)
     }
 
+    func testCycleStoreMergesSameCycleWhenResetAtJitters() {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let firstReset = sampledAt.addingTimeInterval(604_800)
+        var payload = QuotaCyclePayload(trackingStartedAt: sampledAt)
+        // Codex 服务端 reset_at 秒级抖动：每次返回相差 1~3 秒。
+        let jitters: [(TimeInterval, Double)] = [(3, 10), (1, 25), (2, 40)]
+        for (index, jitter) in jitters.enumerated() {
+            payload = QuotaCycleStore.record(
+                payload: payload,
+                accountKey: "codex:primary:test",
+                app: .codex,
+                snapshot: snapshot(
+                    kind: .weekly,
+                    usedPercent: jitter.1,
+                    reset: firstReset.addingTimeInterval(jitter.0)
+                ),
+                source: .api,
+                sampledAt: sampledAt.addingTimeInterval(TimeInterval(index) * 60)
+            )
+        }
+
+        XCTAssertEqual(payload.records.count, 1, "reset_at 抖动不应产生重复周期记录")
+        XCTAssertEqual(payload.records.first?.latestUsedPercent, 40)
+    }
+
+    func testCleaningUpLegacyPayloadDropsShardsAndMergesOverlaps() throws {
+        let start = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        var payload = QuotaCyclePayload(version: 3, trackingStartedAt: start)
+        payload.records = [
+            cycleRecord(id: "dup-b", accountKey: "codex:primary:a", app: .codex,
+                        start: start.addingTimeInterval(3), end: start.addingTimeInterval(3 + week)),
+            cycleRecord(id: "dup-a", accountKey: "codex:primary:a", app: .codex,
+                        start: start, end: start.addingTimeInterval(week)),
+            cycleRecord(id: "shard-1", accountKey: "codex:primary:a", app: .codex,
+                        start: start.addingTimeInterval(1), end: start.addingTimeInterval(2)),
+            cycleRecord(id: "shard-2", accountKey: "codex:primary:a", app: .codex,
+                        start: start.addingTimeInterval(week + 1), end: start.addingTimeInterval(week + 2)),
+        ]
+
+        let cleaned = QuotaCycleStore.cleaningUpLegacyPayload(payload)
+
+        XCTAssertEqual(cleaned.records.count, 1, "残片应被删除、重叠完整周期应合并为一条")
+        let kept = try XCTUnwrap(cleaned.records.first)
+        XCTAssertEqual(kept.endAt, start.addingTimeInterval(3 + week), "应保留 endAt 最晚的周期")
+        XCTAssertEqual(kept.firstSampleAt, start)
+        XCTAssertEqual(kept.lastSampleAt, start.addingTimeInterval(3 + week))
+    }
+
     func testCycleStoreCreatesAccountSegmentsWithoutBackdatingSwitchedAccount() {
         let firstSample = Date(timeIntervalSince1970: 100_000)
         var payload = QuotaCycleStore.record(
@@ -1683,7 +1732,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(ScanState.currentVersion, 11)
         XCTAssertEqual(UsageRollupPayload.currentVersion, 8)
         XCTAssertEqual(ConversationRollupPayload.currentVersion, 5)
-        XCTAssertEqual(QuotaCyclePayload.currentVersion, 3)
+        XCTAssertEqual(QuotaCyclePayload.currentVersion, 4)
         XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 3)
         XCTAssertEqual(PricingCatalogCachePayload.currentVersion, 2)
         XCTAssertEqual(Pricing.fingerprint(knownUsage: []).count, 64)

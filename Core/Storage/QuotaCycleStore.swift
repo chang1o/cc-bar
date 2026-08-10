@@ -175,7 +175,7 @@ nonisolated struct QuotaCycleAccountSegment: Sendable, Codable, Equatable, Ident
 }
 
 nonisolated struct QuotaCyclePayload: Sendable, Codable, Equatable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var version: Int = Self.currentVersion
     var trackingStartedAt: Date = Date()
@@ -189,14 +189,23 @@ enum QuotaCycleStore {
     nonisolated private static let extraResetMinimumDrop = 10.0
     nonisolated private static let nearZeroUsedPercent = 2.0
     nonisolated private static let nearZeroMinimumDrop = 3.0
+    /// Codex 服务端返回的 reset_at 有秒级抖动（实测 1~3 秒）。周期 ID 内含秒级
+    /// 时间戳，抖动会让精确 ID 匹配落空并误建重复周期；此容差用于把同一次重置
+    /// 的相邻采样归并到同一条记录。
+    nonisolated private static let resetJitterTolerance: TimeInterval = 60
+    /// 短于此长度的记录视为被 closeOverlappingCycles 截断的残片（正常窗口最短 5 小时）。
+    nonisolated private static let minimumShardDuration: TimeInterval = 60
 
     nonisolated static func load() -> QuotaCyclePayload {
         let url = fileURL()
         guard let data = try? Data(contentsOf: url),
               var payload = try? JSONDecoder().decode(QuotaCyclePayload.self, from: data),
-              payload.version == QuotaCyclePayload.currentVersion || payload.version == 2
+              payload.version == QuotaCyclePayload.currentVersion || payload.version == 2 || payload.version == 3
         else {
             return QuotaCyclePayload()
+        }
+        if payload.version < QuotaCyclePayload.currentVersion {
+            payload = cleaningUpLegacyPayload(payload)
         }
         payload.version = QuotaCyclePayload.currentVersion
         return payload
@@ -208,6 +217,88 @@ enum QuotaCycleStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(payload)
         try data.write(to: url, options: [.atomic])
+    }
+
+    /// v3 及更早数据可能因 reset_at 秒级抖动产生同一周期的重复记录：
+    /// 部分记录被 closeOverlappingCycles 截断成秒级残片，另有部分完整周期彼此重叠。
+    /// 迁移时删除残片、把重叠周期合并为一条（保留 endAt 最晚者并合并采样数据）。
+    nonisolated static func cleaningUpLegacyPayload(_ payload: QuotaCyclePayload) -> QuotaCyclePayload {
+        var next = payload
+        next.records = next.records.filter { record in
+            record.endAt.timeIntervalSince(record.startAt) >= Self.minimumShardDuration
+        }
+        next.records = Self.deduplicatingOverlapping(next.records)
+        return next
+    }
+
+    nonisolated private static func deduplicatingOverlapping(_ records: [QuotaCycleRecord]) -> [QuotaCycleRecord] {
+        var result: [QuotaCycleRecord] = []
+        var consumed = Set<String>()
+        for record in records.sorted(by: { $0.endAt > $1.endAt }) {
+            guard !consumed.contains(record.id) else { continue }
+            var merged = record
+            consumed.insert(record.id)
+            for other in records where !consumed.contains(other.id) {
+                guard other.accountKey == merged.accountKey,
+                      other.app == merged.app,
+                      other.limitKind == merged.limitKind,
+                      intervalsOverlap(merged, other)
+                else { continue }
+                consumed.insert(other.id)
+                merged = merging(base: merged, other: other)
+            }
+            result.append(merged)
+        }
+        return result
+    }
+
+    nonisolated private static func intervalsOverlap(_ a: QuotaCycleRecord, _ b: QuotaCycleRecord) -> Bool {
+        a.startAt < b.endAt && b.startAt < a.endAt
+    }
+
+    nonisolated private static func merging(base: QuotaCycleRecord, other: QuotaCycleRecord) -> QuotaCycleRecord {
+        var merged = base
+        if let otherFirst = other.firstSampleAt {
+            merged.firstSampleAt = min(merged.firstSampleAt ?? otherFirst, otherFirst)
+        }
+        if let otherLast = other.lastSampleAt {
+            merged.lastSampleAt = max(merged.lastSampleAt ?? otherLast, otherLast)
+        }
+        if let baseLast = merged.lastSampleAt,
+           let otherLast = other.lastSampleAt,
+           otherLast > baseLast
+        {
+            merged.latestUsedPercent = other.latestUsedPercent
+        }
+        merged.allowanceSegments = mergedAllowanceSegments(merged.allowanceSegments, other.allowanceSegments)
+        merged.source = preferredSource(merged.source, other.source)
+        if other.boundaryQuality == .observed {
+            merged.boundaryQuality = .observed
+        }
+        return merged
+    }
+
+    nonisolated private static func mergedAllowanceSegments(
+        _ a: [QuotaCycleAllowanceSegment],
+        _ b: [QuotaCycleAllowanceSegment]
+    ) -> [QuotaCycleAllowanceSegment] {
+        let all = (a + b).sorted { $0.startAt < $1.startAt }
+        var result: [QuotaCycleAllowanceSegment] = []
+        for segment in all {
+            if var last = result.last {
+                if abs(last.startAt.timeIntervalSince(segment.startAt)) < 1 {
+                    if segment.lastSampleAt >= last.lastSampleAt {
+                        result[result.count - 1] = segment
+                    }
+                    continue
+                }
+                if last.endAt == nil {
+                    result[result.count - 1].endAt = segment.startAt
+                }
+            }
+            result.append(segment)
+        }
+        return result
     }
 
     /// 只记录主账号的标准 5 小时 / 周窗口；导入账号和模型专项窗口由调用方排除。
@@ -243,7 +334,15 @@ enum QuotaCycleStore {
                 limitID: limit.id,
                 endAt: scheduledEndAt
             )
-            if let index = next.records.firstIndex(where: { $0.id == id }) {
+            let matchIndex = next.records.firstIndex(where: { $0.id == id })
+                ?? next.records.firstIndex(where: { candidate in
+                    candidate.accountKey == accountKey
+                        && candidate.app == app
+                        && candidate.limitKind == limit.kind
+                        && candidate.endAt > sampledAt
+                        && abs(candidate.endAt.timeIntervalSince(scheduledEndAt)) < Self.resetJitterTolerance
+                })
+            if let index = matchIndex {
                 next.records[index].limitKind = limit.kind
                 next.records[index].startAt = startAt
                 next.records[index].scheduledEndAt = scheduledEndAt
