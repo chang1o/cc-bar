@@ -600,8 +600,8 @@ struct StatsView: View {
             title: app.displayName,
             subtitle: serviceSubtitle(app),
             tint: app.tintColor,
-            value: currentTotals(app).costUSD,
-            totalValue: currentTotalsAll.costUSD,
+            value: Decimal(currentTotals(app).totalTokens),
+            totalValue: Decimal(currentTotalsAll.totalTokens),
             totals: currentTotals(app),
             speed: currentSpeedBreakdown(app)
         )
@@ -1383,7 +1383,7 @@ private struct ByServiceRow: View {
     let speed: UsageSpeedBreakdown
 
     var body: some View {
-        // 花费金额不再展示:与 KPI 行的 Codex / Claude Code 卡完全重复,此处保留占比 + 量。
+        // 花费金额不再展示:与 KPI 行的 Codex / Claude Code 卡完全重复,此处保留 Token 占比 + 量。
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 ServiceMark(color: tint, size: 8)
@@ -1396,7 +1396,7 @@ private struct ByServiceRow: View {
                 Text("\(Int((ratio * 100).rounded()))%")
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
-                Text(tr("of spend", "占比"))
+                Text(tr("of tokens", "Token 占比"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
             }
