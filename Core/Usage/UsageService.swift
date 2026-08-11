@@ -46,8 +46,11 @@ final class UsageService {
             aggregator.load(from: payload.buckets)
             conversationAggregator.load(infos: conversationPayload.infos, buckets: conversationPayload.buckets)
             loadedRollupGeneration = payload.generationID
+            let validCycleIDs = Set(appState.quotaCycles.records.map(\.id))
+            let rollupCycleIDs = Set(cyclePayload.buckets.map(\.cycleID))
             if cyclePayload.generationID == payload.generationID,
-               cyclePayload.pricingFingerprint == payload.pricingFingerprint {
+               cyclePayload.pricingFingerprint == payload.pricingFingerprint,
+               rollupCycleIDs.isSubset(of: validCycleIDs) {
                 cycleAggregator.load(from: cyclePayload.buckets)
                 loadedCycleGeneration = cyclePayload.generationID
                 cycleInitialRebuildCompletedAt = cyclePayload.initialRebuildCompletedAt

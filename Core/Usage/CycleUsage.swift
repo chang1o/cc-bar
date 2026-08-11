@@ -117,6 +117,7 @@ nonisolated struct CycleUsageRollupPayload: Sendable, Codable {
 }
 
 nonisolated enum CycleForecastConfidence: Sendable, Equatable {
+    case early
     case rough
     case reference
     case reliable
@@ -154,18 +155,19 @@ nonisolated struct CycleUsageSummary: Sendable, Equatable, Identifiable {
     }
 
     var forecastConfidence: CycleForecastConfidence? {
-        guard quality != .incomplete, currentAllowanceTotals.totalTokens > 0 else { return nil }
+        guard forecastObservedPercent > 0,
+              currentAllowanceTotals.totalTokens > 0 || currentAllowanceTotals.costUSD > 0
+        else { return nil }
         switch forecastObservedPercent {
         case 80...: return .reliable
         case 30..<80: return .reference
         case 10..<30: return .rough
-        default: return nil
+        default: return .early
         }
     }
 
     var estimatedFullAllowanceTokens: Int? {
-        guard quality != .incomplete,
-              forecastObservedPercent >= 10,
+        guard forecastObservedPercent > 0,
               currentAllowanceTotals.totalTokens > 0
         else { return nil }
         let estimate = Double(currentAllowanceTotals.totalTokens) * 100 / forecastObservedPercent
@@ -174,10 +176,8 @@ nonisolated struct CycleUsageSummary: Sendable, Equatable, Identifiable {
     }
 
     var estimatedFullAllowanceCostUSD: Decimal? {
-        guard quality != .incomplete,
-              forecastObservedPercent >= 10,
-              currentAllowanceTotals.totalTokens > 0,
-              !currentAllowanceTotals.hasUnpricedUsage
+        guard forecastObservedPercent > 0,
+              currentAllowanceTotals.costUSD > 0
         else { return nil }
         return currentAllowanceTotals.costUSD * 100 / Decimal(forecastObservedPercent)
     }
@@ -189,9 +189,7 @@ nonisolated struct CycleUsageSummary: Sendable, Equatable, Identifiable {
     }
 
     var projectedFullCycleCostUSD: Decimal? {
-        guard let estimatedFullAllowanceCostUSD,
-              !totals.hasUnpricedUsage
-        else { return nil }
+        guard let estimatedFullAllowanceCostUSD else { return nil }
         let priorActual = max(0, totals.costUSD - currentAllowanceTotals.costUSD)
         return priorActual + estimatedFullAllowanceCostUSD
     }

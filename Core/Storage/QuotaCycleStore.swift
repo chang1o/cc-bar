@@ -145,6 +145,21 @@ nonisolated struct QuotaCycleRecord: Sendable, Codable, Equatable, Identifiable 
         allowanceSegments.reduce(0) { $0 + $1.observedUsedPercent }
     }
 
+    /// 历史表展示的服务端额度消耗：初始额度取最高一次，福利重置后的每个新额度段再累加。
+    /// 旧版重复 initial 段只取最大值，避免把迁移残留重复计算成 200%。
+    var reportedUsedPercent: Double {
+        let initialMaximum = allowanceSegments
+            .filter { $0.startReason == .initial }
+            .map { max(0, min(100, $0.maximumUsedPercent)) }
+            .max() ?? max(0, latestUsedPercent)
+        let extraResetMaximum = allowanceSegments
+            .filter { $0.startReason == .extraReset }
+            .reduce(0) { partial, segment in
+                partial + max(0, min(100, segment.maximumUsedPercent))
+            }
+        return initialMaximum + extraResetMaximum
+    }
+
     var latestAllowanceSegment: QuotaCycleAllowanceSegment? {
         allowanceSegments.max { $0.startAt < $1.startAt }
     }
@@ -193,6 +208,8 @@ enum QuotaCycleStore {
     /// 时间戳，抖动会让精确 ID 匹配落空并误建重复周期；此容差用于把同一次重置
     /// 的相邻采样归并到同一条记录。
     nonisolated private static let resetJitterTolerance: TimeInterval = 60
+    /// 半开区间收口后，相邻片段边界可能刚好相差 1 秒。
+    nonisolated private static let resetDriftAdjacencyTolerance: TimeInterval = 1
     /// 短于此长度的记录视为被 closeOverlappingCycles 截断的残片（正常窗口最短 5 小时）。
     nonisolated private static let minimumShardDuration: TimeInterval = 60
 
@@ -204,9 +221,9 @@ enum QuotaCycleStore {
         else {
             return QuotaCyclePayload()
         }
-        if payload.version < QuotaCyclePayload.currentVersion {
-            payload = cleaningUpLegacyPayload(payload)
-        }
+        // v4 之后仍可能收到会缓慢漂移的 Codex resetAt。每次载入都做幂等清理，
+        // 让已经落盘的短周期残片也能在升级后立即恢复成一个真实周期。
+        payload = cleaningUpLegacyPayload(payload)
         payload.version = QuotaCyclePayload.currentVersion
         return payload
     }
@@ -219,16 +236,106 @@ enum QuotaCycleStore {
         try data.write(to: url, options: [.atomic])
     }
 
-    /// v3 及更早数据可能因 reset_at 秒级抖动产生同一周期的重复记录：
-    /// 部分记录被 closeOverlappingCycles 截断成秒级残片，另有部分完整周期彼此重叠。
-    /// 迁移时删除残片、把重叠周期合并为一条（保留 endAt 最晚者并合并采样数据）。
+    /// 历史数据可能因 reset_at 漂移产生同一周期的重复记录：
+    /// 部分记录被 closeOverlappingCycles 截断成残片，另有部分完整周期彼此重叠。
+    /// 清理时删除秒级残片、合并重叠记录，并把「额度未回落、只是 resetAt 向后移动」
+    /// 的相邻片段重新接回同一周期。真实额度回落仍保留为新周期。
     nonisolated static func cleaningUpLegacyPayload(_ payload: QuotaCyclePayload) -> QuotaCyclePayload {
         var next = payload
         next.records = next.records.filter { record in
             record.endAt.timeIntervalSince(record.startAt) >= Self.minimumShardDuration
         }
         next.records = Self.deduplicatingOverlapping(next.records)
+        next.records = Self.coalescingResetDriftFragments(next.records)
         return next
+    }
+
+    nonisolated private static func coalescingResetDriftFragments(
+        _ records: [QuotaCycleRecord]
+    ) -> [QuotaCycleRecord] {
+        let grouped = Dictionary(grouping: records) { record in
+            "\(record.accountKey)|\(record.app.rawValue)|\(record.limitKind.rawValue)|\(record.limitID)"
+        }
+        var result: [QuotaCycleRecord] = []
+        for group in grouped.values {
+            let sorted = group.sorted { lhs, rhs in
+                if lhs.startAt == rhs.startAt { return lhs.endAt < rhs.endAt }
+                return lhs.startAt < rhs.startAt
+            }
+            guard var current = sorted.first else { continue }
+            for next in sorted.dropFirst() {
+                if isResetDriftContinuation(earlier: current, later: next) {
+                    current = mergingResetDriftContinuation(earlier: current, later: next)
+                } else {
+                    result.append(current)
+                    current = next
+                }
+            }
+            result.append(current)
+        }
+        return result.sorted { lhs, rhs in
+            if lhs.endAt == rhs.endAt { return lhs.id < rhs.id }
+            return lhs.endAt > rhs.endAt
+        }
+    }
+
+    nonisolated private static func isResetDriftContinuation(
+        earlier: QuotaCycleRecord,
+        later: QuotaCycleRecord
+    ) -> Bool {
+        let isAdjacent = abs(earlier.endAt.timeIntervalSince(later.startAt))
+            <= Self.resetDriftAdjacencyTolerance
+        let endedBeforeScheduledReset = earlier.endAt < earlier.scheduledEndAt
+        let usageDidNotReset = !isExtraReset(
+            previousUsedPercent: earlier.latestUsedPercent,
+            usedPercent: later.latestUsedPercent
+        )
+        return isAdjacent && endedBeforeScheduledReset && usageDidNotReset
+    }
+
+    nonisolated private static func mergingResetDriftContinuation(
+        earlier: QuotaCycleRecord,
+        later: QuotaCycleRecord
+    ) -> QuotaCycleRecord {
+        // 保留较新的 ID，让当前 rollup 与后续采样继续命中同一条记录；边界则向前
+        // 扩回第一个片段，额度段也在伪切点处合并，避免把同一额度误当福利重置。
+        var merged = later
+        merged.startAt = min(earlier.startAt, later.startAt)
+        if let earlierFirst = earlier.firstSampleAt {
+            merged.firstSampleAt = min(merged.firstSampleAt ?? earlierFirst, earlierFirst)
+        }
+        if let earlierLast = earlier.lastSampleAt {
+            merged.lastSampleAt = max(merged.lastSampleAt ?? earlierLast, earlierLast)
+        }
+        merged.allowanceSegments = mergingContinuationAllowanceSegments(
+            earlier.allowanceSegments,
+            later.allowanceSegments
+        )
+        merged.source = preferredSource(earlier.source, later.source)
+        if earlier.boundaryQuality == .observed {
+            merged.boundaryQuality = .observed
+        }
+        return merged
+    }
+
+    nonisolated private static func mergingContinuationAllowanceSegments(
+        _ earlier: [QuotaCycleAllowanceSegment],
+        _ later: [QuotaCycleAllowanceSegment]
+    ) -> [QuotaCycleAllowanceSegment] {
+        guard var earlierLast = earlier.last, var laterFirst = later.first else {
+            return earlier + later
+        }
+        earlierLast.id = laterFirst.id
+        earlierLast.endAt = laterFirst.endAt
+        earlierLast.latestUsedPercent = laterFirst.latestUsedPercent
+        earlierLast.maximumUsedPercent = max(
+            earlierLast.maximumUsedPercent,
+            laterFirst.maximumUsedPercent
+        )
+        earlierLast.firstSampleAt = min(earlierLast.firstSampleAt, laterFirst.firstSampleAt)
+        earlierLast.lastSampleAt = max(earlierLast.lastSampleAt, laterFirst.lastSampleAt)
+        laterFirst = earlierLast
+        return Array(earlier.dropLast()) + [laterFirst] + Array(later.dropFirst())
     }
 
     nonisolated private static func deduplicatingOverlapping(_ records: [QuotaCycleRecord]) -> [QuotaCycleRecord] {
@@ -342,11 +449,31 @@ enum QuotaCycleStore {
                         && candidate.endAt > sampledAt
                         && abs(candidate.endAt.timeIntervalSince(scheduledEndAt)) < Self.resetJitterTolerance
                 })
+                ?? next.records.indices
+                    .filter { index in
+                        let candidate = next.records[index]
+                        return candidate.accountKey == accountKey
+                            && candidate.app == app
+                            && candidate.limitKind == limit.kind
+                            && candidate.endAt > sampledAt
+                            && !isExtraReset(
+                                previousUsedPercent: candidate.latestUsedPercent,
+                                usedPercent: usedPercent
+                            )
+                    }
+                    .max { lhs, rhs in
+                        let lhsSample = next.records[lhs].lastSampleAt ?? .distantPast
+                        let rhsSample = next.records[rhs].lastSampleAt ?? .distantPast
+                        return lhsSample < rhsSample
+                    }
             if let index = matchIndex {
+                let wasActive = next.records[index].endAt > sampledAt
                 next.records[index].limitKind = limit.kind
-                next.records[index].startAt = startAt
+                next.records[index].startAt = min(next.records[index].startAt, startAt)
                 next.records[index].scheduledEndAt = scheduledEndAt
-                next.records[index].endAt = min(next.records[index].endAt, scheduledEndAt)
+                next.records[index].endAt = wasActive
+                    ? scheduledEndAt
+                    : min(next.records[index].endAt, scheduledEndAt)
                 next.records[index].firstSampleAt = min(next.records[index].firstSampleAt ?? sampledAt, sampledAt)
                 next.records[index].lastSampleAt = max(next.records[index].lastSampleAt ?? sampledAt, sampledAt)
                 updateAllowanceSegments(

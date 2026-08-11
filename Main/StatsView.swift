@@ -218,7 +218,7 @@ struct StatsView: View {
         case .conversations:
             EmptyView()
         case .cycles:
-            CycleStatsView(serviceFilter: serviceFilter)
+            CycleStatsView(canvasWidth: canvasWidth)
         case .timeline:
             timelineContent(isWide: isWide)
         }
@@ -263,10 +263,7 @@ struct StatsView: View {
     }
 
     private var visibleServiceFilters: [StatsServiceFilter] {
-        let apps = viewMode == .cycles
-            ? visibleUsageApps.filter { $0 == .codex || $0 == .claude }
-            : visibleUsageApps
-        return [.all] + apps.map { filter(for: $0) }
+        [.all] + visibleUsageApps.map { filter(for: $0) }
     }
 
     private func filter(for app: UsageApp) -> StatsServiceFilter {
@@ -281,10 +278,6 @@ struct StatsView: View {
     /// 设置里被关闭的服务,其 sidebar 项不再显示;若当前选中了被关闭的服务则回退到全部。
     private func reconcileServiceFilter() {
         if case .all = serviceFilter { return }
-        if viewMode == .cycles, serviceFilter == .pi || serviceFilter == .opencode {
-            serviceFilter = .all
-            return
-        }
         if let app = serviceFilter.usageApp, !SettingsStore.shared.isUsageServiceVisible(app) {
             serviceFilter = .all
         }

@@ -354,6 +354,40 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(payload.records.first?.latestUsedPercent, 40)
     }
 
+    func testCycleStoreKeepsActiveCycleWhenResetAtDriftsWithoutUsageReset() throws {
+        let sampledAt = Date(timeIntervalSince1970: 100_000)
+        let firstReset = sampledAt.addingTimeInterval(604_800)
+        var payload = QuotaCyclePayload(trackingStartedAt: sampledAt)
+        let samples: [(minutes: TimeInterval, usedPercent: Double)] = [
+            (0, 0),
+            (17, 0),
+            (19, 0),
+            (21, 20),
+        ]
+
+        for sample in samples {
+            payload = QuotaCycleStore.record(
+                payload: payload,
+                accountKey: "codex:primary:test",
+                app: .codex,
+                snapshot: snapshot(
+                    kind: .weekly,
+                    usedPercent: sample.usedPercent,
+                    reset: firstReset.addingTimeInterval(sample.minutes * 60)
+                ),
+                source: .api,
+                sampledAt: sampledAt.addingTimeInterval(sample.minutes * 60)
+            )
+        }
+
+        let cycle = try XCTUnwrap(payload.records.first)
+        XCTAssertEqual(payload.records.count, 1, "额度未回落时 reset_at 分钟级漂移仍属于同一周期")
+        XCTAssertEqual(cycle.startAt, sampledAt)
+        XCTAssertEqual(cycle.endAt, firstReset.addingTimeInterval(21 * 60))
+        XCTAssertEqual(cycle.latestUsedPercent, 20)
+        XCTAssertEqual(cycle.allowanceSegments.count, 1)
+    }
+
     func testCleaningUpLegacyPayloadDropsShardsAndMergesOverlaps() throws {
         let start = Date(timeIntervalSince1970: 100_000)
         let week: TimeInterval = 604_800
@@ -376,6 +410,66 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(kept.endAt, start.addingTimeInterval(3 + week), "应保留 endAt 最晚的周期")
         XCTAssertEqual(kept.firstSampleAt, start)
         XCTAssertEqual(kept.lastSampleAt, start.addingTimeInterval(3 + week))
+        XCTAssertEqual(kept.reportedUsedPercent, 25, "重复 initial 段不能把额度百分比累加")
+    }
+
+    func testCleaningUpPayloadCoalescesResetDriftButKeepsRealUsageReset() throws {
+        let start = Date(timeIntervalSince1970: 100_000)
+        let trueReset = start.addingTimeInterval(2 * 24 * 60 * 60)
+        let minute: TimeInterval = 60
+
+        var beforeReset = cycleRecord(
+            id: "before-reset",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: trueReset,
+            usedPercent: 100
+        )
+        beforeReset.scheduledEndAt = start.addingTimeInterval(604_800)
+
+        var fragmentA = cycleRecord(
+            id: "fragment-a",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: trueReset,
+            end: trueReset.addingTimeInterval(17 * minute),
+            usedPercent: 0
+        )
+        fragmentA.scheduledEndAt = trueReset.addingTimeInterval(604_800)
+
+        var fragmentB = cycleRecord(
+            id: "fragment-b",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: fragmentA.endAt,
+            end: fragmentA.endAt.addingTimeInterval(2 * minute),
+            usedPercent: 0
+        )
+        fragmentB.scheduledEndAt = fragmentB.startAt.addingTimeInterval(604_800)
+
+        let current = cycleRecord(
+            id: "current",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: fragmentB.endAt.addingTimeInterval(1),
+            end: fragmentB.endAt.addingTimeInterval(604_801),
+            usedPercent: 20
+        )
+
+        let cleaned = QuotaCycleStore.cleaningUpLegacyPayload(QuotaCyclePayload(
+            version: 4,
+            trackingStartedAt: start,
+            records: [current, fragmentB, fragmentA, beforeReset]
+        ))
+
+        XCTAssertEqual(cleaned.records.count, 2)
+        XCTAssertNotNil(cleaned.records.first { $0.id == "before-reset" }, "100% → 0% 是真实重置")
+        let merged = try XCTUnwrap(cleaned.records.first { $0.id == "current" })
+        XCTAssertEqual(merged.startAt, trueReset, "相邻片段相差 1 秒仍应合并")
+        XCTAssertEqual(merged.latestUsedPercent, 20)
+        XCTAssertEqual(merged.reportedUsedPercent, 20)
+        XCTAssertEqual(merged.allowanceSegments.count, 1)
     }
 
     func testCycleStoreCreatesAccountSegmentsWithoutBackdatingSwitchedAccount() {
@@ -601,7 +695,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(aggregator.snapshot().reduce(0) { $0 + $1.inputTokens }, 20)
     }
 
-    func testCycleForecastRequiresTenPercentObservedUsage() {
+    func testCycleForecastStartsWithAnyObservedUsage() {
         let cycle = cycleRecord(
             id: "forecast",
             accountKey: "claude:primary",
@@ -633,9 +727,17 @@ final class QuotaParsingTests: XCTestCase {
             currentAllowanceTotals: totals,
             quality: .exact
         )
-        XCTAssertNil(lowSummary.projectedFullCycleTokens)
-        XCTAssertNil(lowSummary.projectedFullCycleCostUSD)
-        XCTAssertNil(lowSummary.forecastConfidence)
+        XCTAssertEqual(lowSummary.projectedFullCycleTokens, 10_101)
+        if let projectedCost = lowSummary.projectedFullCycleCostUSD {
+            XCTAssertEqual(
+                NSDecimalNumber(decimal: projectedCost).doubleValue,
+                404.04,
+                accuracy: 0.01
+            )
+        } else {
+            XCTFail("Low-observation cost should still be forecast")
+        }
+        XCTAssertEqual(lowSummary.forecastConfidence, .early)
     }
 
     func testCycleForecastUsesObservedDeltaAfterNonzeroBaseline() {
@@ -668,9 +770,83 @@ final class QuotaParsingTests: XCTestCase {
             currentAllowanceTotals: totals,
             quality: .incomplete
         )
-        XCTAssertNil(incompleteSummary.projectedFullCycleTokens)
-        XCTAssertNil(incompleteSummary.projectedFullCycleCostUSD)
-        XCTAssertNil(incompleteSummary.forecastConfidence)
+        XCTAssertEqual(incompleteSummary.projectedFullCycleTokens, 5_000)
+        XCTAssertEqual(incompleteSummary.projectedFullCycleCostUSD, 100)
+        XCTAssertEqual(incompleteSummary.forecastConfidence, .rough)
+    }
+
+    func testCycleForecastRequiresObservedUsageAndAValueBasis() {
+        var cycle = cycleRecord(
+            id: "forecast-basis",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: Date(timeIntervalSince1970: 1_000),
+            end: Date(timeIntervalSince1970: 2_000),
+            usedPercent: 0
+        )
+        var totals = UsageTotals.zero
+        totals.inputTokens = 1_000
+        totals.costUSD = 20
+
+        let noObservedUsage = CycleUsageSummary(
+            cycle: cycle,
+            totals: totals,
+            currentAllowanceTotals: totals,
+            quality: .exact
+        )
+        XCTAssertNil(noObservedUsage.projectedFullCycleTokens)
+        XCTAssertNil(noObservedUsage.projectedFullCycleCostUSD)
+        XCTAssertNil(noObservedUsage.forecastConfidence)
+
+        cycle.latestUsedPercent = 20
+        cycle.allowanceSegments[0].latestUsedPercent = 20
+        cycle.allowanceSegments[0].maximumUsedPercent = 20
+
+        var tokensOnly = totals
+        tokensOnly.costUSD = 0
+        let noCostBasis = CycleUsageSummary(
+            cycle: cycle,
+            totals: tokensOnly,
+            currentAllowanceTotals: tokensOnly,
+            quality: .exact
+        )
+        XCTAssertEqual(noCostBasis.projectedFullCycleTokens, 5_000)
+        XCTAssertNil(noCostBasis.projectedFullCycleCostUSD)
+
+        let noTokenBasis = CycleUsageSummary(
+            cycle: cycle,
+            totals: .zero,
+            currentAllowanceTotals: .zero,
+            quality: .exact
+        )
+        XCTAssertNil(noTokenBasis.projectedFullCycleTokens)
+        XCTAssertNil(noTokenBasis.projectedFullCycleCostUSD)
+        XCTAssertNil(noTokenBasis.forecastConfidence)
+    }
+
+    func testCycleForecastUsesKnownCostWhenSomeUsageIsUnpriced() {
+        let cycle = cycleRecord(
+            id: "partially-unpriced",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: Date(timeIntervalSince1970: 1_000),
+            end: Date(timeIntervalSince1970: 2_000),
+            usedPercent: 20
+        )
+        var totals = UsageTotals.zero
+        totals.inputTokens = 1_000
+        totals.costUSD = 20
+        totals.hasUnpricedUsage = true
+        let summary = CycleUsageSummary(
+            cycle: cycle,
+            totals: totals,
+            currentAllowanceTotals: totals,
+            quality: .incomplete
+        )
+
+        XCTAssertEqual(summary.projectedFullCycleTokens, 5_000)
+        XCTAssertEqual(summary.projectedFullCycleCostUSD, 100)
+        XCTAssertEqual(summary.forecastConfidence, .rough)
     }
 
     func testCycleForecastKeepsActualUsageBeforeExtraReset() {
