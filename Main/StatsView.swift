@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Charts
 
 // MARK: - StatsRange
@@ -191,7 +192,7 @@ struct StatsView: View {
             } else {
                 GeometryReader { proxy in
                     ScrollView {
-                        mainContent(canvasWidth: proxy.size.width)
+                        mainContent(canvasWidth: proxy.size.width, viewportHeight: proxy.size.height)
                     }
                 }
             }
@@ -210,7 +211,7 @@ struct StatsView: View {
     private static let wideCanvasWidth: CGFloat = 880
 
     @ViewBuilder
-    private func mainContent(canvasWidth: CGFloat) -> some View {
+    private func mainContent(canvasWidth: CGFloat, viewportHeight: CGFloat) -> some View {
         let isWide = canvasWidth >= Self.wideCanvasWidth
         switch viewMode {
         case .overview:
@@ -220,7 +221,7 @@ struct StatsView: View {
         case .cycles:
             CycleStatsView(canvasWidth: canvasWidth)
         case .timeline:
-            timelineContent(isWide: isWide)
+            timelineContent(isWide: isWide, viewportHeight: viewportHeight)
         }
     }
 
@@ -241,7 +242,10 @@ struct StatsView: View {
         .padding(20)
     }
 
-    private func timelineContent(isWide: Bool) -> some View {
+    /// 时间线面板均分视口剩余高度:每个账号分区 `.maxHeight(.infinity)` 等分,
+    /// 面板内图表吃掉剩余、宽画布下表格拉满与图等高;内容最小高度总和超过视口时,
+    /// 由外层 ScrollView 兜底滚动(见 `viewportHeight` 只作 minHeight 的撑满技巧)。
+    private func timelineContent(isWide: Bool, viewportHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             timelineHeader
             if timelineSections.isEmpty {
@@ -250,10 +254,12 @@ struct StatsView: View {
             } else {
                 ForEach(timelineSections) { section in
                     QuotaTimelineAccountPanel(section: section, isWide: isWide)
+                        .frame(maxHeight: .infinity)
                 }
             }
         }
         .padding(20)
+        .frame(minHeight: max(0, viewportHeight - 40), alignment: .top)
     }
 
     // MARK: Sidebar
@@ -1457,27 +1463,27 @@ private struct QuotaTimelineAccountPanel: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 120)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     Text(tr("No changes today", "今天暂无变动"))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 120)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else if isWide {
-                // 图表与表格是同一数据的两个视角,宽画布下左图右表,压缩面板高度。
+                // 图表与表格是同一数据的两个视角,宽画布下左图右表;
+                // 两者等高撑满面板剩余高度(表格行少时边框拉满、行顶对齐)。
                 HStack(alignment: .top, spacing: 14) {
                     QuotaTimelineChart(events: section.events, tint: section.tint)
+                        .frame(minHeight: 140, maxHeight: .infinity)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 180)
                     QuotaTimelineTable(events: section.events)
                         .frame(width: 384)
+                        .frame(maxHeight: .infinity)
                 }
             } else {
                 QuotaTimelineChart(events: section.events, tint: section.tint)
-                    .frame(height: 180)
+                    .frame(minHeight: 140, maxHeight: .infinity)
                 QuotaTimelineTable(events: section.events)
             }
         }
@@ -1550,34 +1556,34 @@ private struct QuotaTimelineChart: View {
                 y: .value("Remaining", event.afterRemainingPercent)
             )
             .foregroundStyle(tint)
-            .lineStyle(StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
 
             PointMark(
                 x: .value("Time", event.sampledAt),
                 y: .value("Remaining", event.afterRemainingPercent)
             )
-            .foregroundStyle(statusColor(remainingPercent: Double(event.afterRemainingPercent), tint: tint))
-            .symbolSize(34)
+            .foregroundStyle(chartPointColor(remainingPercent: Double(event.afterRemainingPercent)))
+            .symbolSize(40)
         }
         .chartYScale(domain: 0...100)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine()
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(.secondary.opacity(0.18))
                 AxisValueLabel(format: .dateTime.hour().minute())
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
         .chartYAxis {
             AxisMarks(position: .leading, values: [0, 20, 50, 80, 100]) { value in
                 AxisGridLine()
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(.secondary.opacity(0.18))
                 AxisValueLabel {
                     if let intValue = value.as(Int.self) {
                         Text("\(intValue)%")
                             .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -1585,6 +1591,27 @@ private struct QuotaTimelineChart: View {
         // 左:Y 轴刻度不贴面板内容左缘;右:末尾数据点 / X 轴标签不贴相邻表格。
         .padding(.leading, 12)
         .padding(.trailing, 8)
+    }
+
+    /// 图表内数据点 4 档色:warning / low / empty 沿用全局 `statusColor`;
+    /// normal(>50%)档在图表内比全局中性灰加深一档,保证浅色模式下点的可读性。
+    /// 全局 `statusColor` 与 Popover / HUD 等处的中性灰不受影响。
+    private func chartPointColor(remainingPercent: Double) -> Color {
+        guard remainingPercent > 50 else {
+            return statusColor(remainingPercent: remainingPercent, tint: .secondary)
+        }
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let rgb: (red: CGFloat, green: CGFloat, blue: CGFloat) = isDark
+                ? (174, 174, 180)  // #AEAEB4
+                : (86, 86, 90)     // #56565A
+            return NSColor(
+                calibratedRed: rgb.red / 255,
+                green: rgb.green / 255,
+                blue: rgb.blue / 255,
+                alpha: 1
+            )
+        })
     }
 }
 
