@@ -1785,6 +1785,19 @@ enum StatsFormatter {
         return "$\(f.string(from: ns) ?? "0.00")"
     }
 
+    /// 美元显示取整（四舍五入到整数），仅周期页面使用，存储仍用原始 Decimal。
+    static func costWhole(_ value: Decimal) -> String {
+        let ns = NSDecimalNumber(decimal: value)
+            .rounding(accordingToBehavior: nil)
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.groupingSeparator = ","
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 0
+        return "$\(f.string(from: ns) ?? "0")"
+    }
+
     static func costPrecise(_ value: Decimal) -> String {
         let ns = NSDecimalNumber(decimal: value)
         let f = NumberFormatter()
@@ -1799,6 +1812,12 @@ enum StatsFormatter {
     @MainActor
     static func tierCost(_ value: Decimal, hasUnpricedUsage _: Bool) -> String {
         return cost(value)
+    }
+
+    /// 取整版 tierCost：仅周期页面使用。
+    @MainActor
+    static func tierCostWhole(_ value: Decimal, hasUnpricedUsage _: Bool) -> String {
+        return costWhole(value)
     }
 
     @MainActor

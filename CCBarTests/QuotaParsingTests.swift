@@ -202,6 +202,43 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(result.records.count, 2)
     }
 
+    func testCycleStoreRecordsInactiveWeeklyWindow() {
+        // is_active 只表示「当前哪个限制在起约束作用」；非当前约束的 weekly
+        // 窗口同样返回有效 percent，周期记录必须继续采样，否则页面停在旧值。
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let weeklyEnd = sampledAt.addingTimeInterval(604_800)
+        let snapshot = QuotaSnapshot(
+            app: .claude,
+            primaryLimit: .standard(
+                kind: .fiveHour,
+                window: QuotaWindow(usedPercent: 12, resetsAt: sampledAt.addingTimeInterval(18_000), windowSeconds: 18_000),
+                isActive: true
+            ),
+            secondaryLimit: .standard(
+                kind: .weekly,
+                window: QuotaWindow(usedPercent: 34, resetsAt: weeklyEnd, windowSeconds: 604_800),
+                isActive: false
+            ),
+            modelLimits: [],
+            planType: nil,
+            fetchedAt: sampledAt
+        )
+
+        let result = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot,
+            source: .api,
+            sampledAt: sampledAt
+        )
+
+        let weeklyRecord = result.records.first { $0.limitKind == .weekly }
+        XCTAssertEqual(result.records.count, 2)
+        XCTAssertEqual(weeklyRecord?.latestUsedPercent, 34)
+        XCTAssertEqual(weeklyRecord?.allowanceSegments.first?.maximumUsedPercent, 34)
+    }
+
     func testCycleStoreDeduplicatesSnapshotsAndRollsAtNewReset() {
         let sampledAt = Date(timeIntervalSince1970: 1_000)
         let firstReset = sampledAt.addingTimeInterval(18_000)
@@ -822,6 +859,38 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertNil(noTokenBasis.projectedFullCycleTokens)
         XCTAssertNil(noTokenBasis.projectedFullCycleCostUSD)
         XCTAssertNil(noTokenBasis.forecastConfidence)
+    }
+
+    func testCycleForecastFallsBackToLatestUsedPercentWhenBaselineIsFull() {
+        // 历史遗留坏段（baseline=100 的重复记录合并残留）observed=0 时，
+        // 用满预估应回退到最新已用比例，而不是显示 —。
+        var cycle = cycleRecord(
+            id: "full-baseline",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: Date(timeIntervalSince1970: 1_000),
+            end: Date(timeIntervalSince1970: 2_000),
+            usedPercent: 100
+        )
+        cycle.allowanceSegments[0].baselineUsedPercent = 100
+        cycle.allowanceSegments[0].maximumUsedPercent = 100
+        cycle.allowanceSegments[0].latestUsedPercent = 100
+
+        var totals = UsageTotals.zero
+        totals.inputTokens = 1_000
+        totals.costUSD = 20
+
+        let summary = CycleUsageSummary(
+            cycle: cycle,
+            totals: totals,
+            currentAllowanceTotals: totals,
+            quality: .exact
+        )
+
+        XCTAssertEqual(summary.forecastObservedPercent, 100)
+        XCTAssertEqual(summary.projectedFullCycleTokens, 1_000)
+        XCTAssertEqual(summary.projectedFullCycleCostUSD, 20)
+        XCTAssertEqual(summary.forecastConfidence, .reliable)
     }
 
     func testCycleForecastUsesKnownCostWhenSomeUsageIsUnpriced() {

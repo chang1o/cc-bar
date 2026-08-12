@@ -145,7 +145,7 @@ nonisolated struct QuotaCycleRecord: Sendable, Codable, Equatable, Identifiable 
         allowanceSegments.reduce(0) { $0 + $1.observedUsedPercent }
     }
 
-    /// 历史表展示的服务端额度消耗：初始额度取最高一次，福利重置后的每个新额度段再累加。
+    /// 历史表展示的服务端额度消耗：初始额度取最高一次，重置后的每个新额度段再累加。
     /// 旧版重复 initial 段只取最大值，避免把迁移残留重复计算成 200%。
     var reportedUsedPercent: Double {
         let initialMaximum = allowanceSegments
@@ -298,7 +298,7 @@ enum QuotaCycleStore {
         later: QuotaCycleRecord
     ) -> QuotaCycleRecord {
         // 保留较新的 ID，让当前 rollup 与后续采样继续命中同一条记录；边界则向前
-        // 扩回第一个片段，额度段也在伪切点处合并，避免把同一额度误当福利重置。
+        // 扩回第一个片段，额度段也在伪切点处合并，避免把同一额度误当重置。
         var merged = later
         merged.startAt = min(earlier.startAt, later.startAt)
         if let earlierFirst = earlier.firstSampleAt {
@@ -425,7 +425,10 @@ enum QuotaCycleStore {
             sampledAt: sampledAt
         )
         let limits = [snapshot.primaryLimit, snapshot.secondaryLimit].compactMap { $0 }
-        for limit in limits where (limit.kind == .fiveHour || limit.kind == .weekly) && limit.isActive != false {
+        // 不按 is_active 过滤：is_active 只表示「当前哪个限制在起约束作用」，
+        // 非当前约束的窗口（如 5 小时未满时的 weekly）同样返回有效的 percent / resets_at，
+        // 过滤会导致周期记录停更，页面停留在旧值。
+        for limit in limits where limit.kind == .fiveHour || limit.kind == .weekly {
             guard let scheduledEndAt = limit.window.resetsAt,
                   let seconds = windowSeconds(for: limit),
                   seconds > 0

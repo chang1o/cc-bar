@@ -151,7 +151,11 @@ nonisolated struct CycleUsageSummary: Sendable, Equatable, Identifiable {
     }
 
     var forecastObservedPercent: Double {
-        cycle.latestAllowanceSegment?.observedUsedPercent ?? 0
+        guard let segment = cycle.latestAllowanceSegment else { return 0 }
+        let observed = segment.observedUsedPercent
+        // observed 为 0 时通常是历史遗留坏段（baseline=100 的重复记录合并残留），
+        // 此时退回最新已用比例兜底，让用满预估仍然可算。
+        return observed > 0 ? observed : max(0, segment.latestUsedPercent)
     }
 
     var forecastConfidence: CycleForecastConfidence? {

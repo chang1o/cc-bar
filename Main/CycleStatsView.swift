@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 struct CycleStatsView: View {
@@ -5,36 +6,10 @@ struct CycleStatsView: View {
 
     let canvasWidth: CGFloat
 
-    @State private var historyTab: HistoryTab = .codexFiveHour
-    @State private var visibleCounts: [HistoryTab: Int] = [:]
-
-    /// 当前周期卡：达到该宽度时同一服务的 5 小时 / 周周期左右并排，更窄时单列堆叠。
-    private static let twoColumnWidth: CGFloat = 720
-    private static let historyPageSize = 8
-
-    /// 历史区一次只展示一个「服务 × 周期类型」组合，避免 4 张同构表堆屏。
-    private enum HistoryTab: String, CaseIterable, Identifiable, Hashable {
-        case codexFiveHour
-        case codexWeekly
-        case claudeFiveHour
-        case claudeWeekly
-
-        var id: String { rawValue }
-
-        var app: UsageApp {
-            switch self {
-            case .codexFiveHour, .codexWeekly: return .codex
-            case .claudeFiveHour, .claudeWeekly: return .claude
-            }
-        }
-
-        var kind: QuotaLimitKind {
-            switch self {
-            case .codexFiveHour, .claudeFiveHour: return .fiveHour
-            case .codexWeekly, .claudeWeekly: return .weekly
-            }
-        }
-    }
+    /// 历史曲线当前展示的周期类型（Codex / Claude 两个面板共用）。
+    @State private var historyKind: QuotaLimitKind = .weekly
+    /// 每个面板独立的悬浮吸附时间点。
+    @State private var selectedEndAt: [UsageApp: Date?] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -49,7 +24,7 @@ struct CycleStatsView: View {
                 }
             }
 
-            currentCycleGrid
+            currentCyclesSection
             historySection
         }
         .padding(20)
@@ -71,234 +46,172 @@ struct CycleStatsView: View {
 
     // MARK: - 当前周期
 
-    /// Codex → Claude 两行、5 小时 → 周周期两列的卡片网格。
-    /// 行内比同一服务的两个周期，列内比两个服务的同一周期，两个方向都能直接对照。
-    private var currentCycleGrid: some View {
-        let isTwoColumn = canvasWidth >= Self.twoColumnWidth
-
-        return VStack(alignment: .leading, spacing: 12) {
+    /// Codex / Claude × 5 小时 / 周 共 4 张 KPI 卡一行，对齐 Stats 首页 KPI 行。
+    private var currentCyclesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Text(tr("Current cycles", "当前周期"))
                 .font(.system(size: 13, weight: .semibold))
 
-            if isTwoColumn {
-                VStack(spacing: 12) {
-                    HStack(alignment: .top, spacing: 12) {
-                        currentCycleCard(app: .codex, kind: .fiveHour)
-                        currentCycleCard(app: .codex, kind: .weekly)
-                    }
-                    HStack(alignment: .top, spacing: 12) {
-                        currentCycleCard(app: .claude, kind: .fiveHour)
-                        currentCycleCard(app: .claude, kind: .weekly)
-                    }
-                }
+            HStack(spacing: 12) {
+                currentCycleKpiCard(app: .codex, kind: .fiveHour)
+                currentCycleKpiCard(app: .codex, kind: .weekly)
+                currentCycleKpiCard(app: .claude, kind: .fiveHour)
+                currentCycleKpiCard(app: .claude, kind: .weekly)
+            }
+        }
+    }
+
+    /// KPI 卡：6pt 识别色点 + 服务/周期标签 → 整周期预估 Tokens·费用大字 →
+    /// 已用辅助行 → 迷你进度条 → 倒计时。空态只保留标签与一句引导。
+    private func currentCycleKpiCard(app: UsageApp, kind: QuotaLimitKind) -> some View {
+        Group {
+            if let summary = currentSummary(app: app, kind: kind) {
+                cycleKpiBody(summary, app: app, kind: kind)
             } else {
-                VStack(spacing: 12) {
-                    currentCycleCard(app: .codex, kind: .fiveHour)
-                    currentCycleCard(app: .codex, kind: .weekly)
-                    currentCycleCard(app: .claude, kind: .fiveHour)
-                    currentCycleCard(app: .claude, kind: .weekly)
-                }
+                cycleKpiEmptyState(app: app, kind: kind)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(height: 152)
+        .ccPanel(cornerRadius: 10)
     }
 
-    private func currentCycleCard(app: UsageApp, kind: QuotaLimitKind) -> some View {
-        VStack(spacing: 0) {
-            // 顶部 2pt 服务识别色边,只做品牌识别,不参与额度着色。
-            Rectangle()
-                .fill(app.tintColor)
-                .frame(height: 2)
-
-            Group {
-                if let summary = currentSummary(app: app, kind: kind) {
-                    currentCycleBody(summary, app: app, kind: kind)
-                } else {
-                    currentCycleEmptyState(app: app, kind: kind)
-                }
-            }
-            .padding(16)
-        }
-        .frame(maxWidth: .infinity, minHeight: 172, alignment: .topLeading)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .ccPanel(cornerRadius: 12)
-    }
-
-    private func currentCycleBody(
+    /// 卡主体：标签行 → 用满预估大字 → 已用辅助行 → 迷你进度条 → 倒计时。
+    private func cycleKpiBody(
         _ summary: CycleUsageSummary,
         app: UsageApp,
         kind: QuotaLimitKind
     ) -> some View {
-        let usedPercent = max(0, min(100, summary.cycle.latestUsedPercent))
+        let usedPercent = max(0, summary.cycle.latestUsedPercent)
 
-        return VStack(alignment: .leading, spacing: 0) {
-            cardHeader(app: app, kind: kind, resetsAt: summary.cycle.endAt)
-
-            Spacer(minLength: 12)
-
-            // 「本机实际」与「已用比例」共用一行 label,下一行才是各自的主数值。
-            HStack(alignment: .firstTextBaseline) {
-                Text(tr("Local actual", "本机实际"))
-                    .font(.system(size: 11, weight: .medium))
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                ServiceMark(color: app.tintColor, size: 6, cornerRadius: 1.5)
+                Text("\(app.displayName) · \(cycleKindShort(kind))")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text(String(format: tr("Used %.1f%%", "已用 %.1f%%"), usedPercent))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .padding(.bottom, 4)
-
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(StatsFormatter.compactToken(summary.totals.totalTokens))
-                    .font(.system(size: 20, weight: .semibold))
-                    .kerning(-0.25)
-                    .monospacedDigit()
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Text("Tokens")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .minimumScaleFactor(0.8)
+            }
 
-                Spacer(minLength: 8)
-
-                Text(StatsFormatter.tierCost(
-                    summary.totals.costUSD,
-                    hasUnpricedUsage: summary.totals.hasUnpricedUsage
-                ))
-                .font(.system(size: 16, weight: .semibold))
+            Text(fullUseLine(summary))
+                .font(.system(size: 24, weight: .semibold))
+                .kerning(-0.5)
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            }
-            .padding(.bottom, 10)
+                .minimumScaleFactor(0.75)
+                .padding(.top, 2)
 
-            // 填充段 = 本机实际,整条 = 用满预估;填充比例即官方已用比例。
-            // 「用了多少 / 用了几成 / 用满是多少」由同一条同时表达,不用心算。
+            Text(
+                "\(tr("Used", "已用")) \(StatsFormatter.compactToken(summary.totals.totalTokens)) · \(StatsFormatter.tierCostWhole(summary.totals.costUSD, hasUnpricedUsage: summary.totals.hasUnpricedUsage)) · \(String(format: "%.1f%%", usedPercent))"
+            )
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+
             ProgressBar(
                 value: usedPercent / 100,
                 tint: statusColor(remainingPercent: 100 - usedPercent, tint: app.tintColor),
-                height: 6
+                height: 4
             )
-            .padding(.bottom, 10)
+            .padding(.top, 3)
 
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(tr("Full-use estimate", "用满预估"))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(forecastTokenText(summary.projectedFullCycleTokens))
-                    .font(.system(size: 13, weight: .semibold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Text("Tokens")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
 
-                Spacer(minLength: 8)
-
-                Text(forecastCostText(summary.projectedFullCycleCostUSD))
-                    .font(.system(size: 13, weight: .semibold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-
-            Spacer(minLength: 10)
-
-            Text(forecastContextText(summary))
-                .font(.system(size: 10.5))
+            ResetTimeText(resetsAt: summary.cycle.endAt)
+                .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.vertical, 18)
+        .padding(.horizontal, 16)
     }
 
-    private func currentCycleEmptyState(app: UsageApp, kind: QuotaLimitKind) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardHeader(app: app, kind: kind, resetsAt: nil)
-
-            Spacer(minLength: 12)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(hasAccount(app)
-                     ? tr("Waiting for the current cycle", "等待当前周期")
-                     : tr("Account not detected", "未检测到账号"))
-                    .font(.system(size: 12.5, weight: .medium))
-                Text(hasAccount(app)
-                     ? tr(
-                        "A successful quota refresh will establish this reset cycle.",
-                        "额度刷新成功后会建立该重置周期。"
-                     )
-                     : tr(
-                        "Connect this service and refresh quota to start recording cycles.",
-                        "连接该服务并刷新额度后开始记录周期。"
-                     ))
+    /// 空态卡：标签行固定在顶部，下方提示内容在剩余空间垂直居中。
+    private func cycleKpiEmptyState(app: UsageApp, kind: QuotaLimitKind) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                ServiceMark(color: app.tintColor, size: 6, cornerRadius: 1.5)
+                Text("\(app.displayName) · \(cycleKindShort(kind))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
 
             Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
 
-    private func cardHeader(app: UsageApp, kind: QuotaLimitKind, resetsAt: Date?) -> some View {
-        HStack(spacing: 7) {
-            ServiceMark(color: app.tintColor, size: 9, cornerRadius: 2.2)
-            Text(app.displayName)
-                .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
-            Text(cycleKindTitle(kind, plural: false))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-
-            Spacer(minLength: 8)
-
-            if let resetsAt {
-                ResetTimeText(resetsAt: resetsAt)
-                    .font(.system(size: 11, weight: .medium))
+            HStack(spacing: 6) {
+                Image(systemName: "clock")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                Text(hasAccount(app)
+                     ? tr("Waiting for the current cycle", "等待当前周期")
+                     : tr("Account not detected", "未检测到账号"))
+                    .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
+
+            Text(hasAccount(app)
+                 ? tr(
+                    "A successful quota refresh will establish this reset cycle.",
+                    "额度刷新成功后会建立该重置周期。"
+                 )
+                 : tr(
+                    "Connect this service and refresh quota to start recording cycles.",
+                    "连接该服务并刷新额度后开始记录周期。"
+                 ))
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
         }
+        .padding(.vertical, 18)
+        .padding(.horizontal, 16)
     }
 
-    // MARK: - 历史周期
+    // MARK: - 历史周期曲线
 
+    /// Codex / Claude 各一个面板，面板内切换 5 小时 / 周，
+    /// 曲线为各已完成周期的用满预估 Tokens，悬浮显示周期明细。
     private var historySection: some View {
-        let panelWidth = max(0, canvasWidth - 40)
-
-        return VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tr("Completed cycles", "历史周期"))
-                    .font(.system(size: 13, weight: .semibold))
-                Text(tr(
-                    "Pick a provider and cycle length to compare finished cycles one list at a time.",
-                    "选择服务与周期类型，逐个对比已结束周期的额度、实际用量和用满预估。"
-                ))
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tr("Completed cycles", "历史周期"))
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(tr(
+                        "Full-use estimate per finished cycle, switch between 5-hour and weekly windows.",
+                        "每个已结束周期的用满预估曲线，可在 5 小时与周窗口间切换。"
+                    ))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Picker("", selection: $historyKind) {
+                    Text(tr("5-hour", "5 小时")).tag(QuotaLimitKind.fiveHour)
+                    Text(tr("Weekly", "周")).tag(QuotaLimitKind.weekly)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+                .onChange(of: historyKind) { _, _ in selectedEndAt = [:] }
             }
 
-            Picker("", selection: $historyTab) {
-                ForEach(HistoryTab.allCases) { tab in
-                    Text(historyTabTitle(tab)).tag(tab)
+            ForEach([UsageApp.codex, .claude], id: \.self) { app in
+                if !completedSummaries(app: app, kind: .fiveHour).isEmpty
+                    || !completedSummaries(app: app, kind: .weekly).isEmpty {
+                    historyChartPanel(app: app, panelWidth: max(0, canvasWidth - 40))
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 460, alignment: .leading)
-
-            historyPanel(panelWidth: panelWidth)
 
             Text(tr(
                 "Quota used is the highest provider-reported usage in the initial allowance plus any extra-reset allowances. Actual Tokens and cost include only local logs found by CCBar; estimates are not official limits, and unobserved cycles are not invented.",
-                "额度已用取初始额度与各福利重置额度段内服务端记录到的最高比例。实际 Tokens 与费用只包含 CCBar 能读取到的本机日志；预估不代表官方额度，也不会补造未观察周期。"
+                "额度已用取初始额度与各重置额度段内服务端记录到的最高比例。实际 Tokens 与费用只包含 CCBar 能读取到的本机日志；预估不代表官方额度，也不会补造未观察周期。"
             ))
             .font(.system(size: 10.5))
             .foregroundStyle(.tertiary)
@@ -306,49 +219,26 @@ struct CycleStatsView: View {
         }
     }
 
-    private func historyPanel(panelWidth: CGFloat) -> some View {
-        let tab = historyTab
-        let rows = completedSummaries(app: tab.app, kind: tab.kind)
-        let visible = visibleCount(tab)
+    /// 每服务一个面板：服务名 + 曲线（或空态），周期类型由历史区统一切换。
+    private func historyChartPanel(app: UsageApp, panelWidth: CGFloat) -> some View {
+        let summaries = completedSummaries(app: app, kind: historyKind)
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                ServiceMark(color: tab.app.tintColor, size: 9, cornerRadius: 2.2)
-                Text(tab.app.displayName)
+                ServiceMark(color: app.tintColor, size: 9, cornerRadius: 2.2)
+                Text(app.displayName)
                     .font(.system(size: 12.5, weight: .semibold))
-                Text(cycleKindTitle(tab.kind, plural: true))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
                 Spacer()
-                Text(String(format: tr("%d cycles", "%d 个周期"), rows.count))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
             }
 
-            if rows.isEmpty {
+            if summaries.isEmpty {
                 Text(tr("No completed cycles yet", "暂无已结束周期"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 120)
+                    .frame(maxWidth: .infinity, minHeight: 210)
             } else {
-                historyTable(
-                    rows: Array(rows.prefix(visible)),
-                    tableWidth: max(0, panelWidth - 32)
-                )
-
-                if rows.count > visible {
-                    Button(String(
-                        format: tr("Show %d more cycles", "再显示 %d 个周期"),
-                        Self.historyPageSize
-                    )) {
-                        visibleCounts[tab] = visible + Self.historyPageSize
-                    }
-                    .buttonStyle(.borderless)
-                    .pointingHandCursor()
-                    .font(.system(size: 11.5, weight: .medium))
-                    .frame(maxWidth: .infinity)
-                }
+                historyChart(summaries: summaries, app: app)
+                    .frame(height: 210)
             }
         }
         .padding(16)
@@ -356,140 +246,133 @@ struct CycleStatsView: View {
         .ccPanel(cornerRadius: 12)
     }
 
-    /// 四列表：周期 / 额度已用 / 实际 / 用满预估。
-    /// 「实际」与「用满预估」各自把 Tokens 与费用上下堆叠成一格,
-    /// 同列上下对照,不必横跨半屏找对应数字。
-    private func historyTable(
-        rows: [CycleUsageSummary],
-        tableWidth: CGFloat
-    ) -> some View {
-        let horizontalSpacing: CGFloat = 10
-        let usableWidth = max(0, tableWidth - horizontalSpacing * 3)
-        let periodWidth = max(150, usableWidth * 0.34)
-        let quotaWidth = max(88, usableWidth * 0.16)
-        let metricWidth = max(96, (usableWidth - periodWidth - quotaWidth) / 2)
+    /// 周期曲线：x = 周期结束时间，y = 用满预估费用（LineMark + PointMark），
+    /// 悬浮吸附最近数据点并显示周期明细。
+    private func historyChart(summaries: [CycleUsageSummary], app: UsageApp) -> some View {
+        Chart(summaries) { summary in
+            LineMark(
+                x: .value("Time", summary.cycle.endAt),
+                y: .value("Cost", projectedCost(summary))
+            )
+            .foregroundStyle(app.tintColor)
+            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            .interpolationMethod(.catmullRom)
 
-        return Grid(alignment: .leading, horizontalSpacing: horizontalSpacing, verticalSpacing: 0) {
-            GridRow {
-                tableHeader(tr("Period", "周期"), width: periodWidth)
-                tableHeader(tr("Quota used", "额度已用"), width: quotaWidth, alignment: .trailing)
-                tableHeader(
-                    tr("Actual Tokens / cost", "实际 Tokens / 费用"),
-                    width: metricWidth,
-                    alignment: .trailing
-                )
-                tableHeader(
-                    tr("Full-use Tokens / cost", "用满 Tokens / 费用"),
-                    width: metricWidth,
-                    alignment: .trailing
-                )
+            PointMark(
+                x: .value("Time", summary.cycle.endAt),
+                y: .value("Cost", projectedCost(summary))
+            )
+            .foregroundStyle(app.tintColor)
+            .symbolSize(26)
+
+            if let selected = selectedSummary(at: selectedEndAt[app] ?? nil, in: summaries) {
+                RuleMark(x: .value("Time", selected.cycle.endAt))
+                    .foregroundStyle(Color.secondary.opacity(0.25))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(
+                        position: .top,
+                        spacing: 6,
+                        overflowResolution: .init(x: .fit(to: .plot), y: .disabled)
+                    ) {
+                        historyTooltip(selected)
+                    }
             }
-            .padding(.bottom, 7)
-
-            Divider().gridCellColumns(4)
-
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, summary in
-                historyRow(
-                    summary,
-                    periodWidth: periodWidth,
-                    quotaWidth: quotaWidth,
-                    metricWidth: metricWidth
-                )
-                .padding(.vertical, 9)
-
-                if index < rows.count - 1 {
-                    Divider().gridCellColumns(4)
+        }
+        .chartXSelection(value: Binding(
+            get: { selectedEndAt[app] ?? nil },
+            set: { selectedEndAt[app] = $0 }
+        ))
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                AxisGridLine()
+                    .foregroundStyle(.secondary.opacity(0.18))
+                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine()
+                    .foregroundStyle(.secondary.opacity(0.18))
+                AxisValueLabel {
+                    if let intValue = value.as(Int.self) {
+                        Text(StatsFormatter.tierCostWhole(Decimal(intValue), hasUnpricedUsage: false))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
     }
 
-    private func historyRow(
-        _ summary: CycleUsageSummary,
-        periodWidth: CGFloat,
-        quotaWidth: CGFloat,
-        metricWidth: CGFloat
-    ) -> some View {
-        let usedPercent = max(0, summary.cycle.reportedUsedPercent)
+    /// 悬浮明细卡：时间范围（周周期附带天数）· 预估 Tokens/费用 · 已用与百分比 · 重置 ×N。
+    private func historyTooltip(_ summary: CycleUsageSummary) -> some View {
+        let usedPercent = max(0, summary.cycle.latestUsedPercent)
 
-        return GridRow {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(periodText(summary.cycle))
-                    .font(.system(size: 11.5, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Text(historyMetadataText(summary))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .frame(width: periodWidth, alignment: .leading)
-
-            // 迷你条让「哪个周期烧满了、哪个没用完」一眼可见。
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(String(format: "%.1f%%", usedPercent))
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.74)
-                ProgressBar(
-                    value: usedPercent / 100,
-                    tint: statusColor(
-                        remainingPercent: 100 - usedPercent,
-                        tint: summary.cycle.app.tintColor
-                    ),
-                    height: 3
-                )
-            }
-            .frame(width: quotaWidth, alignment: .trailing)
-
-            stackedMetric(
-                primary: StatsFormatter.compactToken(summary.totals.totalTokens),
-                secondary: StatsFormatter.tierCost(
-                    summary.totals.costUSD,
-                    hasUnpricedUsage: summary.totals.hasUnpricedUsage
-                ),
-                width: metricWidth
-            )
-
-            stackedMetric(
-                primary: forecastTokenText(summary.projectedFullCycleTokens),
-                secondary: forecastCostText(summary.projectedFullCycleCostUSD),
-                width: metricWidth
-            )
-        }
-    }
-
-    private func stackedMetric(primary: String, secondary: String, width: CGFloat) -> some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text(primary)
-                .font(.system(size: 12, design: .monospaced))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.74)
-            Text(secondary)
-                .font(.system(size: 11, design: .monospaced))
-                .monospacedDigit()
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(tooltipTimeLine(summary))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.74)
+            Text("\(tr("Estimate", "预估")) \(fullUseLine(summary))")
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+            Text(
+                "\(tr("Used", "已用")) \(StatsFormatter.compactToken(summary.totals.totalTokens)) · \(StatsFormatter.tierCostWhole(summary.totals.costUSD, hasUnpricedUsage: summary.totals.hasUnpricedUsage)) · \(String(format: "%.1f%%", usedPercent))"
+            )
+            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+            .monospacedDigit()
+            if summary.cycle.extraResetCount > 0 {
+                Text(extraResetText(summary.cycle.extraResetCount))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
         }
-        .frame(width: width, alignment: .trailing)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+        )
     }
 
-    private func tableHeader(
-        _ text: String,
-        width: CGFloat,
-        alignment: Alignment = .leading
-    ) -> some View {
-        Text(text)
-            .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
-            .minimumScaleFactor(0.8)
-            .frame(width: width, alignment: alignment)
-            .frame(minHeight: 26)
+    /// 悬浮首行：时间段，周周期附带「N 天」（Codex 周可能 2-3 天就重置）。
+    private func tooltipTimeLine(_ summary: CycleUsageSummary) -> String {
+        let period = periodText(summary.cycle)
+        if let days = cycleDurationDays(summary) {
+            return "\(period) · \(String(format: tr("%d days", "%d 天"), days))"
+        }
+        return period
+    }
+
+    /// 周周期窗口天数（四舍五入），5 小时周期不展示。
+    private func cycleDurationDays(_ summary: CycleUsageSummary) -> Int? {
+        guard summary.cycle.limitKind == .weekly else { return nil }
+        let seconds = summary.cycle.endAt.timeIntervalSince(summary.cycle.startAt)
+        return max(1, Int((seconds / 86_400).rounded()))
+    }
+
+    /// 用满预估费用转 Double（曲线 y 值）。
+    private func projectedCost(_ summary: CycleUsageSummary) -> Double {
+        let cost = summary.projectedFullCycleCostUSD ?? 0
+        return NSDecimalNumber(decimal: cost).doubleValue
+    }
+
+    /// 悬浮时间点吸附到 endAt 最近的周期。
+    private func selectedSummary(
+        at date: Date?,
+        in summaries: [CycleUsageSummary]
+    ) -> CycleUsageSummary? {
+        guard let date else { return nil }
+        return summaries.min {
+            abs($0.cycle.endAt.timeIntervalSince(date))
+                < abs($1.cycle.endAt.timeIntervalSince(date))
+        }
     }
 
     // MARK: - 数据
@@ -549,109 +432,39 @@ struct CycleStatsView: View {
     private func hasAccount(_ app: UsageApp) -> Bool {
         accountKey(for: app) != nil
     }
-
-    private func visibleCount(_ tab: HistoryTab) -> Int {
-        visibleCounts[tab] ?? Self.historyPageSize
-    }
-
-    // MARK: - 文案
-
-    private func historyTabTitle(_ tab: HistoryTab) -> String {
-        switch tab {
-        case .codexFiveHour: return tr("Codex · 5H", "Codex · 5 小时")
-        case .codexWeekly: return tr("Codex · Weekly", "Codex · 周")
-        case .claudeFiveHour: return tr("Claude · 5H", "Claude · 5 小时")
-        case .claudeWeekly: return tr("Claude · Weekly", "Claude · 周")
-        }
-    }
-
-    private func cycleKindTitle(_ kind: QuotaLimitKind, plural: Bool) -> String {
-        switch (kind, plural) {
-        case (.fiveHour, false): return tr("5-hour cycle", "5 小时周期")
-        case (.weekly, false): return tr("Weekly cycle", "周周期")
-        case (.fiveHour, true): return tr("5-hour cycles", "5 小时周期")
-        case (.weekly, true): return tr("Weekly cycles", "周周期")
-        default: return tr("Reset cycle", "重置周期")
-        }
-    }
-
-    private func forecastContextText(_ summary: CycleUsageSummary) -> String {
-        var parts: [String] = []
-        if summary.cycle.firstSampleAt != nil {
-            parts.append(String(format: tr(
-                "Estimate based on %.1f%%",
-                "预估依据 %.1f%%"
-            ), summary.forecastObservedPercent))
-        }
-        if let confidence = summary.forecastConfidence {
-            parts.append(confidenceText(confidence))
-        } else {
-            parts.append(tr("No estimate basis", "暂无预估依据"))
-        }
-        if let quality = qualityText(summary.quality) {
-            parts.append(quality)
-        }
-        if summary.cycle.extraResetCount > 0 {
-            parts.append(extraResetText(summary.cycle.extraResetCount))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func historyMetadataText(_ summary: CycleUsageSummary) -> String {
-        var parts: [String] = []
-        if let confidence = summary.forecastConfidence {
-            parts.append(confidenceText(confidence))
-        } else {
-            parts.append(tr("No estimate", "暂无预估"))
-        }
-        if let quality = qualityText(summary.quality) {
-            parts.append(quality)
-        }
-        if summary.cycle.extraResetCount > 0 {
-            parts.append(extraResetText(summary.cycle.extraResetCount))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func confidenceText(_ confidence: CycleForecastConfidence) -> String {
-        switch confidence {
-        case .early: return tr("Early estimate", "早期估算")
-        case .rough: return tr("Rough estimate", "粗略估算")
-        case .reference: return tr("Reference estimate", "参考估算")
-        case .reliable: return tr("More reliable", "较可靠")
-        }
-    }
-
-    private func qualityText(_ quality: CycleUsageQuality) -> String? {
-        switch quality {
-        case .exact: return nil
-        case .estimated: return tr("Estimated data", "估算数据")
-        case .incomplete: return tr("Partial data", "数据不完整")
-        }
-    }
-
-    private func forecastCostText(_ value: Decimal?) -> String {
-        guard let value else { return "—" }
-        return "≈\(StatsFormatter.tierCost(value, hasUnpricedUsage: false))"
-    }
-
-    private func forecastTokenText(_ value: Int?) -> String {
-        guard let value else { return "—" }
-        return "≈\(StatsFormatter.compactToken(value))"
-    }
-
-    private func extraResetText(_ count: Int) -> String {
-        String(format: tr("Extra reset ×%d", "福利重置 ×%d"), count)
-    }
-
-    private func periodText(_ cycle: QuotaCycleRecord) -> String {
-        "\(Self.periodFormatter.string(from: cycle.startAt)) – \(Self.periodFormatter.string(from: cycle.endAt))"
-    }
-
-    private static let periodFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter
-    }()
 }
+
+// MARK: - 周期页共享的纯函数与子视图
+
+/// 周期类型短标签：5 小时 / 周，用于 KPI 卡标签与历史行。
+private func cycleKindShort(_ kind: QuotaLimitKind) -> String {
+    switch kind {
+    case .fiveHour: return tr("5-hour", "5 小时")
+    case .weekly: return tr("Weekly", "周")
+    default: return tr("Cycle", "周期")
+    }
+}
+
+/// KPI 卡主数字：用满预估 `Tokens · 费用`，无依据的一侧显示 `—`。
+private func fullUseLine(_ summary: CycleUsageSummary) -> String {
+    let tokens = summary.projectedFullCycleTokens
+        .map { StatsFormatter.compactToken($0) } ?? "—"
+    let cost = summary.projectedFullCycleCostUSD
+        .map { StatsFormatter.tierCostWhole($0, hasUnpricedUsage: false) } ?? "—"
+    return "\(tokens) · \(cost)"
+}
+
+private func extraResetText(_ count: Int) -> String {
+    String(format: tr("Extra reset ×%d", "重置 ×%d"), count)
+}
+
+private func periodText(_ cycle: QuotaCycleRecord) -> String {
+    "\(periodFormatter.string(from: cycle.startAt)) – \(periodFormatter.string(from: cycle.endAt))"
+}
+
+private let periodFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "MM-dd HH:mm"
+    return formatter
+}()
