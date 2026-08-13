@@ -6,14 +6,26 @@ final class PiJSONLScannerTests: XCTestCase {
     private var tempDir: URL!
 
     override func setUpWithError() throws {
-        tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pi-scan-test-\(UUID().uuidString)", isDirectory: true)
+        tempDir = Self.canonicalTempDirectory("pi-scan-test")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
         if let tempDir {
             try? FileManager.default.removeItem(at: tempDir)
+        }
+    }
+
+    /// enumerator 返回的 URL 是 realpath 形式（/var → /private/var），
+    /// 测试目录统一规范化，避免路径前缀差异导致比较失败。
+    private static func canonicalTempDirectory(_ name: String) -> URL {
+        let raw = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: raw, withIntermediateDirectories: true)
+        return raw.path.withCString { cpath in
+            guard let resolved = realpath(cpath, nil) else { return raw }
+            defer { free(resolved) }
+            return URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
         }
     }
 
@@ -56,8 +68,8 @@ final class PiJSONLScannerTests: XCTestCase {
         )
         let oldDate = Date(timeIntervalSince1970: 1_000)
         let newDate = Date(timeIntervalSince1970: 2_000)
-        try FileManager.default.setAttributes([.modificationDate: oldDate], atPath: oldFile.path)
-        try FileManager.default.setAttributes([.modificationDate: newDate], atPath: newFile.path)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: oldFile.path)
+        try FileManager.default.setAttributes([.modificationDate: newDate], ofItemAtPath: newFile.path)
 
         let all = JSONLDirectoryEnumerator.files(at: tempDir)
         XCTAssertEqual(Set(all.map(\.url)), Set([oldFile, newFile]))
