@@ -33,6 +33,13 @@
 		49C1B127000000000001AABB /* ClaudeDelegatedRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */; };
 		49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */; };
 		49C1B129000000000001AABB /* AntigravityQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */; };
+		49C1BF01000000000001AABB /* QuotaRefreshPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */; };
+		49C1BF06000000000001AABB /* QuotaPersistenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */; };
+		49C1BF07000000000001AABB /* QuotaPersistenceCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */; };
+		49C1BF02000000000001AABB /* QuotaRefreshPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF02000000000001AAAA /* QuotaRefreshPlanTests.swift */; };
+		49C1BF03000000000001AABB /* ImportedCodexStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */; };
+		49C1BF04000000000001AABB /* ScannerIncrementalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */; };
+		49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */; };
 		49C1B131000000000001AABB /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B131000000000001AAAA /* Scheduler.swift */; };
 		49C1B132000000000001AABB /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B132000000000001AAAA /* L10n.swift */; };
 		49C1B140000000000001AABB /* codex.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B140000000000001AAAA /* codex.svg */; };
@@ -119,6 +126,13 @@
 		49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeDelegatedRefresh.swift; sourceTree = "<group>"; };
 		49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsClient.swift; sourceTree = "<group>"; };
 		49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityQuotaClient.swift; sourceTree = "<group>"; };
+		49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRefreshPlan.swift; sourceTree = "<group>"; };
+		49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPersistenceCoordinator.swift; sourceTree = "<group>"; };
+		49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPersistenceCoordinatorTests.swift; sourceTree = "<group>"; };
+		49C1BF02000000000001AAAA /* QuotaRefreshPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRefreshPlanTests.swift; sourceTree = "<group>"; };
+		49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexStoreTests.swift; sourceTree = "<group>"; };
+		49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerIncrementalTests.swift; sourceTree = "<group>"; };
+		49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageEquivalenceTests.swift; sourceTree = "<group>"; };
 		49C1B131000000000001AAAA /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		49C1B132000000000001AAAA /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		49C1B140000000000001AAAA /* codex.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = codex.svg; sourceTree = "<group>"; };
@@ -303,6 +317,8 @@
 				49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */,
 				49C1B126000000000001AAAA /* ServiceStatusClient.swift */,
 				49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */,
+				49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */,
+				49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */,
 			);
 			path = Quota;
 			sourceTree = "<group>";
@@ -398,6 +414,11 @@
 			isa = PBXGroup;
 			children = (
 				49C1B300000000000001AAAA /* QuotaParsingTests.swift */,
+				49C1BF02000000000001AAAA /* QuotaRefreshPlanTests.swift */,
+				49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */,
+				49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */,
+				49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */,
+				49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */,
 				49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */,
 				49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */,
 				49C1B3F2000000000001AAAA /* Fixtures */,
@@ -570,6 +591,8 @@
 				49C1B122000000000001AABB /* CodexQuotaClient.swift in Sources */,
 				49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */,
 				49C1B129000000000001AABB /* AntigravityQuotaClient.swift in Sources */,
+				49C1BF01000000000001AABB /* QuotaRefreshPlan.swift in Sources */,
+				49C1BF06000000000001AABB /* QuotaPersistenceCoordinator.swift in Sources */,
 				49C1B123000000000001AABB /* ClaudeQuotaClient.swift in Sources */,
 				49C1B124000000000001AABB /* ClaudeCLIFallbackQuotaClient.swift in Sources */,
 				49C1B125000000000001AABB /* ClaudeTokenRefresher.swift in Sources */,
@@ -621,6 +644,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */,
+				49C1BF02000000000001AABB /* QuotaRefreshPlanTests.swift in Sources */,
+				49C1BF03000000000001AABB /* ImportedCodexStoreTests.swift in Sources */,
+				49C1BF04000000000001AABB /* ScannerIncrementalTests.swift in Sources */,
+				49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */,
+				49C1BF07000000000001AABB /* QuotaPersistenceCoordinatorTests.swift in Sources */,
 				49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */,
 				49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */,
 			);

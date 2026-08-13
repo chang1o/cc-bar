@@ -98,6 +98,13 @@ final class AppState {
     private var didBootstrap = false
     private var quotaCache = QuotaCachePayload()
     private var claudeFallbackBackoffUntil: Date?
+    /// 批次 C：本轮标脏的额度持久化文件，刷新 / bootstrap / 设置操作末尾统一落盘。
+    private var dirtyQuotaFiles: Set<QuotaFile> = []
+    /// 批次 C：额度持久化 coordinator，编码与原子写移出 MainActor。
+    private let quotaPersistenceCoordinator = QuotaPersistenceCoordinator()
+    /// 批次 C：持久化提交的单调递增序列号。`Task.detached` 的执行顺序无语言保证，
+    /// 序列号用于让 coordinator 丢弃乱序到达的过期快照，防止旧数据覆盖新数据。
+    private var persistenceSequence: UInt64 = 0
 
     /// `refreshNow()` 的去重锁。同一时刻只允许一个真正在跑的整体刷新;
     /// 期间额外的 `refreshNow()` 调用立即返回(no-op),不再排队。
@@ -150,6 +157,8 @@ final class AppState {
         }
         // 启动后异步拉一次服务状态;后续由 Scheduler 5 分钟刷新一次
         Task { await refreshServiceStatus() }
+        // 批次 C：bootstrap 期间标脏的额度文件统一落盘
+        scheduleQuotaPersistenceFlush()
     }
 
     /// 设置变更后，把刷新间隔同步到 Scheduler
@@ -198,24 +207,32 @@ final class AppState {
     /// loadCodex / loadClaude 内部会比较 accountId / email,若身份变化则清掉
     /// 旧的额度缓存,避免出现"新账号 + 旧额度"的错配。
     func refreshQuotas(reason: QuotaRefreshReason = .periodic) async {
-        let settings = SettingsStore.shared
-        let codexEnabled = settings.showCodex
-        if codexEnabled {
+        let plan = QuotaRefreshPlan.make(
+            showCodex: SettingsStore.shared.showCodex,
+            showClaude: SettingsStore.shared.showClaude,
+            showAntigravity: SettingsStore.shared.showAntigravity,
+            hasVisibleImported: importedCodexAccounts.contains(where: \.visibleInPopover)
+        )
+        if plan.refreshCodex {
             await loadCodex()
             await loadCodexQuota(reason: reason)
         }
-        if settings.showClaude {
+        if plan.refreshClaude {
             await loadClaude()
             await loadClaudeQuota(reason: reason)
         }
-        if settings.showAntigravity {
+        if plan.refreshAntigravity {
             await loadAntigravityQuota(reason: reason)
         }
-        await loadAllImportedCodexQuotas(
-            reason: reason,
-            canMirrorPrimary: codexEnabled
-        )
+        if plan.refreshImported {
+            await loadAllImportedCodexQuotas(
+                reason: reason,
+                canMirrorPrimary: plan.canMirrorPrimary
+            )
+        }
         logQuotaSummary()
+        // 批次 C：本轮标脏的额度文件统一落盘（每文件每轮最多写一次）
+        scheduleQuotaPersistenceFlush()
     }
 
     /// 拉取 OpenAI / Anthropic statuspage 状态。失败保留旧快照,不清空。
@@ -351,6 +368,8 @@ final class AppState {
         importedCache = importedCache.filter { alive.contains($0.key) }
         quotaCache.importedCodex = importedCache.isEmpty ? nil : importedCache
         saveQuotaCache()
+        // 批次 C：设置操作产生的标脏立即落盘
+        scheduleQuotaPersistenceFlush()
     }
 
     /// 增 / 改:同 account_id 静默覆盖 token,元数据按入参更新;新增时落到列表末尾。
@@ -770,11 +789,32 @@ final class AppState {
         importedCodexRefreshStates[id] = state
     }
 
+    /// 批次 C：只标记 cache 本轮有变化，实际编码与原子写由 flush 统一提交。
     private func saveQuotaCache() {
-        do {
-            try QuotaCache.save(quotaCache)
-        } catch {
-            print("[QuotaCache 额度缓存] 写盘失败 save failed: \(error)")
+        dirtyQuotaFiles.insert(.cache)
+    }
+
+    /// 批次 C：只标记 history 本轮有变化，实际编码与原子写由 flush 统一提交。
+    private func saveQuotaHistory() {
+        dirtyQuotaFiles.insert(.history)
+    }
+
+    /// 批次 C：把本轮标脏的 quota 文件以不可变快照提交给持久化 coordinator。
+    /// 非 async，所有写盘点（刷新 / bootstrap / 设置操作）都能直接调用；
+    /// 编码与原子写在 utility 任务里执行，不再阻塞 MainActor。
+    private func scheduleQuotaPersistenceFlush() {
+        guard !dirtyQuotaFiles.isEmpty else { return }
+        persistenceSequence &+= 1
+        let snapshot = QuotaPersistenceCoordinator.Snapshot(
+            sequence: persistenceSequence,
+            cache: dirtyQuotaFiles.contains(.cache) ? quotaCache : nil,
+            history: dirtyQuotaFiles.contains(.history) ? quotaHistory : nil,
+            cycles: dirtyQuotaFiles.contains(.cycles) ? quotaCycles : nil
+        )
+        dirtyQuotaFiles.removeAll()
+        let coordinator = quotaPersistenceCoordinator
+        Task.detached(priority: .utility) {
+            await coordinator.submit(snapshot)
         }
     }
 
@@ -828,14 +868,6 @@ final class AppState {
         saveQuotaHistory()
     }
 
-    private func saveQuotaHistory() {
-        do {
-            try QuotaHistoryStore.save(quotaHistory)
-        } catch {
-            print("[QuotaHistory 额度历史] 写盘失败 save failed: \(error)")
-        }
-    }
-
     private func recordQuotaCycles(
         accountKey: String,
         app: UsageApp,
@@ -855,11 +887,7 @@ final class AppState {
         let previousPartition = cycleUsagePartition(for: quotaCycles)
         let previousAccountSegments = quotaCycles.accountSegments
         quotaCycles = next
-        do {
-            try QuotaCycleStore.save(next)
-        } catch {
-            print("[QuotaCycle 周期历史] save failed: \(error)")
-        }
+        dirtyQuotaFiles.insert(.cycles)
         if cycleUsagePartition(for: next) != previousPartition
             || next.accountSegments != previousAccountSegments
         {
