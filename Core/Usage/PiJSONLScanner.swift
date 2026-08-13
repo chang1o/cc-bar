@@ -59,7 +59,7 @@ enum PiJSONLScanner {
         var projectResolver = ConversationProjectResolver()
 
         let totalFiles = files.count
-        for (index, url) in files.enumerated() {
+        for (index, file) in files.enumerated() {
             if index % 50 == 0 || index == totalFiles - 1 {
                 onProgress?(ScanProgress(
                     app: .pi,
@@ -68,10 +68,10 @@ enum PiJSONLScanner {
                     linesParsed: linesParsed
                 ))
             }
-            let path = url.path
-            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-            let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-            let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+            let url = file.url
+            let path = file.path
+            let mtime = file.modificationTime
+            let size = file.size
 
             var state = previous[path] ?? ScanFileState(mtime: 0, offset: 0)
             // mtime 没变 & size 没变 → 跳过，用 state 里的会话元数据补种子。

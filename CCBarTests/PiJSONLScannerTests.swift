@@ -46,6 +46,34 @@ final class PiJSONLScannerTests: XCTestCase {
 
     // MARK: - 全量扫描
 
+    func testDirectoryEnumeratorReturnsMetadataAndAppliesMinimumMtime() throws {
+        let oldFile = try write("old.jsonl", header)
+        let newFile = try write("new.jsonl", header + "\n" + userLine(id: "a1b2c3d1", text: "hello"))
+        try "ignored".write(
+            to: tempDir.appendingPathComponent("ignored.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let oldDate = Date(timeIntervalSince1970: 1_000)
+        let newDate = Date(timeIntervalSince1970: 2_000)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], atPath: oldFile.path)
+        try FileManager.default.setAttributes([.modificationDate: newDate], atPath: newFile.path)
+
+        let all = JSONLDirectoryEnumerator.files(at: tempDir)
+        XCTAssertEqual(Set(all.map(\.url)), Set([oldFile, newFile]))
+        XCTAssertEqual(
+            all.first(where: { $0.url == oldFile })?.size,
+            UInt64(try Data(contentsOf: oldFile).count)
+        )
+        XCTAssertEqual(all.first(where: { $0.url == newFile })?.modificationTime, newDate.timeIntervalSince1970)
+
+        let recent = JSONLDirectoryEnumerator.files(
+            at: tempDir,
+            minimumMtime: Date(timeIntervalSince1970: 1_500)
+        )
+        XCTAssertEqual(recent.map(\.url), [newFile])
+    }
+
     func testFullScanParsesAssistantMessagesAndSeed() throws {
         let content = [
             header,

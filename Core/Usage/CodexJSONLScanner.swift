@@ -52,16 +52,16 @@ enum CodexJSONLScanner {
         indexedTitles: [String: String],
         onProgress: ScanProgressCallback? = nil
     ) async -> Result {
-        var filesByID: [String: URL] = [:]
+        var filesByID: [String: JSONLFileDescriptor] = [:]
         for root in roots {
-            for url in JSONLDirectoryEnumerator.files(at: root) {
-                let id = conversationID(from: url) ?? url.path
+            for file in JSONLDirectoryEnumerator.files(at: root) {
+                let id = conversationID(from: file.url) ?? file.path
                 if let existing = filesByID[id] {
-                    let oldDate = (try? existing.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                    let newDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                    if newDate > oldDate { filesByID[id] = url }
+                    if file.modificationTime > existing.modificationTime {
+                        filesByID[id] = file
+                    }
                 } else {
-                    filesByID[id] = url
+                    filesByID[id] = file
                 }
             }
         }
@@ -86,9 +86,22 @@ enum CodexJSONLScanner {
             var batchResults: [(index: Int, result: CodexFileScanResult)] = []
             await withTaskGroup(of: (Int, CodexFileScanResult).self) { group in
                 for index in offset..<end {
-                    let url = files[index]
-                    group.addTask {
-                        (index, scanSingleFile(url: url, previous: previous, indexedTitles: indexedTitles))
+                    let file = files[index]
+                    let stateKey = conversationID(from: file.url) ?? file.path
+                    let state = previous[stateKey]
+                    if state?.mtime == file.modificationTime, state?.offset == file.size {
+                        batchResults.append((
+                            index,
+                            scanSingleFile(file: file, previous: previous, indexedTitles: indexedTitles)
+                        ))
+                    } else {
+                        group.addTask {
+                            (index, scanSingleFile(
+                                file: file,
+                                previous: previous,
+                                indexedTitles: indexedTitles
+                            ))
+                        }
                     }
                 }
                 for await item in group {
@@ -138,7 +151,7 @@ enum CodexJSONLScanner {
             }
         }
 
-        let alive = Set(files.map { conversationID(from: $0) ?? $0.path })
+        let alive = Set(files.map { conversationID(from: $0.url) ?? $0.path })
         for key in newState.keys where !alive.contains(key) {
             newState.removeValue(forKey: key)
         }
@@ -162,16 +175,16 @@ enum CodexJSONLScanner {
     /// cacheCreationAvailable；并发版把本文件写过的会话 key 放进
     /// `cacheCreationKeys` 返回，由调用方合并后统一补标，语义等价。
     private nonisolated static func scanSingleFile(
-        url: URL,
+        file: JSONLFileDescriptor,
         previous: [String: ScanFileState],
         indexedTitles: [String: String]
     ) -> CodexFileScanResult {
-        let path = url.path
+        let url = file.url
+        let path = file.path
         let filenameID = conversationID(from: url)
         let stateKey = filenameID ?? path
-        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+        let mtime = file.modificationTime
+        let size = file.size
 
         var state = previous[stateKey] ?? ScanFileState(mtime: 0, offset: 0)
         // mtime 没变 & size 没变 → 跳过，用 state 元数据补种子。

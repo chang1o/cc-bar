@@ -53,7 +53,7 @@ enum ClaudeJSONLScanner {
         var seen = Set(seenMessageIds)
 
         let totalFiles = files.count
-        for (index, url) in files.enumerated() {
+        for (index, file) in files.enumerated() {
             if index % 50 == 0 || index == totalFiles - 1 {
                 onProgress?(ScanProgress(
                     app: .claude,
@@ -62,11 +62,11 @@ enum ClaudeJSONLScanner {
                     linesParsed: linesParsed
                 ))
             }
-            let path = url.path
+            let url = file.url
+            let path = file.path
             let projectContainer = projectContainerName(root: root, file: url)
-            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-            let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-            let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+            let mtime = file.modificationTime
+            let size = file.size
 
             var state = previous[path] ?? ScanFileState(mtime: 0, offset: 0)
             // mtime 没变 & size 没变 → 跳过
@@ -237,7 +237,7 @@ enum ClaudeJSONLScanner {
         }
 
         // 删除已不存在的文件 watermark
-        let alive = Set(files.map { $0.path })
+        let alive = Set(files.map(\.path))
         for key in newState.keys where !alive.contains(key) {
             newState.removeValue(forKey: key)
         }

@@ -74,11 +74,21 @@ enum JSONLTimestamp {
     }
 }
 
-/// 递归列出某目录下后缀为 .jsonl 的文件。
+/// JSONL 枚举阶段取得的稳定文件元数据，供 Scanner 判断是否需要读取。
+/// 避免枚举后再为每个文件重复查询 mtime / size。
+struct JSONLFileDescriptor: Sendable {
+    var url: URL
+    var modificationTime: TimeInterval
+    var size: UInt64
+
+    var path: String { url.path }
+}
+
+/// 递归列出某目录下后缀为 .jsonl 的文件，并同时取得增量扫描所需元数据。
 enum JSONLDirectoryEnumerator {
     /// - Parameter minimumMtime: 非 nil 时只返回修改时间不早于该时刻的文件。
     ///   供周期用量的受限重建过滤"最近窗口之外"的旧日志使用；nil 时行为与原来一致。
-    nonisolated static func files(at root: URL, minimumMtime: Date? = nil) -> [URL] {
+    nonisolated static func files(at root: URL, minimumMtime: Date? = nil) -> [JSONLFileDescriptor] {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
@@ -86,20 +96,31 @@ enum JSONLDirectoryEnumerator {
         }
         guard let it = fm.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            includingPropertiesForKeys: [
+                .isRegularFileKey,
+                .contentModificationDateKey,
+                .fileSizeKey,
+            ],
             options: [.skipsHiddenFiles]
         ) else {
             return []
         }
-        var result: [URL] = []
+        var result: [JSONLFileDescriptor] = []
         for case let url as URL in it {
             guard url.pathExtension.lowercased() == "jsonl" else { continue }
+            let values = try? url.resourceValues(forKeys: [
+                .contentModificationDateKey,
+                .fileSizeKey,
+            ])
+            let modificationDate = values?.contentModificationDate
             if let minimumMtime {
-                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate
-                guard let mtime, mtime >= minimumMtime else { continue }
+                guard let modificationDate, modificationDate >= minimumMtime else { continue }
             }
-            result.append(url)
+            result.append(JSONLFileDescriptor(
+                url: url,
+                modificationTime: modificationDate?.timeIntervalSince1970 ?? 0,
+                size: UInt64(max(0, values?.fileSize ?? 0))
+            ))
         }
         return result
     }
