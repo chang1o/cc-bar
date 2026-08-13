@@ -193,17 +193,28 @@ final class AppState {
         }
     }
 
-    /// 每次刷新(手动 / Scheduler 定时)都先重读本地凭据,以便用户在外部
-    /// (如 cc-switch)切换账号后 ccbar 能感知到。loadCodex / loadClaude
-    /// 内部会比较 accountId / email,若身份变化则清掉旧的额度缓存,避免
-    /// 出现"新账号 + 旧额度"的错配。
+    /// 每次刷新(手动 / Scheduler 定时)只重读已启用主 Provider 的本地凭据,
+    /// 以便用户在外部(如 cc-switch)切换账号后 ccbar 能感知到。
+    /// loadCodex / loadClaude 内部会比较 accountId / email,若身份变化则清掉
+    /// 旧的额度缓存,避免出现"新账号 + 旧额度"的错配。
     func refreshQuotas(reason: QuotaRefreshReason = .periodic) async {
-        await loadCodex()
-        await loadClaude()
-        await loadCodexQuota(reason: reason)
-        await loadClaudeQuota(reason: reason)
-        await loadAntigravityQuota(reason: reason)
-        await loadAllImportedCodexQuotas(reason: reason)
+        let settings = SettingsStore.shared
+        let codexEnabled = settings.showCodex
+        if codexEnabled {
+            await loadCodex()
+            await loadCodexQuota(reason: reason)
+        }
+        if settings.showClaude {
+            await loadClaude()
+            await loadClaudeQuota(reason: reason)
+        }
+        if settings.showAntigravity {
+            await loadAntigravityQuota(reason: reason)
+        }
+        await loadAllImportedCodexQuotas(
+            reason: reason,
+            canMirrorPrimary: codexEnabled
+        )
         logQuotaSummary()
     }
 
@@ -498,7 +509,10 @@ final class AppState {
     }
 
     /// 对所有 `visibleInPopover` 为 true 的导入账号并发拉一遍配额,并发上限 3。
-    private func loadAllImportedCodexQuotas(reason: QuotaRefreshReason) async {
+    private func loadAllImportedCodexQuotas(
+        reason: QuotaRefreshReason,
+        canMirrorPrimary: Bool
+    ) async {
         let visible = importedCodexAccounts.filter(\.visibleInPopover)
         guard !visible.isEmpty else { return }
         let maxConcurrent = 3
@@ -509,7 +523,11 @@ final class AppState {
                 for account in batch {
                     group.addTask { [weak self] in
                         guard let self else { return }
-                        await self.loadImportedCodexQuota(account: account, reason: reason)
+                        await self.loadImportedCodexQuota(
+                            account: account,
+                            reason: reason,
+                            canMirrorPrimary: canMirrorPrimary
+                        )
                     }
                 }
             }
@@ -517,8 +535,12 @@ final class AppState {
         }
     }
 
-    private func loadImportedCodexQuota(account: ImportedCodexAccount, reason: QuotaRefreshReason) async {
-        if importedCodexAccountMirrorsPrimary(account) {
+    private func loadImportedCodexQuota(
+        account: ImportedCodexAccount,
+        reason: QuotaRefreshReason,
+        canMirrorPrimary: Bool
+    ) async {
+        if canMirrorPrimary, importedCodexIdentityMatchesPrimary(account) {
             mirrorPrimaryCodexQuota(toImportedId: account.id)
             syncPrimaryCodexTokensToImported(id: account.id)
             return
@@ -623,6 +645,12 @@ final class AppState {
     /// 判断某导入账号是否与当前 CLI 主账号是同一身份(accountId 相等,且 userId 相等或有一方缺失)。
     /// 展示层(Popover / 统计页)据此对同一身份去重,只显示一次;设置页作为管理界面不去重。
     func importedCodexAccountMirrorsPrimary(_ account: ImportedCodexAccount) -> Bool {
+        // 主 Provider 关闭时不能镜像内存里的旧快照；可见导入账号必须用自己的凭据独立刷新。
+        guard SettingsStore.shared.showCodex else { return false }
+        return importedCodexIdentityMatchesPrimary(account)
+    }
+
+    private func importedCodexIdentityMatchesPrimary(_ account: ImportedCodexAccount) -> Bool {
         guard let primary = codexAccount,
               let primaryAccountId = nonEmpty(primary.accountId),
               let importedAccountId = nonEmpty(account.chatgptAccountId),
@@ -674,7 +702,7 @@ final class AppState {
             idToken: nonEmpty(account.idToken)
         )
         do {
-            try ImportedCodexStore.saveTokens(tokens, accountId: id)
+            try ImportedCodexStore.saveTokensIfChanged(tokens, accountId: id)
         } catch {
             print("[imported-codex] sync primary tokens failed: \(error)")
         }

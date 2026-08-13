@@ -100,6 +100,17 @@ enum ImportedCodexStore {
         }
     }
 
+    /// 镜像主账号时只在内容变化后写 Keychain，避免每轮额度刷新重复 SecItemUpdate。
+    @discardableResult
+    nonisolated static func saveTokensIfChanged(
+        _ tokens: ImportedCodexTokens,
+        accountId: String
+    ) throws -> Bool {
+        if loadTokens(accountId: accountId) == tokens { return false }
+        try saveTokens(tokens, accountId: accountId)
+        return true
+    }
+
     nonisolated static func deleteTokens(accountId: String) {
         SecItemDelete(baseQuery(account: accountId) as CFDictionary)
     }
