@@ -1077,7 +1077,8 @@ final class AppState {
         guard beginAntigravityRefresh(reason: reason) else { return }
         defer { antigravityRefreshState.inFlight = false }
 
-        let availability = await AntigravityQuotaClient.detectAvailability()
+        let discovery = await AntigravityQuotaClient.discover()
+        let availability = discovery.availability
         antigravityAvailability = availability
         guard availability == .running else {
             let message: String
@@ -1095,7 +1096,7 @@ final class AppState {
             return
         }
 
-        let result = await AntigravityQuotaClient.fetch()
+        let result = await AntigravityQuotaClient.fetch(discovery: discovery)
         switch result {
         case .success(let fetched):
             if let previousEmail = antigravityAccount?.email,

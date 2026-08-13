@@ -6,7 +6,7 @@ enum AntigravityQuotaClient {
         var account: AntigravityAccount
     }
 
-    private struct ProcessInfo: Sendable {
+    fileprivate struct ProcessInfo: Sendable {
         enum Kind: Int, Sendable {
             case app = 0
             case ide = 1
@@ -15,6 +15,20 @@ enum AntigravityQuotaClient {
         var pid: Int32
         var csrfToken: String
         var kind: Kind
+    }
+
+    struct Discovery: Sendable {
+        fileprivate var isInstalled: Bool
+        fileprivate var processes: [ProcessInfo]
+        fileprivate var processError: String?
+
+        var availability: AntigravityAvailability {
+            guard isInstalled else { return .notInstalled }
+            if processError != nil {
+                return .unavailable("无法检查 Antigravity 进程")
+            }
+            return processes.isEmpty ? .installed : .running
+        }
     }
 
     private struct CommandResult: Sendable {
@@ -28,20 +42,44 @@ enum AntigravityQuotaClient {
         "/exa.language_server_pb.LanguageServerService/GetUserStatus"
 
     nonisolated static func detectAvailability() async -> AntigravityAvailability {
+        let discovery = await discover()
+        return discovery.availability
+    }
+
+    /// 单轮取得安装状态与进程信息，供 availability 和 fetch 复用，避免重复执行 ps。
+    nonisolated static func discover() async -> Discovery {
         let installed = installedApplicationURLs().contains {
             FileManager.default.fileExists(atPath: $0.path)
         }
-        guard installed else { return .notInstalled }
+        guard installed else {
+            return Discovery(isInstalled: false, processes: [], processError: nil)
+        }
         do {
-            return try processInfos().isEmpty ? .installed : .running
+            return Discovery(
+                isInstalled: true,
+                processes: try processInfos(),
+                processError: nil
+            )
         } catch {
-            return .unavailable("无法检查 Antigravity 进程")
+            return Discovery(
+                isInstalled: true,
+                processes: [],
+                processError: sanitizedMessage(error)
+            )
         }
     }
 
     nonisolated static func fetch() async -> Result<Fetched, QuotaError> {
+        let discovery = await discover()
+        return await fetch(discovery: discovery)
+    }
+
+    nonisolated static func fetch(discovery: Discovery) async -> Result<Fetched, QuotaError> {
         do {
-            let processes = try processInfos()
+            if let processError = discovery.processError {
+                return .failure(.transport(processError))
+            }
+            let processes = discovery.processes
             guard !processes.isEmpty else {
                 return .failure(.transport("Antigravity 未运行"))
             }
