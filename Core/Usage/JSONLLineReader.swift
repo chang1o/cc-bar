@@ -51,10 +51,12 @@ enum JSONLLineReader {
     }
 }
 
-/// JSONL 行时间戳解析。ISO8601DateFormatter 创建成本很高，不能按行新建；
-/// 这里静态复用两个固定配置的实例（含 / 不含小数秒各一个）。实例创建后
-/// 不再修改配置，Foundation 的 formatter 在只读并发使用下是线程安全的，
-/// 因此对 Sendable 检查用 nonisolated(unsafe) 显式豁免。
+/// JSONL 行时间戳解析。除了 formatter 实例创建成本高（不能按行新建，这里静态复用
+/// 两个固定配置的实例），`date(from:)` 单次调用本身也很贵——内部要走 CFDateFormatter
+/// 的通用格式状态机，实测占整轮日志扫描 CPU 的一半以上。JSONL 时间戳形状固定，
+/// 先用按字节的手写解析走完绝大多数行，形状不符再回退到 formatter，避免收窄行为。
+/// formatter 实例创建后不再修改配置，Foundation 的 formatter 在只读并发使用下是
+/// 线程安全的，因此对 Sendable 检查用 nonisolated(unsafe) 显式豁免。
 enum JSONLTimestamp {
     nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -68,9 +70,122 @@ enum JSONLTimestamp {
         return f
     }()
 
+    /// 小数秒位数 → 除数，避免逐位累乘带来的浮点误差和 `pow` 调用。
+    nonisolated private static let fractionScales: [Double] = [
+        1, 10, 100, 1_000, 10_000, 100_000,
+        1_000_000, 10_000_000, 100_000_000, 1_000_000_000,
+    ]
+
     nonisolated static func parse(_ s: String) -> Date? {
+        if let fast = fastParse(s) { return fast }
         if let d = fractional.date(from: s) { return d }
         return plain.date(from: s)
+    }
+
+    /// 手写解析 `YYYY-MM-DDTHH:MM:SS[.fff…][Z|±HH[:]MM]`（与 `.withInternetDateTime`
+    /// 接受的形状一致）。任何一处不符合就返回 nil，交回 formatter 兜底。
+    /// second 上限 59：withInternetDateTime 连标准闰秒位（23:59:60）都拒绝，
+    /// 这里同样拒绝，避免 fast 路径比 formatter 更宽容导致结果不一致。
+    nonisolated private static func fastParse(_ s: String) -> Date? {
+        let parsed: Date?? = s.utf8.withContiguousStorageIfAvailable { buffer in
+            parseInternetDateTime(buffer)
+        }
+        return parsed ?? nil
+    }
+
+    nonisolated private static func parseInternetDateTime(
+        _ b: UnsafeBufferPointer<UInt8>
+    ) -> Date? {
+        guard b.count >= 19,
+              b[4] == UInt8(ascii: "-"), b[7] == UInt8(ascii: "-"),
+              b[10] == UInt8(ascii: "T"),
+              b[13] == UInt8(ascii: ":"), b[16] == UInt8(ascii: ":"),
+              let year = integer(in: b, from: 0, count: 4),
+              let month = integer(in: b, from: 5, count: 2),
+              let day = integer(in: b, from: 8, count: 2),
+              let hour = integer(in: b, from: 11, count: 2),
+              let minute = integer(in: b, from: 14, count: 2),
+              let second = integer(in: b, from: 17, count: 2),
+              (1...12).contains(month), (1...31).contains(day),
+              hour <= 23, minute <= 59, second <= 59
+        else { return nil }
+
+        var index = 19
+        var fraction: Double = 0
+        if index < b.count, b[index] == UInt8(ascii: ".") {
+            index += 1
+            var digits = 0
+            var value = 0
+            while index < b.count, let digit = digitValue(b[index]) {
+                // 超出 Double 有效精度的尾数直接丢弃，避免溢出。
+                if digits < fractionScales.count - 1 {
+                    value = value * 10 + digit
+                    digits += 1
+                }
+                index += 1
+            }
+            guard digits > 0 else { return nil }
+            fraction = Double(value) / fractionScales[digits]
+        }
+
+        // `.withInternetDateTime` 要求必须带时区，缺时区的输入原本解析失败；
+        // 这里同样拒绝，交回 formatter，避免把原来被跳过的行变成有效条目。
+        guard index < b.count else { return nil }
+        var offsetSeconds = 0
+        let marker = b[index]
+        if marker == UInt8(ascii: "Z") || marker == UInt8(ascii: "z") {
+            index += 1
+        } else if marker == UInt8(ascii: "+") || marker == UInt8(ascii: "-") {
+            let sign = marker == UInt8(ascii: "+") ? 1 : -1
+            index += 1
+            guard let offsetHour = integer(in: b, from: index, count: 2) else { return nil }
+            index += 2
+            if index < b.count, b[index] == UInt8(ascii: ":") { index += 1 }
+            var offsetMinute = 0
+            if let value = integer(in: b, from: index, count: 2) {
+                offsetMinute = value
+                index += 2
+            }
+            offsetSeconds = sign * (offsetHour * 3_600 + offsetMinute * 60)
+        } else {
+            return nil
+        }
+        // 还有尾巴说明形状超出这里的假设，不猜，交给 formatter。
+        guard index == b.count else { return nil }
+
+        let days = daysFromCivil(year: year, month: month, day: day)
+        let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offsetSeconds
+        return Date(timeIntervalSince1970: Double(seconds) + fraction)
+    }
+
+    nonisolated private static func digitValue(_ byte: UInt8) -> Int? {
+        guard byte >= UInt8(ascii: "0"), byte <= UInt8(ascii: "9") else { return nil }
+        return Int(byte - UInt8(ascii: "0"))
+    }
+
+    nonisolated private static func integer(
+        in b: UnsafeBufferPointer<UInt8>,
+        from start: Int,
+        count: Int
+    ) -> Int? {
+        guard start >= 0, start + count <= b.count else { return nil }
+        var value = 0
+        for offset in start..<(start + count) {
+            guard let digit = digitValue(b[offset]) else { return nil }
+            value = value * 10 + digit
+        }
+        return value
+    }
+
+    /// 民用日期 → 距 1970-01-01 的天数（proleptic Gregorian，Howard Hinnant 的
+    /// days_from_civil；纯整数运算，不经过 Calendar）。
+    nonisolated private static func daysFromCivil(year: Int, month: Int, day: Int) -> Int {
+        let y = year - (month <= 2 ? 1 : 0)
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yearOfEra = y - era * 400                                            // [0, 399]
+        let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1 // [0, 365]
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        return era * 146_097 + dayOfEra - 719_468
     }
 }
 

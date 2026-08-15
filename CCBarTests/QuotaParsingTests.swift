@@ -425,6 +425,77 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(cycle.allowanceSegments.count, 1)
     }
 
+    func testCycleStoreKeepsScheduledEndAtUnderSubsecondJitter() throws {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let firstReset = sampledAt.addingTimeInterval(18_000)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 10, reset: firstReset),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        // Claude 服务端 resets_at 亚秒级抖动：容差内应保留既有边界，
+        // 否则 cycleUsagePartition 会把漂移误判为周期滚动并触发全量重建。
+        let jitters: [(TimeInterval, Double)] = [(0.1, 15), (0.9, 20)]
+        for (index, jitter) in jitters.enumerated() {
+            payload = QuotaCycleStore.record(
+                payload: payload,
+                accountKey: "claude:primary",
+                app: .claude,
+                snapshot: snapshot(
+                    kind: .fiveHour,
+                    usedPercent: jitter.1,
+                    reset: firstReset.addingTimeInterval(jitter.0)
+                ),
+                source: .api,
+                sampledAt: sampledAt.addingTimeInterval(TimeInterval(index + 1) * 60)
+            )
+        }
+
+        let cycle = try XCTUnwrap(payload.records.first)
+        XCTAssertEqual(payload.records.count, 1, "亚秒抖动不应产生重复周期记录")
+        XCTAssertEqual(cycle.scheduledEndAt, firstReset, "亚秒抖动不应改写 scheduledEndAt")
+        XCTAssertEqual(cycle.endAt, firstReset, "亚秒抖动不应滚动 endAt")
+        XCTAssertEqual(cycle.latestUsedPercent, 20)
+    }
+
+    func testCycleStoreRollsScheduledEndAtWhenDriftReachesTolerance() throws {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        let firstReset = sampledAt.addingTimeInterval(18_000)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 10, reset: firstReset),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        // 5s 为容差边界（≥5s 即写入新边界），随后再从 5s 处漂移 6s 应继续更新。
+        for (index, drift) in [5, 11].enumerated() {
+            let newReset = firstReset.addingTimeInterval(TimeInterval(drift))
+            payload = QuotaCycleStore.record(
+                payload: payload,
+                accountKey: "claude:primary",
+                app: .claude,
+                snapshot: snapshot(
+                    kind: .fiveHour,
+                    usedPercent: 10 + Double(index) * 5,
+                    reset: newReset
+                ),
+                source: .api,
+                sampledAt: sampledAt.addingTimeInterval(TimeInterval(index + 2) * 60)
+            )
+        }
+
+        let cycle = try XCTUnwrap(payload.records.first)
+        XCTAssertEqual(payload.records.count, 1, "真实滚动仍应复用同一条周期记录")
+        XCTAssertEqual(cycle.scheduledEndAt, firstReset.addingTimeInterval(11))
+        XCTAssertEqual(cycle.endAt, firstReset.addingTimeInterval(11))
+        XCTAssertEqual(cycle.latestUsedPercent, 15)
+    }
+
     func testCleaningUpLegacyPayloadDropsShardsAndMergesOverlaps() throws {
         let start = Date(timeIntervalSince1970: 100_000)
         let week: TimeInterval = 604_800

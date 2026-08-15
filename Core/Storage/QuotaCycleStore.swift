@@ -208,6 +208,11 @@ enum QuotaCycleStore {
     /// 时间戳，抖动会让精确 ID 匹配落空并误建重复周期；此容差用于把同一次重置
     /// 的相邻采样归并到同一条记录。
     nonisolated private static let resetJitterTolerance: TimeInterval = 60
+    /// 活跃周期的 scheduledEndAt 抖动容差。服务端每次返回的 resets_at 都会小幅漂移
+    /// （实测 Claude 亚秒级、Codex 1~3 秒），若逐次写入记录，`cycleUsagePartition`
+    /// 会把它当成周期边界滚动，触发本不该发生的全量重建。容差内保留既有边界，
+    /// 取值远小于真实窗口长度（最短 5 小时），不影响真实滚动的识别。
+    nonisolated private static let scheduledEndJitterTolerance: TimeInterval = 5
     /// 半开区间收口后，相邻片段边界可能刚好相差 1 秒。
     nonisolated private static let resetDriftAdjacencyTolerance: TimeInterval = 1
     /// 短于此长度的记录视为被 closeOverlappingCycles 截断的残片（正常窗口最短 5 小时）。
@@ -473,10 +478,16 @@ enum QuotaCycleStore {
                 let wasActive = next.records[index].endAt > sampledAt
                 next.records[index].limitKind = limit.kind
                 next.records[index].startAt = min(next.records[index].startAt, startAt)
-                next.records[index].scheduledEndAt = scheduledEndAt
+                // 容差内的 resets_at 漂移视为同一边界，保留既有值；只有真正滚动才写入新边界。
+                if abs(scheduledEndAt.timeIntervalSince(next.records[index].scheduledEndAt))
+                    >= Self.scheduledEndJitterTolerance
+                {
+                    next.records[index].scheduledEndAt = scheduledEndAt
+                }
+                let stableEndAt = next.records[index].scheduledEndAt
                 next.records[index].endAt = wasActive
-                    ? scheduledEndAt
-                    : min(next.records[index].endAt, scheduledEndAt)
+                    ? stableEndAt
+                    : min(next.records[index].endAt, stableEndAt)
                 next.records[index].firstSampleAt = min(next.records[index].firstSampleAt ?? sampledAt, sampledAt)
                 next.records[index].lastSampleAt = max(next.records[index].lastSampleAt ?? sampledAt, sampledAt)
                 updateAllowanceSegments(

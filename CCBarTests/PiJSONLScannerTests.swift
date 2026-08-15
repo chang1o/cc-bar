@@ -229,4 +229,73 @@ final class PiJSONLScannerTests: XCTestCase {
         XCTAssertEqual(result.entries.count, 1)
         XCTAssertEqual(result.linesParsed, 5)
     }
+
+    // MARK: - JSONLTimestamp 手写解析与 formatter 等价
+
+    /// 手写 fast 路径必须与 ISO8601DateFormatter(.withInternetDateTime) 逐一对拍一致，
+    /// 包括 fast 不认识的形状（缺时区、缺小数、空格分隔、闰秒）要交回 formatter
+    /// 并保持其拒绝语义，不能比 formatter 更宽容。
+    func testJSONLTimestampParseMatchesISO8601Formatter() {
+        let shapes: [String] = [
+            "2026-08-03T03:58:26.079Z",
+            "2026-08-03T03:58:26Z",
+            "2026-08-03T03:58:26z",
+            "2026-08-03T03:58:26.079+08:00",
+            "2026-08-03T03:58:26.079+0800",
+            "2026-08-03T03:58:26-05:30",
+            "2026-08-03T03:58:26.123456789+08:00",
+            "2024-02-29T12:00:00Z",
+            "2016-12-31T23:59:59Z",
+            "2016-12-31T23:59:60Z",
+            "2026-08-03T03:58:26",
+            "2026-08-03T03:58:26.079",
+            "2026-08-03 03:58:26Z",
+            "2026-08-03T03:58",
+            "2026-08-03T03:58:60Z",
+            "2021-02-29T12:00:00Z",
+        ]
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        fractional.timeZone = TimeZone(secondsFromGMT: 0)
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        plain.timeZone = TimeZone(secondsFromGMT: 0)
+
+        for s in shapes {
+            let expected = fractional.date(from: s) ?? plain.date(from: s)
+            let actual = JSONLTimestamp.parse(s)
+            // ISO8601DateFormatter 小数秒只解析到毫秒，fast 路径保留到纳秒；
+            // 毫秒级一致即视为等价（fast 只是更精确，不构成行为差异）。
+            XCTAssertEqual(
+                actual?.timeIntervalSince1970 ?? -Double.greatestFiniteMagnitude,
+                expected?.timeIntervalSince1970 ?? -Double.greatestFiniteMagnitude,
+                accuracy: 0.001,
+                "时间戳 [\(s)] 与 ISO8601DateFormatter 结果不一致"
+            )
+        }
+    }
+
+    /// 手写解析的语义抽查：epoch 值、时区偏移换算、闰日、拒绝缺时区与闰秒。
+    func testJSONLTimestampParseSemantics() throws {
+        let utc = try XCTUnwrap(JSONLTimestamp.parse("2026-08-03T03:58:26.079Z"))
+        XCTAssertEqual(utc.timeIntervalSince1970, 1_785_729_506.079, accuracy: 0.000_5)
+
+        let noFraction = try XCTUnwrap(JSONLTimestamp.parse("2026-08-03T03:58:26Z"))
+        XCTAssertEqual(noFraction.timeIntervalSince1970, 1_785_729_506, accuracy: 0.000_5)
+
+        // +08:00 与 +0800 两种写法等价，且表示同一时刻的本地早 8 小时。
+        let plusColon = try XCTUnwrap(JSONLTimestamp.parse("2026-08-03T03:58:26.079+08:00"))
+        let plusBare = try XCTUnwrap(JSONLTimestamp.parse("2026-08-03T03:58:26.079+0800"))
+        XCTAssertEqual(plusColon, plusBare)
+        XCTAssertEqual(utc.timeIntervalSince1970 - plusColon.timeIntervalSince1970, 8 * 3_600, accuracy: 0.000_5)
+
+        // 负时区向 UTC 以西。
+        let minus = try XCTUnwrap(JSONLTimestamp.parse("2026-08-03T03:58:26.079-05:30"))
+        XCTAssertEqual(utc.timeIntervalSince1970 - minus.timeIntervalSince1970, -5.5 * 3_600, accuracy: 0.000_5)
+
+        // 闰日有效；缺时区与闰秒被拒绝（与 withInternetDateTime 一致）。
+        XCTAssertNotNil(JSONLTimestamp.parse("2024-02-29T12:00:00Z"))
+        XCTAssertNil(JSONLTimestamp.parse("2026-08-03T03:58:26"))
+        XCTAssertNil(JSONLTimestamp.parse("2016-12-31T23:59:60Z"))
+    }
 }
