@@ -217,6 +217,13 @@ enum QuotaCycleStore {
     nonisolated private static let resetDriftAdjacencyTolerance: TimeInterval = 1
     /// 短于此长度的记录视为被 closeOverlappingCycles 截断的残片（正常窗口最短 5 小时）。
     nonisolated private static let minimumShardDuration: TimeInterval = 60
+    /// 判定「重复周期记录」所需的最小重叠时长。相邻的两个真实周期，其边界分别由
+    /// 各自采样时刻的 resets_at 推出，两侧抖动叠加会让边界错开亚秒到数秒（实测
+    /// Claude 0.2~0.4 秒、Codex 1~3 秒），这只是边界毛刺，不是重复记录。而真正的
+    /// 重复来自同一周期的 resetAt 漂移，重叠接近整个窗口（≥5 小时），两者量级相差
+    /// 数千倍。低于此阈值不做去重——`merging` 只保留 base 的 startAt / endAt，
+    /// 一旦误判，被吞记录覆盖的整段周期历史会永久丢失且无法从日志重建。
+    nonisolated private static let overlapDeduplicationMinimum: TimeInterval = 60
 
     nonisolated static func load() -> QuotaCyclePayload {
         let url = fileURL()
@@ -365,7 +372,8 @@ enum QuotaCycleStore {
     }
 
     nonisolated private static func intervalsOverlap(_ a: QuotaCycleRecord, _ b: QuotaCycleRecord) -> Bool {
-        a.startAt < b.endAt && b.startAt < a.endAt
+        let overlap = min(a.endAt, b.endAt).timeIntervalSince(max(a.startAt, b.startAt))
+        return overlap > Self.overlapDeduplicationMinimum
     }
 
     nonisolated private static func merging(base: QuotaCycleRecord, other: QuotaCycleRecord) -> QuotaCycleRecord {

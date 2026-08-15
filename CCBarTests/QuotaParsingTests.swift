@@ -521,6 +521,30 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(kept.reportedUsedPercent, 25, "重复 initial 段不能把额度百分比累加")
     }
 
+    func testCleaningUpPayloadKeepsAdjacentCyclesWithSubsecondBoundaryOverlap() throws {
+        let start = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        // 相邻的两个真实周期，边界分别由各自采样时刻的 resets_at 推出，两侧抖动叠加
+        // 会让后一周期的起点比前一周期的终点略早。这种亚秒毛刺不是重复记录：若按
+        // 重叠去重，merging 只保留 base 的 startAt / endAt，较早那整段周期历史会被
+        // 永久吞掉且无法从日志重建。
+        var payload = QuotaCyclePayload(version: 3, trackingStartedAt: start)
+        payload.records = [
+            cycleRecord(id: "earlier", accountKey: "claude:primary", app: .claude,
+                        start: start, end: start.addingTimeInterval(week + 0.67)),
+            cycleRecord(id: "later", accountKey: "claude:primary", app: .claude,
+                        start: start.addingTimeInterval(week + 0.51),
+                        end: start.addingTimeInterval(2 * week)),
+        ]
+
+        let cleaned = QuotaCycleStore.cleaningUpLegacyPayload(payload)
+
+        XCTAssertEqual(cleaned.records.count, 2, "亚秒级边界重叠只是抖动毛刺，两个周期都应保留")
+        let earlier = try XCTUnwrap(cleaned.records.first { $0.id == "earlier" })
+        XCTAssertEqual(earlier.startAt, start, "较早周期的时间段不应被吞掉")
+        XCTAssertEqual(earlier.endAt, start.addingTimeInterval(week + 0.67))
+    }
+
     func testCleaningUpPayloadCoalescesResetDriftButKeepsRealUsageReset() throws {
         let start = Date(timeIntervalSince1970: 100_000)
         let trueReset = start.addingTimeInterval(2 * 24 * 60 * 60)
