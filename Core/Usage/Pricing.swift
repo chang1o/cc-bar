@@ -51,7 +51,7 @@ nonisolated enum Pricing {
         "claude-opus-4-5":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-1":   .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
         "claude-opus-4":     .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
-        // Sonnet 5 是当前生效价（2026-09-01 起的新价见下方 timedOverrides）。
+        // Sonnet 5 官方已确认 $2/$10 为固定标准价（原定 2026-09-01 涨价 $3/$15 已取消），列入 fixedLocalOverrideKeys 锁死。
         "claude-sonnet-5":   .init(input: 2,   output: 10,  cacheRead: 0.20, cacheCreation: 2.50),
         "claude-sonnet-4-7": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
         "claude-sonnet-4-6": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
@@ -181,24 +181,17 @@ nonisolated enum Pricing {
 
     /// 已审计的固定本地价；即使远端目录返回同名模型，也不能覆盖。
     private static let fixedLocalOverrideKeys: Set<String> = [
-        "gpt-5.5-pro"
+        "gpt-5.5-pro",
+        // 官方已确认 Sonnet 5 的 $2/$10 为固定标准价，防止远端目录按旧计划价覆盖。
+        "claude-sonnet-5"
     ]
 
     /// 少数模型中途涨价/降价的时间点覆盖；这里的每个 key 必须同时在 `table` 提供最早
     /// 时段的基础价，不在这里出现的模型永远用 `table` 里的固定价。
     /// 键为归一化后的模型名，每条按 `from` 升序排列；只要用量记录的日期 ≥ `from` 就换成对应新价，
     /// 取满足条件里最晚的一档（早于所有 `from` 时退回 `table` 的基准价）。
-    private static let timedOverrides: [String: [PricedPeriod]] = [
-        "claude-sonnet-5": [
-            PricedPeriod(from: utcDate(2026, 9, 1), price: .init(input: 3, output: 15, cacheRead: 0.30, cacheCreation: 3.75))
-        ]
-    ]
-
-    private static func utcDate(_ year: Int, _ month: Int, _ day: Int) -> Date {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
-        return calendar.date(from: DateComponents(year: year, month: month, day: day))!
-    }
+    /// 当前无分段价模型（Sonnet 5 原定 2026-09-01 涨价已取消），机制保留给未来限时调价场景。
+    private static let timedOverrides: [String: [PricedPeriod]] = [:]
 
     /// A 类模型：受本地特殊规则（阶梯价 / 分段生效价 / 固定价）管辖的 key。远端价格目录对这些 key 零参与——
     /// 一旦让远端「今天的单一价」覆盖进来，272K 阶梯和分段计价会被破坏、历史计价错乱。
@@ -315,7 +308,7 @@ nonisolated enum Pricing {
     /// 计算单次调用花费。
     /// - Parameters:
     ///   - app: 用于隐含的 cache_read 语义；Codex 含、Claude 不含（调用方传 input 时已自处理）。
-    ///   - at: 该条用量记录实际发生的时间，仅在模型存在 `timedOverrides` 时才会影响取价（如 Sonnet 5）。
+    ///   - at: 该条用量记录实际发生的时间，仅在模型存在 `timedOverrides` 时才会影响取价。
     ///   - input/output/cacheRead/cacheCreation: 已拆分的四类 token；Claude 的 `cacheCreation` 表示 5m 写入。
     ///   - cacheCreation1h: Claude 1h 缓存写入；Codex 不使用，缺省为 0。
     ///   - inputTotal: 该请求完整输入 token；GPT-5.6 / GPT-5.5 用它判断长上下文，缺省时由全部输入侧 token 相加。
