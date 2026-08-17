@@ -482,6 +482,27 @@ enum QuotaCycleStore {
                         let rhsSample = next.records[rhs].lastSampleAt ?? .distantPast
                         return lhsSample < rhsSample
                     }
+                // 采样时刻已晚于旧周期结束、但服务端仍返回漂移的旧窗口 resets_at
+                // （与旧记录 endAt 差在容差内、用量未回落）时，这是同一周期的漂移视图：
+                // 更新该记录而不是新建，避免 closeOverlappingCycles 把它误砍成残片。
+                // 真实滚动后新旧周期起点相差整个窗口（5 小时 / 7 天），远大于容差，不会误匹配。
+                ?? next.records.indices
+                    .filter { index in
+                        let candidate = next.records[index]
+                        return candidate.accountKey == accountKey
+                            && candidate.app == app
+                            && candidate.limitKind == limit.kind
+                            && abs(candidate.endAt.timeIntervalSince(scheduledEndAt)) < Self.resetJitterTolerance
+                            && !isExtraReset(
+                                previousUsedPercent: candidate.latestUsedPercent,
+                                usedPercent: usedPercent
+                            )
+                    }
+                    .max { lhs, rhs in
+                        let lhsSample = next.records[lhs].lastSampleAt ?? .distantPast
+                        let rhsSample = next.records[rhs].lastSampleAt ?? .distantPast
+                        return lhsSample < rhsSample
+                    }
             if let index = matchIndex {
                 let wasActive = next.records[index].endAt > sampledAt
                 next.records[index].limitKind = limit.kind
@@ -631,6 +652,11 @@ enum QuotaCycleStore {
                   payload.records[index].limitKind == limitKind,
                   payload.records[index].startAt < newCycleStartAt,
                   payload.records[index].endAt > newCycleStartAt
+            else { continue }
+            // 新周期起点与旧记录起点几乎重合（同一周期的 resets_at 漂移视图）时跳过收口，
+            // 避免把整段真实周期误砍成秒级残片。真实滚动时新起点与旧起点相差整个窗口，不会命中。
+            guard abs(payload.records[index].startAt.timeIntervalSince(newCycleStartAt))
+                    >= Self.resetJitterTolerance
             else { continue }
 
             payload.records[index].endAt = newCycleStartAt

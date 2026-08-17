@@ -496,6 +496,64 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(cycle.latestUsedPercent, 15)
     }
 
+    func testCycleStoreReusesFinishedCycleWhenServerReportsLateDriftedWindow() throws {
+        let sampledAt = Date(timeIntervalSince1970: 100_000)
+        let firstReset = sampledAt.addingTimeInterval(604_800)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .weekly, usedPercent: 10, reset: firstReset),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        // 采样时刻已过周期结束、服务端仍返回漂移的旧窗口 resets_at（差 <60s）、用量未回落：
+        // 应视为同一周期的漂移视图更新原记录，而不是新建周期把旧记录误砍成残片。
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .weekly, usedPercent: 30, reset: firstReset.addingTimeInterval(0.5)),
+            source: .api,
+            sampledAt: firstReset.addingTimeInterval(120)
+        )
+
+        let cycle = try XCTUnwrap(payload.records.first)
+        XCTAssertEqual(payload.records.count, 1, "晚到的旧窗口采样不应新建周期记录")
+        XCTAssertEqual(cycle.endAt, firstReset, "不应滚动或收口已结束周期的边界")
+        XCTAssertEqual(cycle.latestUsedPercent, 30)
+        XCTAssertEqual(cycle.allowanceSegments.count, 1)
+        XCTAssertEqual(cycle.allowanceSegments.first?.maximumUsedPercent, 30)
+        XCTAssertNil(cycle.allowanceSegments.first?.endAt, "segment 不应被收口")
+    }
+
+    func testCloseOverlappingCyclesSkipsNearIdenticalStartRecord() throws {
+        let start = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        let oldStart = start.addingTimeInterval(0.3)
+        var existing = cycleRecord(id: "drift-a", accountKey: "claude:primary", app: .claude,
+                                   start: oldStart, end: oldStart.addingTimeInterval(week))
+        var payload = QuotaCyclePayload(trackingStartedAt: start)
+        payload.records = [existing]
+
+        // 新采样 resets_at 与旧记录 endAt 差 0.5s（漂移），但用量明显回落，看起来像真重置：
+        // record() 走新建分支，closeOverlappingCycles 不应把起点仅差毫秒级的旧记录误砍成残片。
+        let driftedEnd = oldStart.addingTimeInterval(week).addingTimeInterval(0.5)
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(kind: .weekly, usedPercent: 2, reset: driftedEnd),
+            source: .api,
+            sampledAt: oldStart.addingTimeInterval(week + 120)
+        )
+
+        let kept = try XCTUnwrap(payload.records.first { $0.id == "drift-a" })
+        XCTAssertEqual(kept.endAt, oldStart.addingTimeInterval(week), "起点漂移的旧记录不应被收口成残片")
+        XCTAssertNil(kept.allowanceSegments.first?.endAt, "旧记录 segment 不应被收口")
+        XCTAssertEqual(payload.records.count, 2, "回落采样应新建周期，但旧记录保持完整")
+    }
+
     func testCleaningUpLegacyPayloadDropsShardsAndMergesOverlaps() throws {
         let start = Date(timeIntervalSince1970: 100_000)
         let week: TimeInterval = 604_800
