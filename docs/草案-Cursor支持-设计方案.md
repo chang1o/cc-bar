@@ -1,205 +1,348 @@
 # 草案 · Cursor 支持（额度 + 用量统计）
 
-> 状态：设计方案。落地后并入《产品需求》《技术实现》《界面布局》三份常驻文档，本草案移入 `历史参考/`。
+> 状态：设计方案。本文是后续实现的约束来源；落地后并入《产品需求》《技术实现》《界面布局》三份常驻文档，本草案移入 `历史参考/`。
 
-## 1. 背景与目标
+## 1. 背景、目标与范围
 
-在 cc-bar 中新增 Cursor 支持，展示形态对齐现有 Codex / Claude：
+在 cc-bar 中新增 Cursor 支持，展示形态对齐现有 Provider，但明确区分“远端账户数据”和“本机日志数据”：
 
-- **Popover**：剩余额度（Total / Auto / API 百分比、计费周期与重置时间、套餐名）。
-- **主窗口**：用量统计（已使用 Token、费用，按日 / 周 / 月汇总与周期对比）。
+- **Popover**：展示 Cursor 的 Total / Auto / API 剩余额度、计费周期与重置时间、套餐名。
+- **主窗口统计页**：展示 Cursor 账户级 Token 和服务端计量消耗，支持现有日 / 周 / 月等时间范围。
+- **设置**：可独立控制 Cursor Provider、菜单栏、悬浮窗和统计服务的显示。
 
-**明确不做**：近 30 天趋势图 / 用量历史折线（现有 UI 无此形态，会扩大改动面；如需后续另立需求）。
+第一版明确不做：
 
-## 2. 调研结论
+- 不新增近 30 天额度趋势图或新的历史折线形态。
+- 不把 Cursor 月度额度接入现有 Codex / Claude 的 5 小时、周额度周期对比；Cursor 用量仍可进入统计页的时间范围对比。
+- 不调用 Cursor OAuth 刷新接口，不写 Cursor 的 SQLite，不保存 Cursor token 到 cc-bar Keychain。
+- 不把套餐内计量消耗表述成信用卡实际扣款。
 
-Cursor 官方**没有面向个人/Pro 用户的公开稳定额度 API**（仅 Enterprise 的 Admin / Analytics API，需管理员权限）。社区有两个成熟实现可供参照：
+## 2. 调研结论与技术选择
+
+Cursor 官方没有面向个人 Hobby / Pro / Pro+ / Ultra 用户的公开稳定额度 API。官方 Admin API 面向 Teams / Enterprise 组织管理员，需要管理员创建 API Key，不能作为个人用户的默认接入方式：
+
+- Admin API：<https://docs.cursor.com/en/account/teams/admin-api>
+- 套餐与用量说明：<https://docs.cursor.com/account/pricing>
+
+个人账号只能参考 Cursor Dashboard 自用的非公开接口，因此必须把它视为可失效的兼容层，而不是官方 API 契约。
+
+### 2.1 本地参考项目
 
 | | CodexBar | OpenUsage |
 |---|---|---|
-| 认证 | 网页 Cookie（`WorkosCursorSessionToken`）| api2 RPC Bearer token |
-| 主接口 | `cursor.com/api/usage-summary` 等（网页 dashboard 自用）| `api2.cursor.sh` Connect RPC（逆向最深）|
-| Token 刷新 | 不刷新，等 Cursor.app | 主动 OAuth 刷新，**写回 Cursor 的 SQLite** |
-| 用量费用 | 事件级 JSON，含官方 `chargedCents` 实际扣费 | CSV 导出，仅本地估算价 |
-| 侵入性 | 只读用户数据 | 修改用户 Cursor 数据库 |
+| 本地仓库 | `../CodexBar` | `../openusage` |
+| 认证 | Cursor.app access token 组装网页 Cookie，并可回退浏览器 Cookie | api2 RPC Bearer token |
+| 额度 | `cursor.com/api/usage-summary` | api2 RPC，必要时回退 `usage-summary` / request usage |
+| Token 刷新 | 不主动刷新 Cursor token，优先重读 Cursor.app 登录态 | 主动 OAuth 刷新，并按凭据来源写回 Cursor SQLite 或原 Keychain |
+| 历史用量 | Dashboard 事件 JSON；同时区分 `chargedCents` 与 `tokenUsage.totalCents` | Dashboard CSV；按本地模型价格估算费用 |
+| 侵入性 | 主路径只读 Cursor 数据 | SQLite 来源下会修改 Cursor 数据库 |
 
-**本地参照仓库**（两个项目均已 clone 到本机，可随时对照读源码）：
+关键源码：
 
-| 项目 | 本地相对路径 | 关键代码位置 |
-|---|---|---|
-| CodexBar | `../CodexBar` | `Sources/CodexBarCore/Providers/Cursor/`：`CursorStatusProbe.swift`（网页接口 + 映射）、`CursorAppAuth.swift`（读 `state.vscdb`）、`CursorUsageEventsFetcher.swift`（事件分页 + `chargedCents`） |
-| OpenUsage | `../openusage` | `Sources/OpenUsage/Providers/Cursor/`：`CursorAuthStore.swift`（读库 + 刷新决策）、`CursorUsageClient.swift`（接口与 OAuth 刷新）、`CursorProvider.swift`（拉取编排） |
+- CodexBar：`Sources/CodexBarCore/Providers/Cursor/`
+  - `CursorAppAuth.swift`：只读 `state.vscdb`、JWT 与 Cookie。
+  - `CursorStatusProbe.swift`：`usage-summary` 模型与账户类型回退。
+  - `CursorUsageEventsFetcher.swift`：事件分页、完整性检查、`chargedCents` 与 `totalCents` 两种口径。
+- OpenUsage：`Sources/OpenUsage/Providers/Cursor/`
+  - `CursorAuthStore.swift`：SQLite / Keychain 凭据来源与写回。
+  - `CursorUsageClient.swift`：api2 RPC、OAuth 与 Dashboard 接口。
+  - `CursorProvider.swift`：刷新、重试及套餐回退编排。
 
-实现时**优先参考上述本地源码**（必要时直接读代码），文档只记录决策与映射，不重复贴实现细节。另见 `历史参考/外部项目分析/` 下已归档的 codexbar 开发笔记，可作背景阅读，不约束本方案。
+### 2.2 第一版组合决策
 
-**组合决策**（本方案采用）：
+1. **额度和历史用量都走 Cursor Dashboard 的 Cookie 接口**：避免同时维护两套数据协议，但仍按非官方接口对待。
+2. **认证采用 CodexBar 的只读路线**：每次刷新重新读取 Cursor.app 当前 access token；不使用 refresh token，不调用 `api2.cursor.sh/oauth/token`。
+3. **远端用量采用独立快照与替换语义**：不能把重复拉取的完整时间窗口直接增量 `ingest` 到本地日志聚合器。
+4. **费用同时保留口径名称**：统计页使用 `chargedCents` 表示“Cursor 服务端计量消耗”；`tokenUsage.totalCents` 仅作模型标价参考，不互相回退或混算。
 
-1. **接口走网页 Cookie 路线**（CodexBar 思路）：`cursor.com` 的 dashboard 自用接口，比 `api2.cursor.sh` 逆向 RPC 稳定，且是 Cursor 网页每天在跑的路径。
-2. **Token 主动刷新**（OpenUsage 思路）：同时读 `accessToken` 与 `refreshToken`，过期前自动 OAuth 刷新——但**新 token 只写 cc-bar 自己的 Keychain，绝不写回 Cursor 的 SQLite**，避免侵入用户正在使用的数据。
-3. **用量费用带官方扣费口径**（CodexBar 思路）：用 `get-filtered-usage-events` 的事件级 `chargedCents`（计划实际扣款），而非本地按标价估算。
+该选择的代价是：Cursor.app 长时间未运行、access token 已过期时，cc-bar 只能保留旧快照并提示用户打开 Cursor 后重试。第一版接受这个限制，以避免争用或轮换 Cursor 的 refresh token。
 
-## 3. 数据源与映射
+## 3. 额度数据与映射
 
-### 3.1 额度：`GET https://cursor.com/api/usage-summary`
+### 3.1 接口
 
-Cookie 认证，`Accept: application/json`。返回 JSON：
+`GET https://cursor.com/api/usage-summary`
+
+请求头：
+
+```http
+Accept: application/json
+Cookie: WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
+```
+
+关键返回字段：
 
 | 字段 | 含义 | 单位 |
 |---|---|---|
 | `billingCycleStart` / `billingCycleEnd` | 计费周期起止 | ISO8601 |
-| `membershipType` | `pro` / `team` / `ultra` / `enterprise` / `free` 等 | — |
-| `individualUsage.plan.used` / `.limit` / `.remaining` | 套餐内用量 | 美分 |
-| `individualUsage.plan.autoPercentUsed` / `.apiPercentUsed` / `.totalPercentUsed` | 三类百分比 | 已是百分数（0~100） |
-| `individualUsage.plan.breakdown.included / bonus / total` | 套餐内 / 赠送 / 总计 | 美分 |
-| `individualUsage.onDemand.used / limit / remaining` | 超额按量费用 | 美分 |
-| `individualUsage.overall` | Enterprise / 团队成员个人上限 | 美分 |
-| `teamUsage.onDemand` / `teamUsage.pooled` | 团队共享池 | 美分 |
-| `isUnlimited` | 是否无限额度 | Bool |
+| `membershipType` | `pro` / `pro_plus` / `ultra` / `team` / `enterprise` / `free` 等 | — |
+| `limitType` | 个人 / 团队等额度类型 | — |
+| `individualUsage.plan.used / limit / remaining` | 个人套餐用量 | 美分 |
+| `individualUsage.plan.autoPercentUsed / apiPercentUsed / totalPercentUsed` | 三类已用百分比 | 0～100 |
+| `individualUsage.plan.breakdown.included / bonus / total` | 套餐内 / 赠送 / 合计 | 美分 |
+| `individualUsage.onDemand` | 个人超额按量用量 | 美分 |
+| `individualUsage.overall` | Team / Enterprise 成员个人上限 | 美分 |
+| `teamUsage.onDemand / pooled` | 团队按量用量 / 共享池 | 美分 |
+| `isUnlimited` | 是否报告为无限额度 | Bool |
 
-**→ `QuotaSnapshot` 映射**：
+### 3.2 Total 回退顺序
 
-| QuotaSnapshot 字段 | 来源 |
-|---|---|
-| `primaryLimit` | `totalPercentUsed` → `QuotaLimit.standard(kind: .unknown, window:)`，`window.resetsAt = billingCycleEnd`，`window.windowSeconds` 取周期秒数 |
-| `secondaryLimit` | `autoPercentUsed`（有值才填，None 时省略） |
-| `planType` | `membershipType`（映射为可读套餐名：Pro / Pro+ / Ultra / Team / Enterprise 等） |
-| `fetchedAt` | 拉取时间 |
+不能在字段缺失时伪造 `0% used`。Total 按以下顺序选择第一个可用来源：
 
-说明：月度计费窗口不属于现有 `QuotaLimitKind` 的 `fiveHour` / `weekly`，按 `.unknown` 处理；`QuotaWindow` 的 `usedPercent / resetsAt / windowSeconds` 与 Cursor 字段天然一一对应。
+1. `limitType == "team"` 且 `teamUsage.pooled` 有有效 limit 时，使用 pooled 的 `used / limit`。
+2. `individualUsage.plan.totalPercentUsed`。
+3. `individualUsage.plan.used / limit`。
+4. `individualUsage.overall.used / limit`。
+5. `teamUsage.pooled.used / limit`。
 
-### 3.2 用量：`POST https://cursor.com/api/dashboard/get-filtered-usage-events`
+如果以上都不可用：
 
-Cookie 认证 + **`Origin: https://cursor.com` 头**（该 POST 端点有 CSRF 校验）。请求体 `{page, pageSize, startDate, endDate}`，时间戳为毫秒字符串，分页每页 1000 条、上限 200 页（共 20 万事件），需做页边界去重（无稳定事件 ID，按相邻页首尾精确匹配）。
+- `isUnlimited == true`：展示 `Unlimited / 无限`，不伪造进度百分比。
+- 否则 Total 为空，并显示“Cursor 未返回可用额度”。
 
-每条事件关键字段：
+Auto / API 只使用各自明确的百分比字段，不用两者平均值反推 Total。所有百分比只在展示边界 clamp 到 0～100，解析层保留原始异常供诊断。
 
-| 字段 | 含义 |
-|---|---|
-| `timestamp` | 事件时间（毫秒，字符串） |
-| `model` | 模型名（`auto`、`composer-*`、具体模型名等） |
-| `tokenUsage.inputTokens / outputTokens / cacheWriteTokens / cacheReadTokens` | Token 明细 |
-| `tokenUsage.totalCents` | 官方标价费用（美分） |
-| `chargedCents` | **计划实际扣费**（美分），`nil` 时视为缺口径 |
-| `requestsCosts` / `usageBasedCosts` / `isTokenBasedCall` / `owningUser` / `owningTeam` | 辅助信息 |
+### 3.3 `QuotaSnapshot` 映射
 
-**→ `UsageBucket` 映射**（每条事件一条）:
+Cursor 的三个额度必须使用稳定且互不相同的 ID，不能调用当前会按 `windowSeconds` 生成 ID 的 `QuotaLimit.standard(kind: .unknown, ...)`：
 
-| UsageBucket 字段 | 来源 |
-|---|---|
-| `app` | `.cursor` |
-| `model` | `event.model`（缺失用 `"unknown"`） |
-| `speed` | `.standard`（Cursor 无 speed 概念，避免 `unknown` 的"未计价"语义） |
-| `day` | `startOfDay(timestamp)` |
-| `inputTokens / outputTokens / cacheReadTokens / cacheCreationTokens` | `tokenUsage` 对应字段 |
-| `costUSD` | `chargedCents / 100`（官方扣费口径） |
-| `requestCount` | 1 |
+| 位置 | ID | 来源 | 标题 |
+|---|---|---|---|
+| `primaryLimit` | `cursor-total` | Total 回退结果 | `TOTAL` |
+| `secondaryLimit` | `cursor-auto` | `autoPercentUsed` | `AUTO` |
+| `auxiliaryLimits[0]` | `cursor-api` | `apiPercentUsed` | `API` |
 
-聚合逻辑复用现有 `UsageAggregator`；拉取结果经 `aggregator.ingest(...)` 进入同一套 rollup 持久化链路，与本地扫描数据同代落盘。
+三者均使用：
 
-## 4. 认证与安全设计
+- `kind = .unknown`
+- `window.resetsAt = billingCycleEnd`
+- `window.windowSeconds = billingCycleEnd - billingCycleStart`
+- `displayName` 分别为 `Total`、`Auto`、`API`
 
-### 4.1 读取本地登录态
+为避免把 API 额度伪装成模型额度，`QuotaSnapshot` 新增通用的 `auxiliaryLimits: [QuotaLimit]`，默认空数组并保持旧缓存可解码；`allLimits` 合并 primary、secondary、auxiliary 和 model limits。另新增可选 `isUnlimited`，供没有数值进度时展示。
 
-Cursor.app 的登录态存于 VS Code 风格全局库：
+`planType` 来自格式化后的 `membershipType`；`fetchedAt` 为本次成功拉取时间。
 
+## 4. 历史用量、费用口径与完整性
+
+### 4.1 接口与分页
+
+`POST https://cursor.com/api/dashboard/get-filtered-usage-events`
+
+请求头必须包含：
+
+```http
+Content-Type: application/json
+Accept: application/json
+Origin: https://cursor.com
+Cookie: WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
 ```
+
+请求体：
+
+```json
+{
+  "page": 1,
+  "pageSize": 1000,
+  "startDate": "<epoch milliseconds>",
+  "endDate": "<epoch milliseconds>"
+}
+```
+
+单个日期分片最多 200 页。每一页都要验证 `totalUsageEventsCount` 一致；只有出现空页或短页，且最终数量与服务端总数一致，才视为完整。接口没有稳定事件 ID，只能在服务端总数证明存在重复时，按相邻页边界的完全相同事件消除对应数量。
+
+如果月度分片达到 200 页仍未完成，自动二分日期范围继续拉取；细分到单日仍无法完整获取时，本轮失败，不发布半截数据。
+
+### 4.2 事件映射
+
+每条事件关注：
+
+| 字段 | 用途 |
+|---|---|
+| `timestamp` | 毫秒时间戳，按用户当前时区归入自然日 |
+| `model` | 模型维度，缺失时使用 `unknown` |
+| `tokenUsage.inputTokens / outputTokens / cacheWriteTokens / cacheReadTokens` | Token 明细 |
+| `tokenUsage.totalCents` | 模型标价成本，仅作参考 |
+| `chargedCents` | Cursor 服务端计量到套餐或按量池的消耗 |
+| `isChargeable / kind / requestsCosts / usageBasedCosts` | 诊断计费类别，不据此把套餐内事件删除 |
+
+映射规则：
+
+- `app = .cursor`
+- `speed = .standard`；Cursor 没有 cc-bar 的 Standard / Fast 概念，这里只表示不走 Fast 倍率。
+- `cacheWriteTokens → cacheCreationTokens`
+- `requestCount = 1`
+- `costUSD = chargedCents / 100`
+- 不能用 `tokenUsage.totalCents` 填补缺失的 `chargedCents`，否则会混合“套餐计量”和“模型标价”两种口径。
+
+缺少或全零 `tokenUsage` 的事件仍可贡献 `chargedCents` 和 request count；缺少有效 timestamp 的事件无法正确归日，必须把该日期分片标为不完整。
+
+只要查询区间内任一有效事件缺少、为负数或包含非有限的 `chargedCents`，该区间的 Cursor 费用标记为不完整。Token 仍可展示，但 Cursor 费用显示 `—`，不能展示一个偏低的部分合计。现有 `hasUnpricedUsage` 可承载该状态；Cursor 单服务费用以及包含 Cursor 的“全部服务”费用，都必须在该标记为 true 时显示 `—` 或明确的 Partial，不能把其他服务加上部分 Cursor 金额冒充完整总额。Token 完整性和费用完整性需要分开记录。
+
+### 4.3 刷新范围与覆盖信息
+
+远端历史不能每隔几分钟全量重拉。采用以下策略：
+
+1. 首次成功：从 `billingCycleStart` 所在的本地自然日 0 点开始拉取，确保今天 / 本周 / 本月尽快可用，同时避免首日只有半个日桶。
+2. 周期刷新：从“当前本地自然日往前两天的 0 点”重拉到现在，以修正迟到事件；完整成功后按自然日替换这三个受影响日桶。不能用未对齐日界线的 48 小时区间直接覆盖日聚合桶。
+3. 用户选择尚未覆盖的更早范围：按月分片懒加载缺失区间；加载完成前显示 loading，不先发布部分总计。
+4. “全部”范围：按月向前懒加载，并显示明确的已覆盖起止时间；尚未完成全部回溯时标记 Partial，不能把当前缓存误称为全部历史。
+5. 缓存记录 `accountID`、完整覆盖区间、各分片状态、`fetchedAt` 与聚合桶。账号变化时先隔离旧缓存，不能显示“新账号 + 旧账号用量”。
+
+网络失败、401、429、解析失败或分页不完整时，保留上一份完整快照，不覆盖为半截或空数据。
+
+### 4.4 独立远端聚合
+
+当前 `UsageAggregator.ingest(_:)` 是累加语义，不能用于反复拉取同一 Cursor 窗口。实现时拆分本地和远端分区：
+
+- 本地日志：继续由 `ingestLocal(_:)` 增量累计，并写现有 `usage-rollup`。
+- Cursor 远端：由 `replaceRemote(app:dayRange:buckets:)` 按自然日原子替换完整日桶，并写独立 `cursor-usage-rollup`。
+- `snapshot()` / `totals(...)` 在读取时合并本地与远端分区。
+- 本地 full rebuild、价格指纹变化或 scan cache 失效只能重建本地分区，不得清空 Cursor 远端分区。
+- Cursor 使用服务端费用，不参与本地 Pricing Catalog 指纹和价格重算。
+
+远端缓存不与本地 conversation / cycle rollup 共用 generation，也不进入对话统计；Cursor Dashboard 事件没有本机会话 ID，不能伪造 conversationKey。
+
+## 5. 认证与安全设计
+
+### 5.1 只读本地登录态
+
+Cursor.app 登录态通常位于：
+
+```text
 ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
 ```
 
-`ItemTable` 表按 key 取：
+从 `ItemTable` 只读取：
 
-- `cursorAuth/accessToken`（JWT，约 1 小时有效）
-- `cursorAuth/refreshToken`（OAuth 刷新用）
+- `cursorAuth/accessToken`
 
-**读取方式**：复用 `OpencodeScanner` 已有的 `import SQLite3` 只读模式——`SQLITE_OPEN_READONLY` 打开，处理 WAL 侧边文件（`-wal` / `-shm`）：存在侧边文件时正常只读；空闲主库无侧边文件时用 `?immutable=1` URI 打开，避免在 Cursor 目录重建文件。
+第一版不读取也不使用 `cursorAuth/refreshToken`。
 
-### 4.2 JWT 解析与 Cookie 构造
+实现独立的 `CursorSQLiteReader`：
 
-复用现有 `Core/Credentials/JWT.swift` 解析 payload：
+1. 优先用 `SQLITE_OPEN_READONLY` 打开，让 SQLite 正确读取活动 WAL。
+2. 设置短 `busy_timeout`，不能阻塞 Cursor。
+3. 仅当普通只读打开返回 `SQLITE_CANTOPEN`，并确认 `-wal` / `-shm` 都不存在时，才用 `SQLITE_OPEN_READONLY | SQLITE_OPEN_URI` 和 `?immutable=1` 回退。
+4. WAL 存在时绝不能使用 immutable，否则会忽略尚未 checkpoint 的最新登录态。
 
-- `sub`（形如 `user|<id>`，取 `|` 后部分）→ userID
-- `exp` → 判断是否需刷新（剩余 < 5 分钟即刷新，留缓冲）
+当前 `OpencodeScanner` 只有普通只读打开，没有上述 immutable fallback；可以复用 SQLite3 基础方式，但不能声称直接复用了完整实现。具体边界以 CodexBar 的 `CursorAppAuth.swift` 为参考。
 
-Cookie 构造（与 Cursor 网页登录态同格式）：
+### 5.2 JWT 与 Cookie
 
+复用 `Core/Credentials/JWT.swift` 解析：
+
+- `sub`：取最后一个 `|` 后的非空部分作为 userID，并限制为安全字符。
+- `email`：用于账号展示和身份变化判断。
+- `exp`：剩余有效期大于 60 秒才直接使用。
+
+Cookie 必须无多余空格：
+
+```text
+WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
 ```
-WorkosCursorSessionToken = <userID>%3A%3A<accessToken>
-```
 
-### 4.3 主动刷新（只写自家 Keychain）
+### 5.3 过期与账号切换
 
-`POST https://api2.cursor.sh/oauth/token`，body：
+- 每轮额度 / 用量刷新前重新读取 Cursor SQLite，Cursor.app 中更新后的 token 优先。
+- 请求返回 401 时只允许再重读 SQLite 并重试一次；如果 token 未变化或仍失败，结束本轮。
+- token 过期时提示“请打开 Cursor 并重新登录后重试”，保留旧额度和用量快照。
+- JWT subject 或 email 明确变化时视为账号切换；先切换运行时身份，再加载该账号自己的缓存或重新拉取，不能沿用旧账号快照。
 
-```json
-{ "grant_type": "refresh_token", "client_id": "<逆向常量>", "refresh_token": "<refreshToken>" }
-```
+### 5.4 安全边界
 
-- 响应含 `access_token`，刷新后重新构造 cookie 继续本次请求。
-- `shouldLogout: true` 或 400/401 → 会话失效，提示用户到 Cursor 重新登录。
-- **新 token 仅写入 cc-bar 自己的 Keychain**（复用 `ImportedCodexStore` 的 `SecItem` 模式，service 如 `com.cc-bar.cursor`），不写回 `state.vscdb`。
-- `client_id` 是逆向常量，可能随 Cursor 变更；配置集中一处便于维护。
+- 凭据只发送到 `https://cursor.com`，不发送到其他域名。
+- 不调用 OAuth refresh，不写 Cursor SQLite，不把 token 保存到 Keychain、UserDefaults、缓存或日志。
+- 日志只记录固定错误类别、HTTP 状态和无凭据的分页信息。
+- 429 遵守现有退避策略；手动刷新不能绕过退避。
+- 网络失败保留最后一次完整快照。
 
-### 4.4 安全边界
+## 6. 架构改动清单
 
-- 凭据只发给 `cursor.com` / `api2.cursor.sh`，仅 HTTPS。
-- 不把 token / cookie 写入日志或 `UserDefaults`。
-- 网络失败保留已有快照，不清空可展示数据。
-- 429 走现有退避策略，不绕过限流。
-
-## 5. 架构改动清单
-
-### 新增文件
+### 6.1 新增文件
 
 | 文件 | 职责 |
 |---|---|
-| `Core/Credentials/CursorAuth.swift` | 读 `state.vscdb`、JWT 解析、cookie 构造、OAuth 刷新（写 Keychain） |
-| `Core/Quota/CursorQuotaClient.swift` | `usage-summary` → `QuotaSnapshot`，错误映射为 `QuotaError` |
-| `Core/Usage/CursorUsageFetcher.swift` | `get-filtered-usage-events` 分页拉取 + 去重 → `[UsageBucket]` |
-| 资源 | Cursor 图标（`logoName: "cursor"`）、识别色（见 §7 设计） |
+| `Core/Credentials/CursorAuth.swift` | 只读 SQLite、JWT 身份与有效期、Cookie 构造；不含 OAuth 刷新 |
+| `Core/Quota/CursorQuotaClient.swift` | `usage-summary` 解码、账户类型回退、`QuotaSnapshot` 映射 |
+| `Core/Usage/CursorUsageFetcher.swift` | 日期分片、分页完整性、事件解析与临时聚合 |
+| `Core/Storage/CursorUsageCache.swift` | 账号绑定的远端桶、覆盖区间和完整性状态 |
+| 资源 | Cursor logo、识别色 asset |
 
-### 修改文件
+### 6.2 修改文件与真实影响面
 
-| 文件 | 改动 |
+| 文件 / 模块 | 改动 |
 |---|---|
-| `Core/Quota/QuotaModels.swift` | `QuotaApp` 加 `.cursor`；`QuotaProviderDescriptor.primaryProviders` 插入 Claude 之后（保持 Codex 最前） |
-| `Core/Usage/UsageModels.swift` | `UsageApp` 加 `.cursor` |
-| `Core/Quota/QuotaRefreshPlan.swift` | 加 `refreshCursor` 开关 |
-| `Core/AppState.swift` | `primaryQuotaStates` / `quotaCache` 已按 `QuotaApp` 索引，自动支持；新增 `loadCursorQuota()` 并挂入 `refreshQuotas` |
-| `Core/Usage/UsageService.swift` | 增加 Cursor 远程数据的拉取入口与调度（结果 ingest 进现有 aggregator） |
-| `Core/L10n.swift` | 双语词条：Cursor、套餐、计费周期、剩余额度等 |
-| UI 各层 | Popover / 主窗口 / 悬浮窗 / 设置页均按 `primaryProviders` 与 `QuotaApp.allCases` 遍历，新增 provider 自动出现，仅需确认顺序与空态 |
+| `Core/Quota/QuotaModels.swift` | `QuotaApp.cursor`、`auxiliaryLimits`、可选 `isUnlimited`、Cursor 三个稳定 limit ID |
+| `Core/Usage/UsageModels.swift` | `UsageApp.cursor`；补充远端覆盖 / 费用完整性模型（如不放独立缓存模型中） |
+| `Core/Quota/QuotaRefreshPlan.swift` | 增加 `refreshCursor`，由 Provider enabled 状态构造 |
+| `Core/AppState.swift` | Cursor 账号、额度状态、身份切换清理、`loadCursorQuota()`、缓存与退避；所有 `QuotaApp` 穷举 switch 补齐 |
+| `Core/Usage/UsageAggregator.swift` | 本地 ingest 与远端按日 replacement 分区；读取时合并 |
+| `Core/Usage/UsageService.swift` | Cursor 远端刷新调度、懒加载、独立持久化；本地重算不影响远端 |
+| `Core/Storage/ScanCache.swift` | 仍只保存本地扫描状态；确认 Cursor 不进入本地 generation / pricing fingerprint |
+| `Core/Storage/Settings.swift` | `providerDisplaySettings` 和 `usageServiceVisibility` 自动补默认值；可增加 `showCursor` 语义入口，但不新增三组平行存储 key |
+| `Main/DesignSystem.swift` | `QuotaApp` / `UsageApp` 的 Cursor 名称与识别色 |
+| `MenuBar/PopoverRootView.swift` | Cursor 账号副标题、三条额度、Unlimited、费用与服务状态分支；Cursor 不显示本机 today/week cost |
+| `MenuBar/MenuBarLabel.swift` | Cursor limit 选择与稳定 ID 去重 |
+| `Floating/` | Cursor Provider 行和 Unlimited / 空态 |
+| `Main/StatsView.swift` | Cursor filter、服务副标题、固定 DailySample 字段或等价通用化；Cursor 单服务及全部服务的费用不完整、覆盖范围提示 |
+| `Main/CycleStatsView.swift` | 补齐 `UsageApp.cursor` 穷举；第一版不为 Cursor 构造 5h / weekly account cycle |
+| `Settings/SettingsRootView.swift` | Cursor Provider 开关与 Stats service 开关 |
+| `Onboarding/OnboardingView.swift` | 检测 Cursor 数据库 / 登录态，只做只读提示，不触发 Keychain 或 OAuth |
+| L10n / 文档 | Cursor、Unlimited、计量消耗、覆盖不完整、打开 Cursor 重试等双语文案 |
 
-Settings 侧无需扩平行字段：`providerDisplaySettings` 已统一按 `QuotaApp` 索引，仅补充 `showCursor` 语义入口。
+`QuotaProviderDescriptor.primaryProviders` 顺序固定为：
 
-## 6. 口径说明
+```text
+Codex → Claude Code → Cursor → Antigravity
+```
 
-- **远程账单位**：Cursor 的额度与用量来自远端账户，覆盖该账号**所有设备**；与 Codex / Claude 的"本机扫描会话日志"是不同来源，UI 上在费用/来源处需能区分。
-- **费用口径**：额度侧 `plan` / `onDemand` 是美分；用量侧以 `chargedCents`（官方实际扣费）为准；`tokenUsage.totalCents`（官方标价）仅作参考，不混用。
-- **on-demand 位置**：超额费用属于"费用"范畴，随用量统计在**主窗口**体现；Popover 只展示额度百分比与周期。
+设置和 quota cache 已经按 Provider 索引，新增枚举值后可补默认项；但 UI 和统计层仍有多处穷举 switch 与固定四服务数据结构，不能写成“新增 Provider 自动出现”。
 
-## 7. 风险与边界
+## 7. 产品口径
 
-| 风险 | 说明 | 缓解 |
-|---|---|---|
-| 非官方接口变更 | `usage-summary` / `get-filtered-usage-events` / `oauth/token` 均无稳定性承诺 | 失败保留快照；接口字段集中解析；文档与代码同步跟进 |
-| 20 万事件 / 次上限 | 单次拉取最多 200 页 × 1000 条 | 达上限显式报错不发布半截数据；按需缩小窗口 |
-| 逆向 `client_id` 变更 | OAuth 刷新常量可能失效 | 集中配置；失效退化为只读模式并提示 |
-| Cursor 未安装 / 未登录 | 读不到 `state.vscdb` 或 token 过期 | 显示空态 / 引导提示，不清空快照 |
-| 刷新不同步回 Cursor | cc-bar 刷新后 Cursor.app 不知情 | 不涉及：cc-bar 不写 Cursor 库，无同步问题；若 Cursor 侧先刷新导致 refresh token 失效，提示重新登录 |
+- **账户范围**：Cursor 数据来自远端账号，覆盖该账号所有设备；Codex / Claude / Pi / OpenCode 当前主要是本机日志来源。
+- **Token**：来自 Cursor Dashboard 事件；缺少 tokenUsage 的事件不伪造 Token。
+- **Cursor 计量消耗**：`chargedCents` 汇总，包含套餐内计量，可能不等于信用卡额外扣款。
+- **On-demand**：`individualUsage.onDemand.used` 是额外按量用量，属于额度 / 账单摘要，不与事件 `chargedCents` 重复相加。
+- **模型标价**：`tokenUsage.totalCents` 可用于诊断或未来单独展示，不写入同一个 `costUSD` 口径。
+- **覆盖范围**：超出已完整拉取区间时显示 Loading 或 Partial；不能用局部缓存回答“全部”。
+- **来源提示**：Stats 的 Cursor 费用旁标注“Cursor 计量 · 全设备”，tooltip 解释其不是本机估算，也不一定是额外账单。
 
-## 8. 实施步骤
+## 8. 风险与降级
 
-1. **认证层**：`CursorAuth`（读库 → 解析 → 刷新 → 缓存到 Keychain）。
-2. **额度**：`QuotaApp.cursor` + `CursorQuotaClient` + `AppState` 调度 + `QuotaCache` 缓存。
-3. **用量**：`UsageApp.cursor` + `CursorUsageFetcher` + 聚合接入。
-4. **UI 收尾**：图标、识别色、L10n、设置开关、Popover / 主窗口空态与错误态。
-5. **文档同步**：并入《产品需求》《技术实现》《界面布局》。
+| 风险 | 处理 |
+|---|---|
+| Dashboard 私有接口或字段变化 | 集中解码；未知 schema 整体失败并保留旧快照，不用 0 值掩盖 |
+| Cursor token 过期 | 不主动刷新；提示打开 Cursor / 重新登录，保留旧数据 |
+| 分页重复或总数变化 | 按服务端总数和相邻页边界严格校验；不发布半截数据 |
+| 单分片超过 20 万事件 | 自动二分日期范围；单日仍超限则报不完整 |
+| 账号切换 | 以 JWT subject 优先、email 回退识别；缓存按 accountID 隔离 |
+| `chargedCents` 缺失 | Token 可展示，费用为 `—` 并标记不完整，不回退到标价成本 |
+| 本地 full rebuild | 只重建本地分区，Cursor 远端快照不丢失 |
+| Cursor 未安装 / 未登录 | 显示空态或操作提示，不清空已有账号的最后完整快照 |
+| 429 | 使用现有退避；手动刷新不绕过 |
 
-## 9. 验收标准
+## 9. 实施顺序
 
-- Popover 显示 Cursor 剩余额度（Total 百分比 + 计费周期重置时间 + 套餐名），与 Cursor 网页 Spending dashboard 一致。
-- 主窗口统计页显示 Cursor 按日 / 周 / 月汇总的 Token 与费用，费用与 dashboard 账单口径一致（官方扣费）。
-- Cursor 排在 Claude 之后、Codex 之前（Codex 永远最前）。
-- Cursor 未登录 / 未安装时显示空态或错误提示，不清空已有快照。
-- 429 遵守现有退避策略；失败不清空可展示数据。
-- 不写回 Cursor 的 `state.vscdb`，不动用户正在使用的数据。
+1. **模型与测试夹具**：Cursor API JSON、三条稳定 limit、Team / Enterprise / Unlimited / 缺字段用例。
+2. **只读认证**：SQLite WAL / immutable 边界、JWT、账号切换、401 单次重读。
+3. **额度**：`CursorQuotaClient`、AppState 调度、独立错误和 cache 行为。
+4. **远端用量**：严格分页、自然日对齐的日期分片、费用完整性、远端独立 cache 与按日 replacement。
+5. **统计 UI**：Cursor service、覆盖范围、Partial / Loading、计量消耗文案。
+6. **Quota UI**：Popover、菜单栏、悬浮窗、设置、Onboarding、图标和 L10n。
+7. **文档同步**：并入《产品需求》《技术实现》《界面布局》《设计风格》。
+
+## 10. 验收标准
+
+- Cursor 顺序为 Codex → Claude Code → Cursor → Antigravity。
+- Popover 能分别显示 Total / Auto / API；三条 ID 不冲突，缺失字段不伪造 0%，Unlimited 有明确文本。
+- Pro / Pro+ / Ultra、Team / Enterprise 的 `plan`、`overall`、`pooled` 形态都有解析测试。
+- Cursor.app 登录有效时可只读拉取；token 过期或 401 时不调用 OAuth、不写 SQLite / Keychain，并保留旧快照。
+- 同一完整用量窗口连续刷新两次，Token、requestCount 和费用不会翻倍。
+- 本地日志 full rebuild 后 Cursor 远端数据仍存在；切换 Cursor 账号后不会显示旧账号快照。
+- 分页总数变化、边界重复、200 页上限和 `chargedCents` 缺失都有明确测试；任何不完整结果都不覆盖完整缓存。
+- 主窗口按日 / 周 / 月汇总 Cursor Token；费用以 Cursor 服务端计量消耗展示，缺口径时 Cursor 单服务及包含 Cursor 的全部服务费用都显示 `—` / Partial。
+- 超出缓存覆盖范围时显示 Loading / Partial，不把局部数据标成“全部”。
+- Cursor 未安装 / 未登录时显示空态或操作提示；网络失败和 429 不清空已有数据，也不绕过退避。
+- 凭据不进入日志、UserDefaults、cc-bar Keychain 或持久化缓存，只发送到 `https://cursor.com`。
