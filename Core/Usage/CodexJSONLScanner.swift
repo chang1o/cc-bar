@@ -19,6 +19,7 @@ enum CodexJSONLScanner {
         var newState: [String: ScanFileState]
         var filesScanned: Int
         var linesParsed: Int
+        var failedFileCount: Int
     }
 
     /// 文件级并发解析的最大并发数。codex 日志文件独立（会话互不重叠），
@@ -45,16 +46,24 @@ enum CodexJSONLScanner {
     /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
     /// 文件间并行解析（`maxConcurrentFiles` 路），结果按原始顺序合并，
     /// 解析结果与串行实现完全一致。
+    /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter onProgress: 非 nil 时按批回报一次扫描进度。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         roots: [URL],
         indexedTitles: [String: String],
+        minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) async -> Result {
         var filesByID: [String: JSONLFileDescriptor] = [:]
+        var failedRootCount = 0
         for root in roots {
-            for file in JSONLDirectoryEnumerator.files(at: root) {
+            let enumeration = JSONLDirectoryEnumerator.enumerate(
+                at: root,
+                minimumMtime: minimumMtime
+            )
+            if enumeration.accessFailed { failedRootCount += 1 }
+            for file in enumeration.files {
                 let id = conversationID(from: file.url) ?? file.path
                 if let existing = filesByID[id] {
                     if file.modificationTime > existing.modificationTime {
@@ -71,6 +80,7 @@ enum CodexJSONLScanner {
         var entries: [UsageEntry] = []
         var seeds: [String: ConversationSeed] = [:]
         var linesParsed = 0
+        var failedFileCount = failedRootCount
         // 本批次内出现过 cache_write 的会话 key；避免每个文件收尾时对全部
         // 已累积 entries 做线性 contains（全量重扫时是平方级开销）。
         var cacheCreationKeys: Set<String> = []
@@ -112,9 +122,16 @@ enum CodexJSONLScanner {
             batchResults.sort { $0.index < $1.index }
             for item in batchResults {
                 let result = item.result
+                if result.fileDisappeared {
+                    // sessions → archived_sessions 移动时会话 ID 不变；保留旧状态才能让
+                    // 下轮从原 offset 续扫，不能删除后把整份归档从 0 重复计入。
+                    newState[result.stateKey] = result.state
+                    continue
+                }
                 newState[result.stateKey] = result.state
                 entries.append(contentsOf: result.entries)
                 linesParsed += result.linesParsed
+                if result.readFailed { failedFileCount += 1 }
                 for key in result.cacheCreationKeys {
                     cacheCreationKeys.insert(key)
                 }
@@ -156,7 +173,14 @@ enum CodexJSONLScanner {
             newState.removeValue(forKey: key)
         }
 
-        return Result(entries: entries, conversationSeeds: Array(seeds.values), newState: newState, filesScanned: files.count, linesParsed: linesParsed)
+        return Result(
+            entries: entries,
+            conversationSeeds: Array(seeds.values),
+            newState: newState,
+            filesScanned: files.count,
+            linesParsed: linesParsed,
+            failedFileCount: failedFileCount
+        )
     }
 
     /// 单个文件的解析结果，供并发批处理合并。
@@ -168,6 +192,8 @@ enum CodexJSONLScanner {
         var seed: ConversationSeed?
         var cacheCreationKeys: [String]
         var linesParsed: Int
+        var readFailed: Bool
+        var fileDisappeared: Bool = false
     }
 
     /// 解析单个 JSONL 文件（无共享可变状态，可并发执行）。
@@ -208,7 +234,8 @@ enum CodexJSONLScanner {
                         cacheCreationAvailable: false
                     ),
                     cacheCreationKeys: [],
-                    linesParsed: 0
+                    linesParsed: 0,
+                    readFailed: false
                 )
             }
             return CodexFileScanResult(
@@ -218,7 +245,8 @@ enum CodexJSONLScanner {
                 seedKey: nil,
                 seed: nil,
                 cacheCreationKeys: [],
-                linesParsed: 0
+                linesParsed: 0,
+                readFailed: false
             )
         }
         // 文件被截断：offset 回到 0 重扫（此时仍由全局 seen 兜底防重复计费）
@@ -226,7 +254,11 @@ enum CodexJSONLScanner {
             resetForTruncation(&state)
         }
 
-        guard let read = JSONLLineReader.read(url: url, fromOffset: state.offset) else {
+        let read: (lines: [String], newOffset: UInt64)
+        switch JSONLLineReader.readOutcome(url: url, fromOffset: state.offset) {
+        case let .success(lines, newOffset):
+            read = (lines: lines, newOffset: newOffset)
+        case .missing:
             return CodexFileScanResult(
                 stateKey: stateKey,
                 state: state,
@@ -234,7 +266,20 @@ enum CodexJSONLScanner {
                 seedKey: nil,
                 seed: nil,
                 cacheCreationKeys: [],
-                linesParsed: 0
+                linesParsed: 0,
+                readFailed: false,
+                fileDisappeared: true
+            )
+        case .failed:
+            return CodexFileScanResult(
+                stateKey: stateKey,
+                state: state,
+                entries: [],
+                seedKey: nil,
+                seed: nil,
+                cacheCreationKeys: [],
+                linesParsed: 0,
+                readFailed: true
             )
         }
 
@@ -372,7 +417,8 @@ enum CodexJSONLScanner {
             seedKey: seedKey,
             seed: seed,
             cacheCreationKeys: fileCacheCreationKeys,
-            linesParsed: linesParsed
+            linesParsed: linesParsed,
+            readFailed: false
         )
     }
 

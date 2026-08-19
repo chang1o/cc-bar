@@ -4,29 +4,50 @@ import Foundation
 /// 简单实现：一次性读入 `offset` 之后的字节，按 `\n` 切分。
 /// 适合单文件大小通常 < 几 MB 的 JSONL；如果以后单文件巨大可换 chunk 流。
 enum JSONLLineReader {
-    /// - Returns: (lines, newOffset)。如果文件不存在 / 读失败，返回 nil。
+    enum ReadOutcome: Sendable {
+        case success(lines: [String], newOffset: UInt64)
+        /// 文件在枚举后、真正读取前被移动或删除；这是正常并发变化，不是扫描失败。
+        case missing
+        case failed
+    }
+
+    /// 兼容只关心成功与否的调用方；需要区分文件消失与真失败时使用 `readOutcome`。
     nonisolated static func read(url: URL, fromOffset offset: UInt64) -> (lines: [String], newOffset: UInt64)? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        guard case let .success(lines, newOffset) = readOutcome(url: url, fromOffset: offset) else {
+            return nil
+        }
+        return (lines: lines, newOffset: newOffset)
+    }
+
+    nonisolated static func readOutcome(url: URL, fromOffset offset: UInt64) -> ReadOutcome {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return failureOutcome(for: url)
+        }
         defer { try? handle.close() }
 
-        let end = (try? handle.seekToEnd()) ?? 0
+        let end: UInt64
+        do {
+            end = try handle.seekToEnd()
+        } catch {
+            return failureOutcome(for: url)
+        }
         if offset >= end {
-            return (lines: [], newOffset: end)
+            return .success(lines: [], newOffset: end)
         }
         do {
             try handle.seek(toOffset: offset)
         } catch {
-            return nil
+            return failureOutcome(for: url)
         }
         let data: Data
         do {
             data = try handle.readToEnd() ?? Data()
         } catch {
-            return nil
+            return failureOutcome(for: url)
         }
         // 必须按整行切：最后一行如果没有换行结尾，则保留为下次偏移之前的残行 → 简单起见，把最后未结束的部分丢回 offset
         guard !data.isEmpty else {
-            return (lines: [], newOffset: end)
+            return .success(lines: [], newOffset: end)
         }
         let newline = UInt8(ascii: "\n")
         var lastNewline: Int = -1
@@ -40,14 +61,18 @@ enum JSONLLineReader {
         let newOffset: UInt64
         if lastNewline < 0 {
             // 整段没有换行 → 全是残行，不消费
-            return (lines: [], newOffset: offset)
+            return .success(lines: [], newOffset: offset)
         } else {
             completePart = data.subdata(in: 0..<(lastNewline + 1))
             newOffset = offset + UInt64(lastNewline + 1)
         }
         let text = String(data: completePart, encoding: .utf8) ?? ""
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-        return (lines: lines, newOffset: newOffset)
+        return .success(lines: lines, newOffset: newOffset)
+    }
+
+    nonisolated private static func failureOutcome(for url: URL) -> ReadOutcome {
+        FileManager.default.fileExists(atPath: url.path) ? .failed : .missing
     }
 }
 
@@ -201,13 +226,26 @@ struct JSONLFileDescriptor: Sendable {
 
 /// 递归列出某目录下后缀为 .jsonl 的文件，并同时取得增量扫描所需元数据。
 enum JSONLDirectoryEnumerator {
+    struct Result: Sendable {
+        var files: [JSONLFileDescriptor]
+        /// 根目录存在但不是目录，或枚举器无法打开。
+        var accessFailed: Bool
+    }
+
     /// - Parameter minimumMtime: 非 nil 时只返回修改时间不早于该时刻的文件。
     ///   供周期用量的受限重建过滤"最近窗口之外"的旧日志使用；nil 时行为与原来一致。
     nonisolated static func files(at root: URL, minimumMtime: Date? = nil) -> [JSONLFileDescriptor] {
+        enumerate(at: root, minimumMtime: minimumMtime).files
+    }
+
+    nonisolated static func enumerate(at root: URL, minimumMtime: Date? = nil) -> Result {
         let fm = FileManager.default
         var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
-            return []
+        guard fm.fileExists(atPath: root.path, isDirectory: &isDir) else {
+            return Result(files: [], accessFailed: false)
+        }
+        guard isDir.boolValue else {
+            return Result(files: [], accessFailed: true)
         }
         guard let it = fm.enumerator(
             at: root,
@@ -218,7 +256,7 @@ enum JSONLDirectoryEnumerator {
             ],
             options: [.skipsHiddenFiles]
         ) else {
-            return []
+            return Result(files: [], accessFailed: true)
         }
         var result: [JSONLFileDescriptor] = []
         for case let url as URL in it {
@@ -237,6 +275,6 @@ enum JSONLDirectoryEnumerator {
                 size: UInt64(max(0, values?.fileSize ?? 0))
             ))
         }
-        return result
+        return Result(files: result, accessFailed: false)
     }
 }

@@ -181,21 +181,28 @@ struct StatsView: View {
 
             Divider()
 
-            if viewMode == .conversations {
-                ConversationStatsView(
-                    range: $range,
-                    customFrom: $customFrom,
-                    customTo: $customTo,
-                    serviceFilter: serviceFilter
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            } else {
-                GeometryReader { proxy in
-                    ScrollView {
-                        mainContent(canvasWidth: proxy.size.width, viewportHeight: proxy.size.height)
+            VStack(spacing: 0) {
+                if let error = appState.usageService.lastError {
+                    usageErrorBanner(error)
+                }
+
+                if viewMode == .conversations {
+                    ConversationStatsView(
+                        range: $range,
+                        customFrom: $customFrom,
+                        customTo: $customTo,
+                        serviceFilter: serviceFilter
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else {
+                    GeometryReader { proxy in
+                        ScrollView {
+                            mainContent(canvasWidth: proxy.size.width, viewportHeight: proxy.size.height)
+                        }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .onAppear { reconcileServiceFilter() }
         .onChange(of: SettingsStore.shared.usageServiceVisibility) { _, _ in
@@ -204,6 +211,34 @@ struct StatsView: View {
         .onChange(of: viewMode) { _, _ in
             reconcileServiceFilter()
         }
+    }
+
+    /// 本地日志读取或聚合持久化失败时必须在统计页可见，并给出直接恢复入口。
+    /// 具体技术错误保留在 hover help，主文案只说明数据状态与安全行为。
+    private func usageErrorBanner(_ error: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+            Text(tr(
+                "Usage statistics may be incomplete. Available data is preserved; retry or recalculate in Settings.",
+                "用量统计可能不完整。可用的已有数据会保留，请稍后重试或前往设置重新计算。"
+            ))
+            .font(.system(size: 11.5))
+            .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(tr("Open Settings", "打开设置")) {
+                appState.mainTab = .settings
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.08))
+        .overlay(alignment: .bottom) { Divider() }
+        .help(error)
     }
 
     /// 宽度断点:主画布达到该宽度时,时间线的折线图与表格改为左右并排;
@@ -712,7 +747,7 @@ struct StatsView: View {
         }
 
         if serviceFilter != .codex {
-            let key = QuotaHistoryAccountKey.claudePrimary()
+            let key = QuotaHistoryAccountKey.claudePrimary(email: appState.claudeAccount?.email)
             if shouldShowTimelineSection(key: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
                 sections.append(timelineSection(
                     key: key,
@@ -1807,6 +1842,27 @@ enum StatsFormatter {
         f.minimumFractionDigits = 4
         f.maximumFractionDigits = 6
         return "$\(f.string(from: ns) ?? "0.0000")"
+    }
+
+    /// 图表 Y 轴专用：正常金额保持紧凑，小额刻度保留足够小数避免全部显示为 $0。
+    static func axisCost(_ value: Decimal) -> String {
+        let ns = NSDecimalNumber(decimal: value)
+        let magnitude = abs(ns.doubleValue)
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.groupingSeparator = ","
+        if magnitude >= 10 {
+            f.minimumFractionDigits = 0
+            f.maximumFractionDigits = 0
+        } else if magnitude >= 1 {
+            f.minimumFractionDigits = 2
+            f.maximumFractionDigits = 2
+        } else {
+            f.minimumFractionDigits = 2
+            f.maximumFractionDigits = 3
+        }
+        return "$\(f.string(from: ns) ?? "0.00")"
     }
 
     @MainActor

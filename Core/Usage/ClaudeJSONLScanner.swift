@@ -10,6 +10,7 @@ enum ClaudeJSONLScanner {
         var newSeenIds: [String]
         var filesScanned: Int
         var linesParsed: Int
+        var failedFileCount: Int
     }
 
     nonisolated static func defaultRoot() -> URL {
@@ -42,11 +43,13 @@ enum ClaudeJSONLScanner {
         minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
-        let files = JSONLDirectoryEnumerator.files(at: root, minimumMtime: minimumMtime)
+        let enumeration = JSONLDirectoryEnumerator.enumerate(at: root, minimumMtime: minimumMtime)
+        let files = enumeration.files
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []
         var linesParsed = 0
+        var failedFileCount = enumeration.accessFailed ? 1 : 0
         var seeds: [String: ConversationSeed] = [:]
         var projectCandidates: [String: [ProjectCandidate]] = [:]
         // 跨文件全局去重：同一 message.id 在 sidechain / subagent 文件中会反复出现。
@@ -111,8 +114,18 @@ enum ClaudeJSONLScanner {
                 state.offset = 0
             }
 
-            guard let read = JSONLLineReader.read(url: url, fromOffset: state.offset) else {
+            let read: (lines: [String], newOffset: UInt64)
+            switch JSONLLineReader.readOutcome(url: url, fromOffset: state.offset) {
+            case let .success(lines, newOffset):
+                read = (lines: lines, newOffset: newOffset)
+            case .missing:
+                // 枚举后被归档或清理是正常并发变化；本轮保留旧 watermark 且不弹告警，
+                // 下轮枚举不到原路径时再由 alive 清理。
                 newState[path] = state
+                continue
+            case .failed:
+                newState[path] = state
+                failedFileCount += 1
                 continue
             }
 
@@ -259,7 +272,15 @@ enum ClaudeJSONLScanner {
             seeds[key] = seed
         }
 
-        return Result(entries: entries, conversationSeeds: Array(seeds.values), newState: newState, newSeenIds: cappedSeen, filesScanned: files.count, linesParsed: linesParsed)
+        return Result(
+            entries: entries,
+            conversationSeeds: Array(seeds.values),
+            newState: newState,
+            newSeenIds: cappedSeen,
+            filesScanned: files.count,
+            linesParsed: linesParsed,
+            failedFileCount: failedFileCount
+        )
     }
 
     /// 保持为 internal，供脱敏 JSONL fixture 单测验证日志字段兼容性。

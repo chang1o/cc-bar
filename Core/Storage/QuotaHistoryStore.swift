@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 nonisolated enum QuotaHistoryAccountKind: String, Sendable, Codable {
@@ -52,8 +53,12 @@ enum QuotaHistoryAccountKey {
         "codex:imported:\(id)"
     }
 
-    nonisolated static func claudePrimary() -> String {
-        "claude:primary"
+    nonisolated static func claudePrimary(email: String?) -> String {
+        guard let email = nonEmpty(email)?.lowercased() else {
+            return "claude:primary"
+        }
+        let digest = SHA256.hash(data: Data(email.utf8))
+        return "claude:primary:\(digest.map { String(format: "%02x", $0) }.joined())"
     }
 
     nonisolated private static func nonEmpty(_ value: String?) -> String? {
@@ -88,6 +93,29 @@ enum QuotaHistoryStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(payload)
         try data.write(to: url, options: [.atomic])
+    }
+
+    /// 旧版 Claude 主账号恒用 `claude:primary`，历史无法再拆分。
+    /// 首次取得当前邮箱后将这批当日数据一次性归入当前账号。
+    nonisolated static func migratingLegacyClaudeAccountKey(
+        _ payload: QuotaHistoryPayload,
+        to accountKey: String
+    ) -> QuotaHistoryPayload {
+        let legacyKey = "claude:primary"
+        guard accountKey != legacyKey else { return payload }
+        var next = payload
+        if var legacy = next.lastSamples.removeValue(forKey: legacyKey) {
+            legacy.accountKey = accountKey
+            if let existing = next.lastSamples[accountKey], existing.sampledAt > legacy.sampledAt {
+                next.lastSamples[accountKey] = existing
+            } else {
+                next.lastSamples[accountKey] = legacy
+            }
+        }
+        for index in next.events.indices where next.events[index].accountKey == legacyKey {
+            next.events[index].accountKey = accountKey
+        }
+        return next
     }
 
     nonisolated static func record(

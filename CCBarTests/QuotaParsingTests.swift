@@ -163,6 +163,40 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(payload.lastSamples["codex:primary"]?.limitKind, .fiveHour)
     }
 
+    func testClaudePrimaryAccountKeyNormalizesAndHashesEmail() {
+        let first = QuotaHistoryAccountKey.claudePrimary(email: " User@Example.COM ")
+        let same = QuotaHistoryAccountKey.claudePrimary(email: "user@example.com")
+        let other = QuotaHistoryAccountKey.claudePrimary(email: "other@example.com")
+
+        XCTAssertEqual(first, same)
+        XCTAssertNotEqual(first, other)
+        XCTAssertTrue(first.hasPrefix("claude:primary:"))
+        XCTAssertFalse(first.contains("example.com"), "账号键不应落盘明文邮箱")
+        XCTAssertEqual(QuotaHistoryAccountKey.claudePrimary(email: nil), "claude:primary")
+    }
+
+    func testQuotaHistoryMigratesLegacyClaudeKeyToCurrentAccount() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let accountKey = QuotaHistoryAccountKey.claudePrimary(email: "user@example.com")
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        for (offset, used) in [(0.0, 10.0), (60.0, 20.0)] {
+            payload = QuotaHistoryStore.record(
+                payload: payload,
+                accountKey: "claude:primary",
+                app: .claude,
+                kind: .claudePrimary,
+                snapshot: snapshot(kind: .fiveHour, usedPercent: used, reset: start.addingTimeInterval(18_000)),
+                sampledAt: start.addingTimeInterval(offset)
+            )
+        }
+
+        let migrated = QuotaHistoryStore.migratingLegacyClaudeAccountKey(payload, to: accountKey)
+
+        XCTAssertNil(migrated.lastSamples["claude:primary"])
+        XCTAssertEqual(migrated.lastSamples[accountKey]?.accountKey, accountKey)
+        XCTAssertTrue(migrated.events.allSatisfy { $0.accountKey == accountKey })
+    }
+
     func testCycleStoreRecordsFiveHourAndWeeklyButExcludesModelWeekly() {
         let sampledAt = Date(timeIntervalSince1970: 1_000)
         let fiveHourEnd = sampledAt.addingTimeInterval(18_000)
@@ -425,6 +459,37 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(cycle.allowanceSegments.count, 1)
     }
 
+    func testCycleStoreDoesNotMergeLowUsageEarlyWeeklyReset() throws {
+        let sampledAt = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        let firstReset = sampledAt.addingTimeInterval(week)
+        var payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "codex:primary:test",
+            app: .codex,
+            snapshot: snapshot(kind: .weekly, usedPercent: 4, reset: firstReset),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        let earlyResetAt = sampledAt.addingTimeInterval(2 * 86_400)
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "codex:primary:test",
+            app: .codex,
+            snapshot: snapshot(
+                kind: .weekly,
+                usedPercent: 2,
+                reset: earlyResetAt.addingTimeInterval(week)
+            ),
+            source: .api,
+            sampledAt: earlyResetAt
+        )
+
+        XCTAssertEqual(payload.records.count, 2, "低用量提前重置不能被第三重活跃匹配串成一期")
+        let old = try XCTUnwrap(payload.records.first { $0.scheduledEndAt == firstReset })
+        XCTAssertEqual(old.endAt, earlyResetAt)
+    }
+
     func testCycleStoreKeepsScheduledEndAtUnderSubsecondJitter() throws {
         let sampledAt = Date(timeIntervalSince1970: 1_000)
         let firstReset = sampledAt.addingTimeInterval(18_000)
@@ -554,6 +619,43 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(payload.records.count, 2, "回落采样应新建周期，但旧记录保持完整")
     }
 
+    func testCloseOverlappingCyclesKeepsAdjacentCyclesWithSecondLevelOverlap() throws {
+        let start = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        let boundary = start.addingTimeInterval(week)
+        let existing = cycleRecord(
+            id: "earlier",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: start,
+            end: boundary,
+            usedPercent: 40
+        )
+        var payload = QuotaCyclePayload(trackingStartedAt: start)
+        payload.records = [existing]
+
+        // 新周期起点因独立 resets_at 抖动比旧周期终点早 1 秒。
+        // 用量明显回落会走新建分支，但不应截短前一真实周期。
+        let newStart = boundary.addingTimeInterval(-1)
+        payload = QuotaCycleStore.record(
+            payload: payload,
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(
+                kind: .weekly,
+                usedPercent: 0,
+                reset: newStart.addingTimeInterval(week)
+            ),
+            source: .api,
+            sampledAt: newStart
+        )
+
+        let kept = try XCTUnwrap(payload.records.first { $0.id == "earlier" })
+        XCTAssertEqual(payload.records.count, 2)
+        XCTAssertEqual(kept.endAt, boundary, "秒级边界重叠不应截短旧周期")
+        XCTAssertNil(kept.allowanceSegments.first?.endAt)
+    }
+
     func testCleaningUpLegacyPayloadDropsShardsAndMergesOverlaps() throws {
         let start = Date(timeIntervalSince1970: 100_000)
         let week: TimeInterval = 604_800
@@ -601,6 +703,40 @@ final class QuotaParsingTests: XCTestCase {
         let earlier = try XCTUnwrap(cleaned.records.first { $0.id == "earlier" })
         XCTAssertEqual(earlier.startAt, start, "较早周期的时间段不应被吞掉")
         XCTAssertEqual(earlier.endAt, start.addingTimeInterval(week + 0.67))
+    }
+
+    func testCleaningUpPayloadDoesNotMergeAdjacentCyclesAfterOneSecondTruncation() throws {
+        let start = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        let scheduledBoundary = start.addingTimeInterval(week)
+        let jitteredBoundary = scheduledBoundary.addingTimeInterval(-1)
+        var earlier = cycleRecord(
+            id: "earlier",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: start,
+            end: jitteredBoundary,
+            usedPercent: 30
+        )
+        earlier.scheduledEndAt = scheduledBoundary
+        let later = cycleRecord(
+            id: "later",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: jitteredBoundary,
+            end: jitteredBoundary.addingTimeInterval(week),
+            usedPercent: 35
+        )
+
+        let cleaned = QuotaCycleStore.cleaningUpLegacyPayload(QuotaCyclePayload(
+            version: 4,
+            trackingStartedAt: start,
+            records: [earlier, later]
+        ))
+
+        XCTAssertEqual(cleaned.records.count, 2, "1 秒边界截断不是 reset 漂移残片")
+        XCTAssertNotNil(cleaned.records.first { $0.id == "earlier" })
+        XCTAssertNotNil(cleaned.records.first { $0.id == "later" })
     }
 
     func testCleaningUpPayloadCoalescesResetDriftButKeepsRealUsageReset() throws {
@@ -695,6 +831,30 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(payload.accountSegments[0].endAt, switchedAt)
         XCTAssertEqual(payload.accountSegments[1].startAt, switchedAt)
         XCTAssertNil(payload.accountSegments[1].endAt)
+    }
+
+    func testCycleStoreMigratesLegacyClaudeKeyWithoutChangingCycleID() throws {
+        let sampledAt = Date(timeIntervalSince1970: 100_000)
+        let accountKey = QuotaHistoryAccountKey.claudePrimary(email: "user@example.com")
+        let payload = QuotaCycleStore.record(
+            payload: QuotaCyclePayload(trackingStartedAt: sampledAt),
+            accountKey: "claude:primary",
+            app: .claude,
+            snapshot: snapshot(
+                kind: .fiveHour,
+                usedPercent: 20,
+                reset: sampledAt.addingTimeInterval(18_000)
+            ),
+            source: .api,
+            sampledAt: sampledAt
+        )
+        let legacyID = try XCTUnwrap(payload.records.first?.id)
+
+        let migrated = QuotaCycleStore.migratingLegacyClaudeAccountKey(payload, to: accountKey)
+
+        XCTAssertEqual(migrated.records.first?.id, legacyID, "保留 cycleID 才能继续命中已有 rollup")
+        XCTAssertEqual(migrated.records.first?.accountKey, accountKey)
+        XCTAssertEqual(migrated.accountSegments.first?.accountKey, accountKey)
     }
 
     func testCycleStoreRequiresResetAndMarksMissingWindowLengthAsInferred() {
@@ -1014,9 +1174,9 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertNil(noTokenBasis.forecastConfidence)
     }
 
-    func testCycleForecastFallsBackToLatestUsedPercentWhenBaselineIsFull() {
-        // 历史遗留坏段（baseline=100 的重复记录合并残留）observed=0 时，
-        // 用满预估应回退到最新已用比例，而不是显示 —。
+    func testCycleForecastRequiresObservedIncreaseWhenBaselineIsFull() {
+        // 首次采样已为 100%、之后没有继续增长时，实际观察增量为 0，
+        // 不能把官方快照的 100% 当成可靠的本机预估依据。
         var cycle = cycleRecord(
             id: "full-baseline",
             accountKey: "claude:primary",
@@ -1040,10 +1200,42 @@ final class QuotaParsingTests: XCTestCase {
             quality: .exact
         )
 
-        XCTAssertEqual(summary.forecastObservedPercent, 100)
-        XCTAssertEqual(summary.projectedFullCycleTokens, 1_000)
-        XCTAssertEqual(summary.projectedFullCycleCostUSD, 20)
-        XCTAssertEqual(summary.forecastConfidence, .reliable)
+        XCTAssertEqual(summary.forecastObservedPercent, 0)
+        XCTAssertNil(summary.projectedFullCycleTokens)
+        XCTAssertNil(summary.projectedFullCycleCostUSD)
+        XCTAssertNil(summary.forecastConfidence)
+    }
+
+    func testCycleUsageRollupRejectsV3ForOneTimeRebuild() throws {
+        var legacy = CycleUsageRollupPayload()
+        legacy.version = 3
+        let legacyData = try JSONEncoder().encode(legacy)
+        XCTAssertNil(CycleUsageRollupCache.decode(legacyData))
+
+        let current = CycleUsageRollupPayload()
+        let currentData = try JSONEncoder().encode(current)
+        XCTAssertEqual(
+            CycleUsageRollupCache.decode(currentData)?.version,
+            CycleUsageRollupPayload.currentVersion
+        )
+
+        var legacyV4 = CycleUsageRollupPayload()
+        legacyV4.initialRebuildCompletedAt = Date(timeIntervalSince1970: 1_000)
+        legacyV4.initialRebuildCompletedApps = nil
+        let legacyV4Data = try JSONEncoder().encode(legacyV4)
+        XCTAssertEqual(
+            CycleUsageRollupCache.decode(legacyV4Data)?.effectiveInitialRebuildCompletedApps,
+            [.codex, .claude],
+            "旧 v4 的全局完成时间应兼容迁移为两个 Provider 均已完成"
+        )
+
+        var partialV4 = CycleUsageRollupPayload()
+        partialV4.initialRebuildCompletedApps = [.codex]
+        let partialV4Data = try JSONEncoder().encode(partialV4)
+        XCTAssertEqual(
+            CycleUsageRollupCache.decode(partialV4Data)?.effectiveInitialRebuildCompletedApps,
+            [.codex]
+        )
     }
 
     func testCycleForecastUsesKnownCostWhenSomeUsageIsUnpriced() {
@@ -1164,11 +1356,20 @@ final class QuotaParsingTests: XCTestCase {
         )
         XCTAssertEqual(aggregator.snapshot().count, 2)
 
-        // 受限重建：只重算 affected-cycle，用新条目（50 tokens）重灌
+        // 扫描结果同时含旧周期和受影响周期；只能重灌 affected-cycle。
+        let rebuildEntries = [
+            entry(at: oldCycle.startAt.addingTimeInterval(120), input: 999),
+            entry(at: affectedCycle.startAt.addingTimeInterval(120), input: 50),
+        ]
         aggregator.rebuildRange(
-            exactEntries: [
-                entry(at: affectedCycle.startAt.addingTimeInterval(120), input: 50),
-            ],
+            exactEntries: rebuildEntries,
+            cycles: [oldCycle, affectedCycle],
+            accountSegments: [segment],
+            affectedCycleIDs: ["affected-cycle"]
+        )
+        // 相同范围重复重建必须幂等，不能再次累加。
+        aggregator.rebuildRange(
+            exactEntries: rebuildEntries,
             cycles: [oldCycle, affectedCycle],
             accountSegments: [segment],
             affectedCycleIDs: ["affected-cycle"]
@@ -1181,7 +1382,7 @@ final class QuotaParsingTests: XCTestCase {
     }
 
     @MainActor
-    func testCycleUsageRebuildRangeWithEmptyAffectedSetAppendsOnly() {
+    func testCycleUsageRebuildRangeWithEmptyAffectedSetIsNoOp() {
         let start = Date(timeIntervalSince1970: 400_000)
         let cycle = cycleRecord(
             id: "cycle",
@@ -1219,7 +1420,7 @@ final class QuotaParsingTests: XCTestCase {
             cycles: [cycle],
             accountSegments: [segment]
         )
-        // 空受影响集合 = 不清任何桶，仅追加
+        // 空受影响集合 = 没有需要重建的周期，不清桶也不追加。
         aggregator.rebuildRange(
             exactEntries: [entry(at: start.addingTimeInterval(120), input: 50)],
             cycles: [cycle],
@@ -1228,7 +1429,184 @@ final class QuotaParsingTests: XCTestCase {
         )
         let snapshot = aggregator.snapshot()
         XCTAssertEqual(snapshot.count, 1)
-        XCTAssertEqual(snapshot.first?.inputTokens, 150)
+        XCTAssertEqual(snapshot.first?.inputTokens, 100)
+    }
+
+    func testCycleUsageAffectedCycleIDsIncludesCyclesCrossingRebuildStart() {
+        let dateFrom = Date(timeIntervalSince1970: 10_000)
+        let dateTo = Date(timeIntervalSince1970: 20_000)
+        let before = cycleRecord(
+            id: "before",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: dateFrom.addingTimeInterval(-2_000),
+            end: dateFrom
+        )
+        let crossing = cycleRecord(
+            id: "crossing",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: dateFrom.addingTimeInterval(-1_000),
+            end: dateFrom.addingTimeInterval(1_000)
+        )
+        let inside = cycleRecord(
+            id: "inside",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: dateFrom,
+            end: dateTo
+        )
+        let after = cycleRecord(
+            id: "after",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: dateTo,
+            end: dateTo.addingTimeInterval(1_000)
+        )
+
+        XCTAssertEqual(
+            UsageService.affectedCycleIDs(
+                cycles: [before, crossing, inside, after],
+                since: dateFrom,
+                until: dateTo
+            ),
+            Set(["crossing", "inside"])
+        )
+        XCTAssertEqual(
+            UsageService.rebuildScanStart(
+                windowStart: dateFrom,
+                cycles: [before, crossing, inside, after],
+                affectedCycleIDs: Set(["crossing", "inside"])
+            ),
+            crossing.startAt,
+            "重建扫描必须扩展到跨窗口周期的真实起点"
+        )
+    }
+
+    func testCycleRebuildAvailabilityTreatsMissingRootAsEmptyAndIsolatesProviderFailures() {
+        let claude = ClaudeJSONLScanner.Result(
+            entries: [],
+            conversationSeeds: [],
+            newState: [:],
+            newSeenIds: [],
+            filesScanned: 0,
+            linesParsed: 0,
+            failedFileCount: 0
+        )
+        let codex = CodexJSONLScanner.Result(
+            entries: [],
+            conversationSeeds: [],
+            newState: [:],
+            filesScanned: 0,
+            linesParsed: 0,
+            failedFileCount: 0
+        )
+        let start = Date(timeIntervalSince1970: 10_000)
+        let claudeCycle = cycleRecord(
+            id: "claude",
+            accountKey: "claude:primary",
+            app: .claude,
+            start: start,
+            end: start.addingTimeInterval(18_000)
+        )
+        let codexCycle = cycleRecord(
+            id: "codex",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: start.addingTimeInterval(18_000)
+        )
+
+        XCTAssertEqual(
+            UsageService.cycleRebuildFailedApps(
+                claude: claude,
+                codex: codex,
+                cycles: [claudeCycle, codexCycle]
+            ),
+            [],
+            "从未创建过的 Claude 日志目录表示空数据，不是读取失败"
+        )
+
+        var unreadableClaude = claude
+        unreadableClaude.failedFileCount = 1
+        XCTAssertEqual(
+            UsageService.cycleRebuildFailedApps(
+                claude: unreadableClaude,
+                codex: codex,
+                cycles: [codexCycle]
+            ),
+            [],
+            "非受影响 Provider 的读取失败不应阻塞本轮重建"
+        )
+        let failedApps = UsageService.cycleRebuildFailedApps(
+            claude: unreadableClaude,
+            codex: codex,
+            cycles: [claudeCycle, codexCycle]
+        )
+        XCTAssertEqual(
+            failedApps,
+            [.claude],
+            "真正读取失败时只冻结对应 Provider"
+        )
+        XCTAssertEqual(
+            UsageService.cycleRebuildableCycleIDs(
+                cycles: [claudeCycle, codexCycle],
+                requestedCycleIDs: [claudeCycle.id, codexCycle.id],
+                failedApps: failedApps
+            ),
+            [codexCycle.id],
+            "Claude 失败时 Codex 周期仍应继续清桶重灌"
+        )
+
+        let completedApps = UsageService.updatedInitialCycleRebuildApps(
+            completedApps: [],
+            requestedApps: [.codex, .claude],
+            failedApps: [.claude]
+        )
+        XCTAssertEqual(completedApps, [.codex])
+        XCTAssertEqual(
+            UsageService.pendingInitialCycleRebuildApps(
+                cycles: [claudeCycle, codexCycle],
+                completedApps: completedApps
+            ),
+            [.claude],
+            "下次启动只应重试失败的 Claude，不应再次全量扫描 Codex"
+        )
+    }
+
+    func testCycleAxisCostUsesCompactTieredPrecision() {
+        XCTAssertEqual(StatsFormatter.axisCost(120), "$120")
+        XCTAssertEqual(StatsFormatter.axisCost(12.6), "$13")
+        XCTAssertEqual(StatsFormatter.axisCost(1.25), "$1.25")
+        XCTAssertEqual(StatsFormatter.axisCost(0.5), "$0.50")
+        XCTAssertEqual(StatsFormatter.axisCost(0.125), "$0.125")
+    }
+
+    func testSuccessfulCycleRebuildPreservesUnrelatedScanWarning() {
+        let scanWarning = "usage scan incomplete: 1 log source(s) unreadable; retrying next scan"
+
+        XCTAssertEqual(
+            UsageService.lastErrorAfterCycleRebuild(
+                current: scanWarning,
+                rebuildWarning: nil
+            ),
+            scanWarning,
+            "受限重建成功不能抹掉前置增量扫描发现的读取失败"
+        )
+        XCTAssertNil(
+            UsageService.lastErrorAfterCycleRebuild(
+                current: "cycle usage rebuild incomplete: Claude Code logs unreadable",
+                rebuildWarning: nil
+            ),
+            "周期重建恢复成功后应清除自己留下的旧告警"
+        )
+        XCTAssertEqual(
+            UsageService.lastErrorAfterCycleRebuild(
+                current: scanWarning,
+                rebuildWarning: "cycle usage rebuild incomplete: Codex logs unreadable"
+            ),
+            "cycle usage rebuild incomplete: Codex logs unreadable"
+        )
     }
 
     @MainActor
@@ -2131,7 +2509,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(UsageRollupPayload.currentVersion, 8)
         XCTAssertEqual(ConversationRollupPayload.currentVersion, 5)
         XCTAssertEqual(QuotaCyclePayload.currentVersion, 4)
-        XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 3)
+        XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 4)
         XCTAssertEqual(PricingCatalogCachePayload.currentVersion, 2)
         XCTAssertEqual(Pricing.fingerprint(knownUsage: []).count, 64)
     }

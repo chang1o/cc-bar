@@ -344,7 +344,7 @@ final class AppState {
         }
         if let record = quotaCache.claude, claudeAccount != nil {
             recordQuotaCycles(
-                accountKey: QuotaHistoryAccountKey.claudePrimary(),
+                accountKey: QuotaHistoryAccountKey.claudePrimary(email: claudeAccount?.email),
                 app: .claude,
                 snapshot: record.snapshot,
                 source: .cache,
@@ -830,7 +830,7 @@ final class AppState {
 
     private func recordClaudeQuotaHistory(snapshot: QuotaSnapshot, sampledAt: Date) {
         recordQuotaHistory(
-            accountKey: QuotaHistoryAccountKey.claudePrimary(),
+            accountKey: QuotaHistoryAccountKey.claudePrimary(email: claudeAccount?.email),
             app: .claude,
             kind: .claudePrimary,
             snapshot: snapshot,
@@ -986,6 +986,9 @@ final class AppState {
                 resetClaudeQuotaState()
             }
             self.claudeAccount = next
+            migrateLegacyClaudeAccountData(
+                to: QuotaHistoryAccountKey.claudePrimary(email: next.email)
+            )
             self.claudeError = nil
         } catch {
             self.claudeAccount = nil
@@ -996,6 +999,26 @@ final class AppState {
     private func claudeIdentityChanged(previous: ClaudeAccount?, next: ClaudeAccount) -> Bool {
         guard let previous else { return false }
         return previous.email != next.email
+    }
+
+    private func migrateLegacyClaudeAccountData(to accountKey: String) {
+        let nextHistory = QuotaHistoryStore.migratingLegacyClaudeAccountKey(
+            quotaHistory,
+            to: accountKey
+        )
+        if nextHistory != quotaHistory {
+            quotaHistory = nextHistory
+            dirtyQuotaFiles.insert(.history)
+        }
+
+        let nextCycles = QuotaCycleStore.migratingLegacyClaudeAccountKey(
+            quotaCycles,
+            to: accountKey
+        )
+        if nextCycles != quotaCycles {
+            quotaCycles = nextCycles
+            dirtyQuotaFiles.insert(.cycles)
+        }
     }
 
     private func resetClaudeQuotaState() {
@@ -1255,7 +1278,7 @@ final class AppState {
         saveQuotaCache()
         recordClaudeQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
         recordQuotaCycles(
-            accountKey: QuotaHistoryAccountKey.claudePrimary(),
+            accountKey: QuotaHistoryAccountKey.claudePrimary(email: claudeAccount?.email),
             app: .claude,
             snapshot: mergedSnapshot,
             source: source,

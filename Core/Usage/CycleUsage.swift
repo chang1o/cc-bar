@@ -106,14 +106,21 @@ nonisolated struct CycleUsageBucket: Sendable, Codable, Equatable {
 }
 
 nonisolated struct CycleUsageRollupPayload: Sendable, Codable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var version: Int = Self.currentVersion
     var generationID: String = ""
     var pricingFingerprint: String = ""
     var buckets: [CycleUsageBucket] = []
     var initialRebuildCompletedAt: Date?
+    /// nil 表示旧 v4 payload；此时用 `initialRebuildCompletedAt` 兼容推导。
+    var initialRebuildCompletedApps: Set<UsageApp>?
     var updatedAt: Date = Date()
+
+    var effectiveInitialRebuildCompletedApps: Set<UsageApp> {
+        if let initialRebuildCompletedApps { return initialRebuildCompletedApps }
+        return initialRebuildCompletedAt == nil ? [] : [.codex, .claude]
+    }
 }
 
 nonisolated enum CycleForecastConfidence: Sendable, Equatable {
@@ -151,11 +158,7 @@ nonisolated struct CycleUsageSummary: Sendable, Equatable, Identifiable {
     }
 
     var forecastObservedPercent: Double {
-        guard let segment = cycle.latestAllowanceSegment else { return 0 }
-        let observed = segment.observedUsedPercent
-        // observed 为 0 时通常是历史遗留坏段（baseline=100 的重复记录合并残留），
-        // 此时退回最新已用比例兜底，让用满预估仍然可算。
-        return observed > 0 ? observed : max(0, segment.latestUsedPercent)
+        cycle.latestAllowanceSegment?.observedUsedPercent ?? 0
     }
 
     var forecastConfidence: CycleForecastConfidence? {
@@ -206,11 +209,18 @@ enum CycleUsageRollupCache {
     nonisolated static func load() -> CycleUsageRollupPayload {
         let url = fileURL()
         guard let data = try? Data(contentsOf: url),
-              let payload = try? JSONDecoder().decode(CycleUsageRollupPayload.self, from: data),
-              payload.version == CycleUsageRollupPayload.currentVersion
+              let payload = decode(data)
         else {
             return CycleUsageRollupPayload()
         }
+        return payload
+    }
+
+    /// 版本不匹配时拒绝恢复派生 rollup，让启动流程按现有机制自动完整重建。
+    nonisolated static func decode(_ data: Data) -> CycleUsageRollupPayload? {
+        guard let payload = try? JSONDecoder().decode(CycleUsageRollupPayload.self, from: data),
+              payload.version == CycleUsageRollupPayload.currentVersion
+        else { return nil }
         return payload
     }
 
@@ -320,10 +330,14 @@ final class CycleUsageAggregator {
         accountSegments: [QuotaCycleAccountSegment],
         affectedCycleIDs: Set<String>
     ) {
-        if !affectedCycleIDs.isEmpty {
-            buckets = buckets.filter { !affectedCycleIDs.contains($0.value.cycleID) }
-        }
-        _ = ingest(entries: exactEntries, cycles: cycles, accountSegments: accountSegments)
+        guard !affectedCycleIDs.isEmpty else { return }
+        buckets = buckets.filter { !affectedCycleIDs.contains($0.value.cycleID) }
+        let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
+        _ = ingest(
+            entries: exactEntries,
+            cycles: affectedCycles,
+            accountSegments: accountSegments
+        )
     }
 
     func summaries(

@@ -92,6 +92,14 @@ struct CycleStatsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                if let confidence = summary.forecastConfidence {
+                    Text(forecastConfidenceText(confidence))
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
             }
 
             Text(fullUseLine(summary))
@@ -177,7 +185,7 @@ struct CycleStatsView: View {
     // MARK: - 历史周期曲线
 
     /// Codex / Claude 各一个面板，面板内切换 5 小时 / 周，
-    /// 曲线为各已完成周期的用满预估 Tokens，悬浮显示周期明细。
+    /// 曲线为各已完成周期的用满预估费用，悬浮显示周期明细。
     private var historySection: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -185,8 +193,8 @@ struct CycleStatsView: View {
                     Text(tr("Completed cycles", "历史周期"))
                         .font(.system(size: 13, weight: .semibold))
                     Text(tr(
-                        "Full-use estimate per finished cycle, switch between 5-hour and weekly windows.",
-                        "每个已结束周期的用满预估曲线，可在 5 小时与周窗口间切换。"
+                        "Full-use estimate per finished cycle; hollow points are actual-only cycles without an estimate.",
+                        "每个已结束周期的用满预估曲线；空心点表示只有实际用量、没有预估依据。"
                     ))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
@@ -210,8 +218,8 @@ struct CycleStatsView: View {
             }
 
             Text(tr(
-                "Quota used is the highest provider-reported usage in the initial allowance plus any extra-reset allowances. Actual Tokens and cost include only local logs found by CCBar; estimates are not official limits, and unobserved cycles are not invented.",
-                "额度已用取初始额度与各重置额度段内服务端记录到的最高比例。实际 Tokens 与费用只包含 CCBar 能读取到的本机日志；预估不代表官方额度，也不会补造未观察周期。"
+                "Actual Tokens and cost include only local logs found by CCBar. Estimates use provider-reported percentage increases observed by CCBar; cycles without an observed increase remain actual-only, and estimates are not official limits.",
+                "实际 Tokens 与费用只包含 CCBar 能读取到的本机日志。预估只使用 CCBar 实际观察到的服务端比例增量；未观察到增长的周期仅保留实际用量，预估也不代表官方额度。"
             ))
             .font(.system(size: 10.5))
             .foregroundStyle(.tertiary)
@@ -222,6 +230,9 @@ struct CycleStatsView: View {
     /// 每服务一个面板：服务名 + 曲线（或空态），周期类型由历史区统一切换。
     private func historyChartPanel(app: UsageApp, panelWidth: CGFloat) -> some View {
         let summaries = completedSummaries(app: app, kind: historyKind)
+        let hasActualOnly = summaries.contains {
+            $0.projectedFullCycleCostUSD == nil && $0.totals.costUSD > 0
+        }
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -229,6 +240,14 @@ struct CycleStatsView: View {
                 Text(app.displayName)
                     .font(.system(size: 12.5, weight: .semibold))
                 Spacer()
+                if hasActualOnly {
+                    Circle()
+                        .stroke(app.tintColor, lineWidth: 1.4)
+                        .frame(width: 7, height: 7)
+                    Text(tr("Actual only · no estimate", "仅实际 · 无预估"))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if summaries.isEmpty {
@@ -246,24 +265,39 @@ struct CycleStatsView: View {
         .ccPanel(cornerRadius: 12)
     }
 
-    /// 周期曲线：x = 周期结束时间，y = 用满预估费用（LineMark + PointMark），
-    /// 悬浮吸附最近数据点并显示周期明细。
+    /// 周期曲线：有预估的周期以 LineMark + 实心 PointMark 展示；只有实际用量的周期
+    /// 以实际费用定位空心点，不接入预估趋势线。悬浮吸附最近数据点并显示周期明细。
     private func historyChart(summaries: [CycleUsageSummary], app: UsageApp) -> some View {
-        Chart(summaries) { summary in
-            LineMark(
-                x: .value("Time", summary.cycle.endAt),
-                y: .value("Cost", projectedCost(summary))
-            )
-            .foregroundStyle(app.tintColor)
-            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-            .interpolationMethod(.catmullRom)
+        Chart {
+            ForEach(summaries) { summary in
+                if let cost = projectedCost(summary) {
+                    LineMark(
+                        x: .value("Time", summary.cycle.endAt),
+                        y: .value("Cost", cost)
+                    )
+                    .foregroundStyle(app.tintColor)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .interpolationMethod(.catmullRom)
 
-            PointMark(
-                x: .value("Time", summary.cycle.endAt),
-                y: .value("Cost", projectedCost(summary))
-            )
-            .foregroundStyle(app.tintColor)
-            .symbolSize(26)
+                    PointMark(
+                        x: .value("Time", summary.cycle.endAt),
+                        y: .value("Cost", cost)
+                    )
+                    .foregroundStyle(app.tintColor)
+                    .symbolSize(26)
+                } else if summary.totals.costUSD > 0 {
+                    PointMark(
+                        x: .value("Time", summary.cycle.endAt),
+                        y: .value("Actual cost", actualCost(summary))
+                    )
+                    .foregroundStyle(app.tintColor)
+                    .symbol {
+                        Circle()
+                            .stroke(app.tintColor, lineWidth: 1.6)
+                            .frame(width: 8, height: 8)
+                    }
+                }
+            }
 
             if let selected = selectedSummary(at: selectedEndAt[app] ?? nil, in: summaries) {
                 RuleMark(x: .value("Time", selected.cycle.endAt))
@@ -296,8 +330,8 @@ struct CycleStatsView: View {
                 AxisGridLine()
                     .foregroundStyle(.secondary.opacity(0.18))
                 AxisValueLabel {
-                    if let intValue = value.as(Int.self) {
-                        Text(StatsFormatter.tierCostWhole(Decimal(intValue), hasUnpricedUsage: false))
+                    if let doubleValue = value.as(Double.self) {
+                        Text(StatsFormatter.axisCost(Decimal(doubleValue)))
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
@@ -310,9 +344,7 @@ struct CycleStatsView: View {
 
     /// 悬浮明细卡：时间范围（周周期附带天数）· 预估 Tokens/费用 · 已用与百分比 · 重置 ×N。
     private func historyTooltip(_ summary: CycleUsageSummary) -> some View {
-        let usedPercent = max(0, summary.cycle.latestUsedPercent)
-
-        return VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(tooltipTimeLine(summary))
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -320,7 +352,7 @@ struct CycleStatsView: View {
                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
                 .monospacedDigit()
             Text(
-                "\(tr("Used", "已用")) \(StatsFormatter.compactToken(summary.totals.totalTokens)) · \(StatsFormatter.tierCostWhole(summary.totals.costUSD, hasUnpricedUsage: summary.totals.hasUnpricedUsage)) · \(String(format: "%.1f%%", usedPercent))"
+                "\(tr("Used", "已用")) \(StatsFormatter.compactToken(summary.totals.totalTokens)) · \(StatsFormatter.tierCostWhole(summary.totals.costUSD, hasUnpricedUsage: summary.totals.hasUnpricedUsage)) · \(historyObservationText(summary))"
             )
             .font(.system(size: 14, weight: .semibold, design: .monospaced))
             .monospacedDigit()
@@ -357,10 +389,15 @@ struct CycleStatsView: View {
         return max(1, Int((seconds / 86_400).rounded()))
     }
 
-    /// 用满预估费用转 Double（曲线 y 值）。
-    private func projectedCost(_ summary: CycleUsageSummary) -> Double {
-        let cost = summary.projectedFullCycleCostUSD ?? 0
+    /// 用满预估费用转 Double；无依据时返回 nil，避免把缺失预估画成 0。
+    private func projectedCost(_ summary: CycleUsageSummary) -> Double? {
+        guard let cost = summary.projectedFullCycleCostUSD else { return nil }
         return NSDecimalNumber(decimal: cost).doubleValue
+    }
+
+    /// 无预估周期以实际费用定位空心点，不与预估趋势线相连。
+    private func actualCost(_ summary: CycleUsageSummary) -> Double {
+        NSDecimalNumber(decimal: summary.totals.costUSD).doubleValue
     }
 
     /// 悬浮时间点吸附到 endAt 最近的周期。
@@ -423,7 +460,7 @@ struct CycleStatsView: View {
             return QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
         case .claude:
             guard appState.claudeAccount != nil else { return nil }
-            return QuotaHistoryAccountKey.claudePrimary()
+            return QuotaHistoryAccountKey.claudePrimary(email: appState.claudeAccount?.email)
         case .pi, .opencode:
             return nil
         }
@@ -452,6 +489,23 @@ private func fullUseLine(_ summary: CycleUsageSummary) -> String {
     let cost = summary.projectedFullCycleCostUSD
         .map { StatsFormatter.tierCostWhole($0, hasUnpricedUsage: false) } ?? "—"
     return "\(tokens) · \(cost)"
+}
+
+private func historyObservationText(_ summary: CycleUsageSummary) -> String {
+    let observed = summary.forecastObservedPercent
+    guard observed > 0 else {
+        return tr("No observed increase", "未观察到增量")
+    }
+    return String(format: "%.1f%%", observed)
+}
+
+private func forecastConfidenceText(_ confidence: CycleForecastConfidence) -> String {
+    switch confidence {
+    case .early: return tr("Early estimate", "早期估算")
+    case .rough: return tr("Rough estimate", "粗略估算")
+    case .reference: return tr("Reference", "参考")
+    case .reliable: return tr("More reliable", "较可靠")
+    }
 }
 
 private func extraResetText(_ count: Int) -> String {

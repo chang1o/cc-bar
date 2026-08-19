@@ -22,6 +22,7 @@ final class UsageService {
     private var loadedRollupGeneration: String?
     private var loadedCycleGeneration: String?
     private var cycleInitialRebuildCompletedAt: Date?
+    private var cycleInitialRebuildCompletedApps: Set<UsageApp> = []
     /// 上一轮成功提交的 ScanState 常驻内存，避免每轮扫描都从磁盘重读重解码
     /// scan-state.json（随文件数和 seen ID 增长，本地实测已近 1MB）。
     /// 冷启动首轮才从磁盘恢复；持久化失败时清空内存副本，
@@ -54,10 +55,12 @@ final class UsageService {
                 cycleAggregator.load(from: cyclePayload.buckets)
                 loadedCycleGeneration = cyclePayload.generationID
                 cycleInitialRebuildCompletedAt = cyclePayload.initialRebuildCompletedAt
+                cycleInitialRebuildCompletedApps = cyclePayload.effectiveInitialRebuildCompletedApps
             } else {
                 cycleAggregator.load(from: [])
                 loadedCycleGeneration = nil
                 cycleInitialRebuildCompletedAt = nil
+                cycleInitialRebuildCompletedApps = []
             }
             lastScanAt = max(payload.updatedAt, conversationPayload.updatedAt)
         } else {
@@ -68,6 +71,7 @@ final class UsageService {
             loadedRollupGeneration = nil
             loadedCycleGeneration = nil
             cycleInitialRebuildCompletedAt = nil
+            cycleInitialRebuildCompletedApps = []
             lastScanAt = nil
         }
         // 个人历史用量一次性补录：见 ImportedUsageBackfill 注释。这里先合并一次保证扫描前即可展示；
@@ -96,14 +100,7 @@ final class UsageService {
             let knownUsage = pricingUsageKeys(from: aggregator.snapshot())
             let cacheResult = await resolveScanState(knownUsage: knownUsage)
             if case .invalidated = cacheResult {
-                cachedScanState = nil
-                aggregator.load(from: [])
-                conversationAggregator.load(infos: [], buckets: [])
-                cycleAggregator.load(from: [])
-                loadedRollupGeneration = nil
-                loadedCycleGeneration = nil
-                cycleInitialRebuildCompletedAt = nil
-                publishTotals()
+                clearUsageAggregatesForFullRebuild()
             }
             if await runScan(prev: cacheResult.state) {
                 requiresFullRebuild = false
@@ -139,17 +136,34 @@ final class UsageService {
                 Task { await scanNow() }
             }
         }
+        // 先提交上次常规扫描之后新追加的日志，推进主 watermark。
+        // 否则它们会先被下面的窗口重扫灌入，再被下一次常规增量扫描重复计入。
+        guard await drainPendingUsageBeforeCycleRebuild() else { return }
+
         let calendar = Calendar(identifier: .gregorian)
         let now = Date()
-        let dateFrom = calendar.date(
+        let rebuildWindowStart = calendar.date(
             byAdding: .day,
             value: -Self.rebuildWindowDays,
             to: now
         ) ?? now
         let cycles = appState.quotaCycles.records
         let accountSegments = appState.quotaCycles.accountSegments
-        let affectedCycleIDs = Set(cycles.filter { $0.startAt >= dateFrom }.map(\.id))
-        let codexRoots = Self.codexRoots(since: dateFrom, calendar: calendar, now: now)
+        let affectedCycleIDs = Self.affectedCycleIDs(
+            cycles: cycles,
+            since: rebuildWindowStart,
+            until: now
+        )
+        let dateFrom = Self.rebuildScanStart(
+            windowStart: rebuildWindowStart,
+            cycles: cycles,
+            affectedCycleIDs: affectedCycleIDs
+        )
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let codexRoots = [
+            home.appendingPathComponent(".codex/sessions", isDirectory: true),
+            home.appendingPathComponent(".codex/archived_sessions", isDirectory: true),
+        ]
         let progress: ScanProgressCallback? = { [weak self] progress in
             DispatchQueue.main.async { self?.scanProgress = progress }
         }
@@ -170,63 +184,161 @@ final class UsageService {
                 previous: [:],
                 roots: codexRoots,
                 indexedTitles: [:],
+                minimumMtime: dateFrom,
                 onProgress: progress
             )
         }.value
         let claude = await claudeTask
         let codex = await codexTask
+        let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
+        let failedApps = Self.cycleRebuildFailedApps(
+            claude: claude,
+            codex: codex,
+            cycles: affectedCycles
+        )
+        let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
+            cycles: affectedCycles,
+            requestedCycleIDs: affectedCycleIDs,
+            failedApps: failedApps
+        )
         await commitCycleAggregation(
-            exactEntries: claude.entries + codex.entries,
+            exactEntries: (claude.entries + codex.entries).filter { !failedApps.contains($0.app) },
             cycles: cycles,
             accountSegments: accountSegments,
-            isInitialRebuild: false,
-            rebuildRange: affectedCycleIDs
+            failedApps: failedApps,
+            rebuildRange: rebuildableCycleIDs
         )
     }
 
-    /// 最近 `rebuildWindowDays` 天按 codex 的 `sessions/YYYY/MM/DD` 目录结构构造 root 列表。
-    /// 目录全不存在（路径结构变化）时回退默认全量 roots，避免重建静默变空。
-    nonisolated private static func codexRoots(
+    /// 返回与重建扫描区间相交的周期。周期可能开始于 dateFrom 之前、结束于其后，
+    /// 这类跨界周期同样会接收到本轮扫描条目，必须先清桶再重灌。
+    nonisolated static func affectedCycleIDs(
+        cycles: [QuotaCycleRecord],
         since dateFrom: Date,
-        calendar: Calendar,
-        now: Date
-    ) -> [URL] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let baseRoots = [
-            home.appendingPathComponent(".codex/sessions", isDirectory: true),
-            home.appendingPathComponent(".codex/archived_sessions", isDirectory: true),
-        ]
-        let fm = FileManager.default
-        var roots: [URL] = []
-        let days = max(0, calendar.dateComponents([.day], from: dateFrom, to: now).day ?? 0)
-        for dayOffset in (0...days).reversed() {
-            guard let day = calendar.date(byAdding: .day, value: -dayOffset, to: now) else { continue }
-            let comps = calendar.dateComponents([.year, .month, .day], from: day)
-            guard let year = comps.year, let month = comps.month, let day = comps.day else { continue }
-            for base in baseRoots {
-                let dir = base
-                    .appendingPathComponent(String(format: "%04d", year), isDirectory: true)
-                    .appendingPathComponent(String(format: "%02d", month), isDirectory: true)
-                    .appendingPathComponent(String(format: "%02d", day), isDirectory: true)
-                if fm.fileExists(atPath: dir.path) {
-                    roots.append(dir)
-                }
-            }
+        until dateTo: Date
+    ) -> Set<String> {
+        Set(cycles.filter {
+            $0.endAt > dateFrom && $0.startAt < dateTo
+        }.map(\.id))
+    }
+
+    /// 清桶前必须扫到受影响周期的真实起点，避免跨窗口周期只灌回后半段。
+    nonisolated static func rebuildScanStart(
+        windowStart: Date,
+        cycles: [QuotaCycleRecord],
+        affectedCycleIDs: Set<String>
+    ) -> Date {
+        cycles.lazy
+            .filter { affectedCycleIDs.contains($0.id) }
+            .map(\.startAt)
+            .reduce(windowStart, min)
+    }
+
+    /// 只有根目录或文件实际读取失败才冻结对应 Provider；目录从未存在表示本机没有
+    /// 该 Provider 的日志，是可成功重建为空的正常状态，不能阻塞另一侧。
+    nonisolated static func cycleRebuildFailedApps(
+        claude: ClaudeJSONLScanner.Result?,
+        codex: CodexJSONLScanner.Result?,
+        cycles: [QuotaCycleRecord]
+    ) -> Set<UsageApp> {
+        let apps = Set(cycles.map(\.app))
+        var failedApps: Set<UsageApp> = []
+        if apps.contains(.claude), let claude, claude.failedFileCount > 0 {
+            failedApps.insert(.claude)
         }
-        return roots.isEmpty ? baseRoots : roots
+        if apps.contains(.codex), let codex, codex.failedFileCount > 0 {
+            failedApps.insert(.codex)
+        }
+        return failedApps
+    }
+
+    nonisolated static func pendingInitialCycleRebuildApps(
+        cycles: [QuotaCycleRecord],
+        completedApps: Set<UsageApp>
+    ) -> Set<UsageApp> {
+        Set(cycles.map(\.app))
+            .intersection([.codex, .claude])
+            .subtracting(completedApps)
+    }
+
+    nonisolated static func updatedInitialCycleRebuildApps(
+        completedApps: Set<UsageApp>,
+        requestedApps: Set<UsageApp>,
+        failedApps: Set<UsageApp>
+    ) -> Set<UsageApp> {
+        completedApps.union(requestedApps.subtracting(failedApps))
+    }
+
+    /// 读取失败时只排除对应 Provider 的周期，保留其已有桶；其余 Provider 继续清桶重灌。
+    nonisolated static func cycleRebuildableCycleIDs(
+        cycles: [QuotaCycleRecord],
+        requestedCycleIDs: Set<String>,
+        failedApps: Set<UsageApp>
+    ) -> Set<String> {
+        Set(cycles.lazy
+            .filter { requestedCycleIDs.contains($0.id) && !failedApps.contains($0.app) }
+            .map(\.id))
+    }
+
+    /// 周期重建只能覆盖或清除自己产生的错误，不能抹掉前置增量扫描刚发现的告警。
+    nonisolated static func lastErrorAfterCycleRebuild(
+        current: String?,
+        rebuildWarning: String?
+    ) -> String? {
+        if let rebuildWarning { return rebuildWarning }
+        if current?.hasPrefix("cycle usage rebuild") == true { return nil }
+        return current
+    }
+
+    /// 受限重建前用主扫描状态做一次常规增量提交，保证窗口重扫后
+    /// watermark 不会再返回同一批条目。失效状态沿用常规扫描的全量重建语义。
+    private func drainPendingUsageBeforeCycleRebuild() async -> Bool {
+        let knownUsage = pricingUsageKeys(from: aggregator.snapshot())
+        let cacheResult = await resolveScanState(knownUsage: knownUsage)
+        if case .invalidated = cacheResult {
+            clearUsageAggregatesForFullRebuild()
+        }
+        guard await runScan(prev: cacheResult.state) else { return false }
+        requiresFullRebuild = false
+        return true
+    }
+
+    private func clearUsageAggregatesForFullRebuild() {
+        cachedScanState = nil
+        aggregator.load(from: [])
+        conversationAggregator.load(infos: [], buckets: [])
+        cycleAggregator.load(from: [])
+        loadedRollupGeneration = nil
+        loadedCycleGeneration = nil
+        cycleInitialRebuildCompletedAt = nil
+        cycleInitialRebuildCompletedApps = []
+        publishTotals()
     }
 
     /// 周期用量重建的公共收尾：聚合 → 落盘 rollup → 更新内存状态。
-    /// - Parameter isInitialRebuild: true 表示冷启动全量重建（完成后标记"初始重建完成"，
-    ///   该标记只有全量重建能置位，受限重建保持现值，确保聚合器未初始化时不会被跳过）。
+    /// - Parameter initialRebuildApps: 本轮执行初始重建的 Provider；成功侧会独立置位，
+    ///   失败侧保持待重试，不会让已完成 Provider 在下次启动重复全量扫描。
     /// - Parameter rebuildRange: 非 nil 表示受限重建，只重算这些周期内的桶。
     private func commitCycleAggregation(
         exactEntries: [UsageEntry],
         cycles: [QuotaCycleRecord],
         accountSegments: [QuotaCycleAccountSegment],
-        isInitialRebuild: Bool,
+        initialRebuildApps: Set<UsageApp> = [],
+        failedApps: Set<UsageApp> = [],
         rebuildRange affectedCycleIDs: Set<String>? = nil
     ) async {
+        let failedProviderNames = [UsageApp.codex, .claude]
+            .filter { failedApps.contains($0) }
+            .map { $0 == .codex ? "Codex" : "Claude Code" }
+            .joined(separator: ", ")
+        let rebuildWarning = failedApps.isEmpty
+            ? nil
+            : "cycle usage rebuild incomplete: \(failedProviderNames) logs unreadable; previous data preserved"
+        if let affectedCycleIDs, affectedCycleIDs.isEmpty, !failedApps.isEmpty {
+            lastError = rebuildWarning
+            print("[CycleUsage 周期用量] rebuild deferred providers=\(failedProviderNames)")
+            return
+        }
         let started = Date()
         if let affectedCycleIDs {
             cycleAggregator.rebuildRange(
@@ -243,13 +355,23 @@ final class UsageService {
             )
         }
         let completedAt = Date()
+        let completedApps = Self.updatedInitialCycleRebuildApps(
+            completedApps: cycleInitialRebuildCompletedApps,
+            requestedApps: initialRebuildApps,
+            failedApps: failedApps
+        )
+        let requiredApps = Set(cycles.map(\.app)).intersection([.codex, .claude])
+        let completedInitialRebuild = !initialRebuildApps.isEmpty
+            && !requiredApps.isEmpty
+            && completedApps.isSuperset(of: requiredApps)
         let generationID = loadedRollupGeneration ?? UUID().uuidString
         let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: aggregator.snapshot()))
         let rollup = CycleUsageRollupPayload(
             generationID: generationID,
             pricingFingerprint: fingerprint,
             buckets: cycleAggregator.snapshot(),
-            initialRebuildCompletedAt: isInitialRebuild ? completedAt : cycleInitialRebuildCompletedAt,
+            initialRebuildCompletedAt: completedInitialRebuild ? completedAt : cycleInitialRebuildCompletedAt,
+            initialRebuildCompletedApps: completedApps,
             updatedAt: completedAt
         )
         do {
@@ -257,12 +379,18 @@ final class UsageService {
                 try CycleUsageRollupCache.save(rollup)
             }.value
             loadedCycleGeneration = generationID
-            if isInitialRebuild {
+            cycleInitialRebuildCompletedApps = completedApps
+            if completedInitialRebuild {
                 cycleInitialRebuildCompletedAt = completedAt
             }
+            lastError = Self.lastErrorAfterCycleRebuild(
+                current: lastError,
+                rebuildWarning: rebuildWarning
+            )
             let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
-            let tag = isInitialRebuild ? "initial rebuild" : "range rebuild"
-            print("[CycleUsage 周期用量] \(tag) completed elapsed=\(elapsed)")
+            let tag = initialRebuildApps.isEmpty ? "range rebuild" : "initial rebuild"
+            let status = failedApps.isEmpty ? "completed" : "partially completed"
+            print("[CycleUsage 周期用量] \(tag) \(status) elapsed=\(elapsed)")
         } catch {
             lastError = "cycle usage rebuild failed: \(error)"
             print("[CycleUsage 周期用量] cycle usage rebuild failed: \(error)")
@@ -270,11 +398,17 @@ final class UsageService {
     }
 
     func rebuildCycleUsageIfNeeded() async {
-        guard cycleInitialRebuildCompletedAt == nil else { return }
         guard let appState, !appState.quotaCycles.records.isEmpty else { return }
+        guard !Self.pendingInitialCycleRebuildApps(
+            cycles: appState.quotaCycles.records,
+            completedApps: cycleInitialRebuildCompletedApps
+        ).isEmpty else { return }
         while isScanning || isCycleRebuilding {
             try? await Task.sleep(nanoseconds: 150_000_000)
-            if cycleInitialRebuildCompletedAt != nil { return }
+            if Self.pendingInitialCycleRebuildApps(
+                cycles: appState.quotaCycles.records,
+                completedApps: cycleInitialRebuildCompletedApps
+            ).isEmpty { return }
         }
 
         isCycleRebuilding = true
@@ -290,23 +424,48 @@ final class UsageService {
         let progress: ScanProgressCallback? = { [weak self] progress in
             DispatchQueue.main.async { self?.scanProgress = progress }
         }
-        async let claudeTask = Task.detached(priority: .utility) {
-            ClaudeJSONLScanner.scan(
-                previous: [:],
-                seenMessageIds: [],
-                onProgress: progress
-            )
-        }.value
-        async let codexTask = Task.detached(priority: .utility) {
-            await CodexJSONLScanner.scan(previous: [:], onProgress: progress)
-        }.value
-        let claude = await claudeTask
-        let codex = await codexTask
+        let cycles = appState.quotaCycles.records
+        let pendingApps = Self.pendingInitialCycleRebuildApps(
+            cycles: cycles,
+            completedApps: cycleInitialRebuildCompletedApps
+        )
+        guard !pendingApps.isEmpty else { return }
+        let claudeTask: Task<ClaudeJSONLScanner.Result, Never>? = pendingApps.contains(.claude)
+            ? Task.detached(priority: .utility) {
+                ClaudeJSONLScanner.scan(
+                    previous: [:],
+                    seenMessageIds: [],
+                    onProgress: progress
+                )
+            }
+            : nil
+        let codexTask: Task<CodexJSONLScanner.Result, Never>? = pendingApps.contains(.codex)
+            ? Task.detached(priority: .utility) {
+                await CodexJSONLScanner.scan(previous: [:], onProgress: progress)
+            }
+            : nil
+        let claude = await claudeTask?.value
+        let codex = await codexTask?.value
+        let pendingCycles = cycles.filter { pendingApps.contains($0.app) }
+        let failedApps = Self.cycleRebuildFailedApps(
+            claude: claude,
+            codex: codex,
+            cycles: pendingCycles
+        )
+        let pendingCycleIDs = Set(pendingCycles.map(\.id))
+        let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
+            cycles: pendingCycles,
+            requestedCycleIDs: pendingCycleIDs,
+            failedApps: failedApps
+        )
         await commitCycleAggregation(
-            exactEntries: claude.entries + codex.entries,
-            cycles: appState.quotaCycles.records,
+            exactEntries: ((claude?.entries ?? []) + (codex?.entries ?? []))
+                .filter { !failedApps.contains($0.app) },
+            cycles: cycles,
             accountSegments: appState.quotaCycles.accountSegments,
-            isInitialRebuild: true
+            initialRebuildApps: pendingApps,
+            failedApps: failedApps,
+            rebuildRange: rebuildableCycleIDs
         )
     }
 
@@ -359,6 +518,7 @@ final class UsageService {
         loadedRollupGeneration = nil
         loadedCycleGeneration = nil
         cycleInitialRebuildCompletedAt = nil
+        cycleInitialRebuildCompletedApps = []
         publishTotals()
         requiresFullRebuild = true
         if await runScan(prev: ScanState(), reportProgress: true) {
@@ -436,6 +596,7 @@ final class UsageService {
         let codex = await codexTask
         let pi = await piTask
         let opencode = await opencodeTask
+        let failedFileCount = claude.failedFileCount + codex.failedFileCount
 
         aggregator.ingest(claude.entries)
         aggregator.ingest(codex.entries)
@@ -456,12 +617,37 @@ final class UsageService {
         let cycles = appState?.quotaCycles.records ?? []
         let cycleChanged: Bool
         if prev.generationID.isEmpty, !cycles.isEmpty {
-            cycleAggregator.rebuild(
-                exactEntries: cycleEntries,
+            let initialApps = Self.pendingInitialCycleRebuildApps(
                 cycles: cycles,
-                accountSegments: appState?.quotaCycles.accountSegments ?? []
+                completedApps: cycleInitialRebuildCompletedApps
             )
-            cycleInitialRebuildCompletedAt = Date()
+            let initialCycles = cycles.filter { initialApps.contains($0.app) }
+            let failedApps = Self.cycleRebuildFailedApps(
+                claude: claude,
+                codex: codex,
+                cycles: initialCycles
+            )
+            let initialCycleIDs = Set(initialCycles.map(\.id))
+            let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
+                cycles: initialCycles,
+                requestedCycleIDs: initialCycleIDs,
+                failedApps: failedApps
+            )
+            cycleAggregator.rebuildRange(
+                exactEntries: cycleEntries.filter { !failedApps.contains($0.app) },
+                cycles: cycles,
+                accountSegments: appState?.quotaCycles.accountSegments ?? [],
+                affectedCycleIDs: rebuildableCycleIDs
+            )
+            cycleInitialRebuildCompletedApps = Self.updatedInitialCycleRebuildApps(
+                completedApps: cycleInitialRebuildCompletedApps,
+                requestedApps: initialApps,
+                failedApps: failedApps
+            )
+            let requiredApps = Set(cycles.map(\.app)).intersection([.codex, .claude])
+            if cycleInitialRebuildCompletedApps.isSuperset(of: requiredApps) {
+                cycleInitialRebuildCompletedAt = Date()
+            }
             cycleChanged = true
         } else {
             cycleChanged = cycleAggregator.ingest(
@@ -514,6 +700,7 @@ final class UsageService {
                 pricingFingerprint: fingerprint,
                 buckets: cycleAggregator.snapshot(),
                 initialRebuildCompletedAt: cycleInitialRebuildCompletedAt,
+                initialRebuildCompletedApps: cycleInitialRebuildCompletedApps,
                 updatedAt: updatedAt
             )
         } else {
@@ -525,6 +712,7 @@ final class UsageService {
                     pricingFingerprint: fingerprint,
                     buckets: cycleAggregator.snapshot(),
                     initialRebuildCompletedAt: cycleInitialRebuildCompletedAt,
+                    initialRebuildCompletedApps: cycleInitialRebuildCompletedApps,
                     updatedAt: Date()
                 )
             } else {
@@ -571,11 +759,13 @@ final class UsageService {
         }
         cachedScanState = newScanState
         lastScanAt = Date()
-        lastError = nil
+        lastError = failedFileCount > 0
+            ? "usage scan incomplete: \(failedFileCount) log source(s) unreadable; retrying next scan"
+            : nil
         publishTotals()
 
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
-        print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); pi files=\(pi.filesScanned) lines=\(pi.linesParsed) new=\(pi.entries.count); opencode messages=\(opencode.messagesRead) new=\(opencode.entries.count); elapsed=\(elapsed)")
+        print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); pi files=\(pi.filesScanned) lines=\(pi.linesParsed) new=\(pi.entries.count); opencode messages=\(opencode.messagesRead) new=\(opencode.entries.count); unreadable=\(failedFileCount); elapsed=\(elapsed)")
         return true
     }
 

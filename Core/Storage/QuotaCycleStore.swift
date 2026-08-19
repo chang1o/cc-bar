@@ -208,6 +208,9 @@ enum QuotaCycleStore {
     /// 时间戳，抖动会让精确 ID 匹配落空并误建重复周期；此容差用于把同一次重置
     /// 的相邻采样归并到同一条记录。
     nonisolated private static let resetJitterTolerance: TimeInterval = 60
+    /// 活跃周期 resets_at 分钟级漂移时允许继续命中原记录；
+    /// 新旧周期边界差超过半小时则必须视为真实滚动，防止低用量提前重置串期。
+    nonisolated private static let activeResetDriftTolerance: TimeInterval = 30 * 60
     /// 活跃周期的 scheduledEndAt 抖动容差。服务端每次返回的 resets_at 都会小幅漂移
     /// （实测 Claude 亚秒级、Codex 1~3 秒），若逐次写入记录，`cycleUsagePartition`
     /// 会把它当成周期边界滚动，触发本不该发生的全量重建。容差内保留既有边界，
@@ -246,6 +249,30 @@ enum QuotaCycleStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(payload)
         try data.write(to: url, options: [.atomic])
+    }
+
+    /// 旧版 Claude 周期和账号段无法区分真实账号；首次取得当前账号键时
+    /// 将旧常量键归入当前账号。保留 cycle / segment ID，避免已有 rollup 失去关联。
+    nonisolated static func migratingLegacyClaudeAccountKey(
+        _ payload: QuotaCyclePayload,
+        to accountKey: String
+    ) -> QuotaCyclePayload {
+        let legacyKey = "claude:primary"
+        guard accountKey != legacyKey else { return payload }
+        var next = payload
+        for index in next.records.indices
+            where next.records[index].app == .claude
+                && next.records[index].accountKey == legacyKey
+        {
+            next.records[index].accountKey = accountKey
+        }
+        for index in next.accountSegments.indices
+            where next.accountSegments[index].app == .claude
+                && next.accountSegments[index].accountKey == legacyKey
+        {
+            next.accountSegments[index].accountKey = accountKey
+        }
+        return next
     }
 
     /// 历史数据可能因 reset_at 漂移产生同一周期的重复记录：
@@ -297,12 +324,15 @@ enum QuotaCycleStore {
     ) -> Bool {
         let isAdjacent = abs(earlier.endAt.timeIntervalSince(later.startAt))
             <= Self.resetDriftAdjacencyTolerance
-        let endedBeforeScheduledReset = earlier.endAt < earlier.scheduledEndAt
+        // 真实 resetAt 漂移造成的残片会被提前截断数分钟；
+        // 相邻真实周期只会因独立的秒级边界抖动差 1~3 秒。
+        let truncation = earlier.scheduledEndAt.timeIntervalSince(earlier.endAt)
+        let isMeaningfullyTruncated = truncation > Self.resetJitterTolerance
         let usageDidNotReset = !isExtraReset(
             previousUsedPercent: earlier.latestUsedPercent,
             usedPercent: later.latestUsedPercent
         )
-        return isAdjacent && endedBeforeScheduledReset && usageDidNotReset
+        return isAdjacent && isMeaningfullyTruncated && usageDidNotReset
     }
 
     nonisolated private static func mergingResetDriftContinuation(
@@ -472,6 +502,8 @@ enum QuotaCycleStore {
                             && candidate.app == app
                             && candidate.limitKind == limit.kind
                             && candidate.endAt > sampledAt
+                            && abs(candidate.scheduledEndAt.timeIntervalSince(scheduledEndAt))
+                                <= Self.activeResetDriftTolerance
                             && !isExtraReset(
                                 previousUsedPercent: candidate.latestUsedPercent,
                                 usedPercent: usedPercent
@@ -658,6 +690,11 @@ enum QuotaCycleStore {
             guard abs(payload.records[index].startAt.timeIntervalSince(newCycleStartAt))
                     >= Self.resetJitterTolerance
             else { continue }
+
+            // 相邻真实周期的起止边界由各自 resets_at 推导，可能产生数秒重叠。
+            // 这种抖动不是真实重叠，不应把旧周期截短成后续清理的合并候选。
+            let overlap = payload.records[index].endAt.timeIntervalSince(newCycleStartAt)
+            guard overlap > Self.resetJitterTolerance else { continue }
 
             payload.records[index].endAt = newCycleStartAt
             if let segmentIndex = payload.records[index].allowanceSegments.indices.last,
