@@ -119,7 +119,7 @@ Cursor 的三个额度必须使用稳定且互不相同的 ID，不能调用当�
 - `window.windowSeconds = billingCycleEnd - billingCycleStart`
 - `displayName` 分别为 `Total`、`Auto`、`API`
 
-为避免把 API 额度伪装成模型额度，`QuotaSnapshot` 新增通用的 `auxiliaryLimits: [QuotaLimit]`，默认空数组并保持旧缓存可解码；`allLimits` 合并 primary、secondary、auxiliary 和 model limits。另新增可选 `isUnlimited`，供没有数值进度时展示。
+为避免把 API 额度伪装成模型额度，`QuotaSnapshot` 新增通用的 `auxiliaryLimits: [QuotaLimit]`，默认空数组并保持旧缓存可解码；`allLimits` 合并 primary、secondary、auxiliary 和 model limits。另新增可选 `isUnlimited`，供没有数值进度时展示。`preservingFutureResetDates(from:now:)` 目前只回写 primary / secondary / modelLimits，新增 `auxiliaryLimits` 后必须同步遍历回写，否则 API 额度的 reset 时间保留逻辑缺失。
 
 `planType` 来自格式化后的 `membershipType`；`fetchedAt` 为本次成功拉取时间。
 
@@ -177,7 +177,14 @@ Cookie: WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
 
 缺少或全零 `tokenUsage` 的事件仍可贡献 `chargedCents` 和 request count；缺少有效 timestamp 的事件无法正确归日，必须把该日期分片标为不完整。
 
-只要查询区间内任一有效事件缺少、为负数或包含非有限的 `chargedCents`，该区间的 Cursor 费用标记为不完整。Token 仍可展示，但 Cursor 费用显示 `—`，不能展示一个偏低的部分合计。现有 `hasUnpricedUsage` 可承载该状态；Cursor 单服务费用以及包含 Cursor 的“全部服务”费用，都必须在该标记为 true 时显示 `—` 或明确的 Partial，不能把其他服务加上部分 Cursor 金额冒充完整总额。Token 完整性和费用完整性需要分开记录。
+只要查询区间内任一有效事件缺少、为负数或包含非有限的 `chargedCents`，该区间的 Cursor 费用标记为不完整。Token 仍可展示，但 Cursor 费用显示 `—`，不能展示一个偏低的部分合计。Cursor 单服务费用以及包含 Cursor 的“全部服务”费用，都必须在费用不完整时显示 `—` 或明确的 Partial，不能把其他服务加上部分 Cursor 金额冒充完整总额。Token 完整性和费用完整性需要分开记录。
+
+**不能复用现有 `hasUnpricedUsage` 承载该状态。**两者语义不同且现有 UI 行为已固化：
+
+- `hasUnpricedUsage` 的现有语义是“本地缺价、按 0 计入聚合”，Codex / Claude / Pi / OpenCode 缺价时都会置位，且 `StatsFormatter.tierCost*` 系列当前**故意忽略**该标记（参数名带 `_`），金额照常显示。
+- 若借用它实现“为 true 显示 `—`”，要么连带把现有四个服务的缺价展示从“显示部分金额”改成 `—`（隐性回归），要么“全部服务”合计里无法区分“本地缺价”和“Cursor 费用不完整”两种来源。
+
+因此新增独立的费用完整性标记（如 `UsageTotals.costIncomplete`，默认 false，仅 Cursor 远端分区可置位，合并时按 OR 传播）；`hasUnpricedUsage` 的现有语义与展示行为保持不变。UI 规则：`costIncomplete == true` 时该口径的费用显示 `—` / Partial；`hasUnpricedUsage` 维持现状仅作诊断。
 
 ### 4.3 刷新范围与覆盖信息
 
@@ -197,9 +204,12 @@ Cookie: WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
 
 - 本地日志：继续由 `ingestLocal(_:)` 增量累计，并写现有 `usage-rollup`。
 - Cursor 远端：由 `replaceRemote(app:dayRange:buckets:)` 按自然日原子替换完整日桶，并写独立 `cursor-usage-rollup`。
-- `snapshot()` / `totals(...)` 在读取时合并本地与远端分区。
+- 读取入口必须分成两个，不能只有一个合并快照：
+  - `snapshotLocal()`：仅本地分区。`UsageService` 里所有算 pricing fingerprint、`pricingUsageKeys`、缺价刷新候选（`refreshMissingPricingIfNeeded`）以及落盘 `usage-rollup` 的调用点一律改用它。否则 Cursor 的 (app, model, speed) 会混进指纹，远端数据一变指纹就变，scan cache 反复失效触发全量重扫，Cursor 模型还会进入缺价刷新循环。
+  - `snapshot()` / `totals(...)`：合并本地与远端分区，仅供 UI 展示。
 - 本地 full rebuild、价格指纹变化或 scan cache 失效只能重建本地分区，不得清空 Cursor 远端分区。
 - Cursor 使用服务端费用，不参与本地 Pricing Catalog 指纹和价格重算。
+- `publishTotals` / `todayCost(for: .cursor)` 若走合并快照，其语义是“全设备今日计量消耗”，与 Popover“Cursor 不显示本机 today/week cost”的口径要对齐；不得把它当作本机成本喂给任何现有 today cost 展示位。
 
 远端缓存不与本地 conversation / cycle rollup 共用 generation，也不进入对话统计；Cursor Dashboard 事件没有本机会话 ID，不能伪造 conversationKey。
 
@@ -274,11 +284,11 @@ WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
 | 文件 / 模块 | 改动 |
 |---|---|
 | `Core/Quota/QuotaModels.swift` | `QuotaApp.cursor`、`auxiliaryLimits`、可选 `isUnlimited`、Cursor 三个稳定 limit ID |
-| `Core/Usage/UsageModels.swift` | `UsageApp.cursor`；补充远端覆盖 / 费用完整性模型（如不放独立缓存模型中） |
+| `Core/Usage/UsageModels.swift` | `UsageApp.cursor`；`UsageTotals` / `UsageBucket` 新增独立 `costIncomplete` 标记（见 §4.2，不复用 `hasUnpricedUsage`）；补充远端覆盖模型（如不放独立缓存模型中） |
 | `Core/Quota/QuotaRefreshPlan.swift` | 增加 `refreshCursor`，由 Provider enabled 状态构造 |
 | `Core/AppState.swift` | Cursor 账号、额度状态、身份切换清理、`loadCursorQuota()`、缓存与退避；所有 `QuotaApp` 穷举 switch 补齐 |
 | `Core/Usage/UsageAggregator.swift` | 本地 ingest 与远端按日 replacement 分区；读取时合并 |
-| `Core/Usage/UsageService.swift` | Cursor 远端刷新调度、懒加载、独立持久化；本地重算不影响远端 |
+| `Core/Usage/UsageService.swift` | Cursor 远端刷新调度、懒加载、独立持久化；本地重算不影响远端；指纹 / 缺价 / rollup 落盘路径全部改用 `snapshotLocal()`（见 §4.4） |
 | `Core/Storage/ScanCache.swift` | 仍只保存本地扫描状态；确认 Cursor 不进入本地 generation / pricing fingerprint |
 | `Core/Storage/Settings.swift` | `providerDisplaySettings` 和 `usageServiceVisibility` 自动补默认值；可增加 `showCursor` 语义入口，但不新增三组平行存储 key |
 | `Main/DesignSystem.swift` | `QuotaApp` / `UsageApp` 的 Cursor 名称与识别色 |
@@ -342,7 +352,9 @@ Codex → Claude Code → Cursor → Antigravity
 - 同一完整用量窗口连续刷新两次，Token、requestCount 和费用不会翻倍。
 - 本地日志 full rebuild 后 Cursor 远端数据仍存在；切换 Cursor 账号后不会显示旧账号快照。
 - 分页总数变化、边界重复、200 页上限和 `chargedCents` 缺失都有明确测试；任何不完整结果都不覆盖完整缓存。
-- 主窗口按日 / 周 / 月汇总 Cursor Token；费用以 Cursor 服务端计量消耗展示，缺口径时 Cursor 单服务及包含 Cursor 的全部服务费用都显示 `—` / Partial。
+- 主窗口按日 / 周 / 月汇总 Cursor Token；费用以 Cursor 服务端计量消耗展示，缺口径时 Cursor 单服务及包含 Cursor 的全部服务费用都显示 `—` / Partial（走独立 `costIncomplete` 标记）。
+- Codex / Claude / Pi / OpenCode 的缺价展示行为（`hasUnpricedUsage` 按 0 计入、金额照常显示）与现状完全一致，无回归。
+- Cursor 远端数据的任何变化都不影响本地 pricing fingerprint 与 scan cache：连续多轮远端刷新不触发本地全量重扫，Cursor 模型不进入缺价刷新候选。
 - 超出缓存覆盖范围时显示 Loading / Partial，不把局部数据标成“全部”。
-- Cursor 未安装 / 未登录时显示空态或操作提示；网络失败和 429 不清空已有数据，也不绕过退避。
+- Cursor 未安装 / 未登录时显示空态或操作提示；未安装 Cursor 的机器上统计页不出现无意义的 Cursor 空服务行（`usageServiceVisibility` 默认值需结合安装检测确定展示）。网络失败和 429 不清空已有数据，也不绕过退避。
 - 凭据不进入日志、UserDefaults、cc-bar Keychain 或持久化缓存，只发送到 `https://cursor.com`。
