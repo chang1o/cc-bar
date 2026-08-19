@@ -254,7 +254,7 @@ struct StatsView: View {
         case .conversations:
             EmptyView()
         case .cycles:
-            CycleStatsView(canvasWidth: canvasWidth)
+            CycleStatsView()
         case .timeline:
             timelineContent(isWide: isWide, viewportHeight: viewportHeight)
         }
