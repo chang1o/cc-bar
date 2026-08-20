@@ -3,7 +3,8 @@ import SQLite3
 
 /// 扫 OpenCode 的 SQLite 会话库（`~/.local/share/opencode/opencode.db`，Desktop / CLI 共用）。
 ///
-/// OpenCode 不是订阅服务、没有额度，但其会话库自带官方聚合好的 token 与 cost；
+/// OpenCode 不是订阅服务、没有额度；其会话库通常带聚合好的 token 与 cost，缺价时仍可
+/// 复用统一 Pricing 的在线目录 / 本地价格表补算；
 /// 定位与 Pi 一致：只进主窗口本地用量统计，不进额度轮询 / 菜单栏 / Popover / 悬浮窗 / Timeline。
 ///
 /// 解析规则：
@@ -12,10 +13,10 @@ import SQLite3
 ///     读不到时回退到会话内最近 user 消息继承的模型（避免增量扫描时标签丢失）。
 ///   - assistant 消息带 `cost`（USD）与 `tokens{input, output, reasoning, cache{read, write}}`。
 ///   - reasoning 并入 output（与 Claude / Codex 的 output 含 thinking 口径一致）。
-///   - 模型标签格式 `providerID/modelID`（对齐 Pi 的 `provider/model`），variant 不拼入，
-///     价格差异由官方 cost 兜底。
-///   - 费用：总额优先官方 `cost`；分项用本地 / 远端价格目录补算（Pricing.costBreakdown），
-///     查不到价格时官方总额降级计入 output，保证对话页总额与统计页一致且不误标「未定价」。
+///   - 模型标签格式 `providerID/modelID`（对齐 Pi 的 `provider/model`），variant 不拼入。
+///   - 费用：有效官方 `cost`（大于 0）优先，价格表只用于估算四项占比并按
+///     官方总额缩放；缺失或为 0 且有 Token 时由统一 Pricing 补算总额。
+///     最终总额与分项总额始终一致，查不到价格时按 0 展示。
 ///   - `session` 表提供 title / directory，`workspace` 表提供 branch；空标题用该会话
 ///     首条 text part 兜底。
 ///
@@ -150,8 +151,12 @@ enum OpencodeScanner {
             let cache = tokens["cache"] as? [String: Any] ?? [:]
             let cacheRead = intValue(cache["read"])
             let cacheWrite = intValue(cache["write"])
+            let totalTokens = max(
+                intValue(tokens["total"]),
+                input + output + cacheRead + cacheWrite
+            )
             // total 为 0 且无 cost（或官方 cost 为 0）的消息（工具调用收尾等）不产生用量。
-            if intValue(tokens["total"]) <= 0 && (cost == nil || cost == 0) { continue }
+            if totalTokens <= 0 && (cost == nil || cost == 0) { continue }
 
             // assistant 消息自身带顶层 providerID/modelID，优先于会话继承的 user 模型；
             // 增量扫描只追加 assistant 时继承为空，靠自身字段保证标签不丢。
@@ -165,6 +170,7 @@ enum OpencodeScanner {
                 output: output,
                 cacheRead: cacheRead,
                 cacheWrite: cacheWrite,
+                totalTokens: totalTokens,
                 cost: cost
             ))
             sessionsWithEntries.insert(sessionID)
@@ -286,29 +292,22 @@ enum OpencodeScanner {
         output: Int,
         cacheRead: Int,
         cacheWrite: Int,
+        totalTokens: Int,
         cost: Decimal?
     ) -> UsageEntry {
-        let breakdown: CostBreakdown?
-        if let cost {
-            if let priced = Pricing.costBreakdown(
-                app: .opencode,
-                model: model,
-                speed: .standard,
-                input: input,
-                output: output,
-                cacheRead: cacheRead,
-                cacheCreation: cacheWrite,
-                at: timestamp
-            ) {
-                breakdown = priced
-            } else {
-                // 官方 cost 可靠但本地 / 远端价格目录未收录该模型：总额降级计入 output，
-                // 保证对话页与统计页总额一致，且不误标「未定价」。
-                breakdown = CostBreakdown(input: 0, output: cost, cacheRead: 0, cacheCreation: 0)
-            }
-        } else {
-            breakdown = nil
-        }
+        let breakdown = Pricing.resolveCostBreakdown(
+            app: .opencode,
+            model: model,
+            speed: .standard,
+            input: input,
+            output: output,
+            cacheRead: cacheRead,
+            cacheCreation: cacheWrite,
+            totalTokens: totalTokens,
+            reportedCost: cost,
+            reportedBreakdown: nil,
+            at: timestamp
+        )
         return UsageEntry(
             app: .opencode,
             conversationKey: "opencode:\(conversationID)",
@@ -321,7 +320,7 @@ enum OpencodeScanner {
             cacheReadTokens: cacheRead,
             cacheCreationTokens: cacheWrite,
             requestCount: 1,
-            costUSD: cost,
+            costUSD: breakdown?.total,
             costBreakdown: breakdown
         )
     }

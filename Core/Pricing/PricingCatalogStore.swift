@@ -62,8 +62,6 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         state.withLock { catalog in
             switch speed {
             case .standard:
-                // opencode 会话自带官方 cost 字段，分项补算只用本地静态表，不查远端目录。
-                guard app != .opencode else { return nil }
                 return catalog.active.liteLLM.standardRates[normalizedKey]
                     ?? catalog.active.modelsDev.standardRates[normalizedKey]
             case .fast:

@@ -45,10 +45,18 @@ final class PiJSONLScannerTests: XCTestCase {
         output: Int = 50,
         cacheRead: Int = 20,
         cacheWrite: Int = 0,
-        costTotal: Double = 0.0017
+        costTotal: Double? = 0.0017,
+        provider: String = "deepseek",
+        model: String = "deepseek-v4-flash"
     ) -> String {
-        """
-        {"type":"message","id":"\(id)","parentId":null,"timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"provider":"deepseek","model":"deepseek-v4-flash","usage":{"input":\(input),"output":\(output),"cacheRead":\(cacheRead),"cacheWrite":\(cacheWrite),"totalTokens":\(input + output + cacheRead + cacheWrite),"cost":{"input":0.001,"output":0.0005,"cacheRead":0.0002,"cacheWrite":0,"total":\(costTotal)}},"stopReason":"stop","timestamp":1784270307906}}
+        let costPart: String
+        if let costTotal {
+            costPart = #","cost":{"input":0.001,"output":0.0005,"cacheRead":0.0002,"cacheWrite":0,"total":\#(costTotal)}"#
+        } else {
+            costPart = ""
+        }
+        return """
+        {"type":"message","id":"\(id)","parentId":null,"timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"provider":"\(provider)","model":"\(model)","usage":{"input":\(input),"output":\(output),"cacheRead":\(cacheRead),"cacheWrite":\(cacheWrite),"totalTokens":\(input + output + cacheRead + cacheWrite)\(costPart)},"stopReason":"stop","timestamp":1784270307906}}
         """
     }
 
@@ -123,6 +131,131 @@ final class PiJSONLScannerTests: XCTestCase {
 
         XCTAssertEqual(result.newState.count, 1)
         XCTAssertEqual(result.newSeenIds.count, 2)
+    }
+
+    func testPositiveLoggedCostWinsOverPricingTable() throws {
+        let content = [
+            header,
+            assistantLine(
+                id: "a1b2c3e0",
+                input: 1_000,
+                output: 1_000,
+                costTotal: 0.123456,
+                provider: "openai-codex",
+                model: "gpt-5.5-codex"
+            ),
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+        let entry = try XCTUnwrap(result.entries.first)
+
+        XCTAssertEqual(entry.costUSD, Decimal(string: "0.123456"))
+        XCTAssertEqual(entry.costBreakdown?.total, Decimal(string: "0.123456"))
+        XCTAssertNotEqual(entry.costUSD, Pricing.cost(
+            app: .pi,
+            model: entry.model,
+            speed: .standard,
+            input: entry.inputTokens,
+            output: entry.outputTokens,
+            cacheRead: entry.cacheReadTokens,
+            cacheCreation: entry.cacheCreationTokens,
+            at: entry.timestamp
+        ))
+    }
+
+    func testLoggedCostFloatTailPreservesComponentBreakdown() throws {
+        let content = [
+            header,
+            assistantLine(
+                id: "a1b2c3e5",
+                costTotal: 0.0017000000000000001
+            ),
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+        let entry = try XCTUnwrap(result.entries.first)
+        let breakdown = try XCTUnwrap(entry.costBreakdown)
+
+        XCTAssertEqual(breakdown.input, Decimal(string: "0.001"))
+        XCTAssertEqual(breakdown.cacheRead, Decimal(string: "0.0002"))
+        XCTAssertGreaterThan(breakdown.output, 0)
+        XCTAssertEqual(breakdown.total, Decimal(string: "0.0017000000000000001"))
+        XCTAssertEqual(entry.costUSD, breakdown.total)
+    }
+
+    func testZeroOrMissingLoggedCostFallsBackToSharedPricing() throws {
+        let content = [
+            header,
+            assistantLine(
+                id: "a1b2c3e1",
+                input: 1_000,
+                output: 1_000,
+                costTotal: 0,
+                provider: "openai-codex",
+                model: "gpt-5.5-codex"
+            ),
+            assistantLine(
+                id: "a1b2c3e2",
+                input: 1_000,
+                output: 1_000,
+                costTotal: nil,
+                provider: "openai-codex",
+                model: "gpt-5.5-codex"
+            ),
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+        XCTAssertEqual(result.entries.count, 2)
+
+        let expected = Decimal(string: "0.035")
+        for entry in result.entries {
+            XCTAssertEqual(entry.costUSD, expected)
+            XCTAssertEqual(entry.costBreakdown?.total, expected)
+        }
+    }
+
+    func testUnknownModelKeepsTokensAndShowsZeroCost() throws {
+        let content = [
+            header,
+            assistantLine(
+                id: "a1b2c3e3",
+                input: 100,
+                output: 50,
+                costTotal: nil,
+                provider: "ccbar-test-provider",
+                model: "ccbar-test-model-without-price-019fc5c5"
+            ),
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+        let entry = try XCTUnwrap(result.entries.first)
+
+        XCTAssertEqual(entry.inputTokens, 100)
+        XCTAssertEqual(entry.outputTokens, 50)
+        XCTAssertNil(entry.costUSD)
+        XCTAssertNil(entry.costBreakdown)
+    }
+
+    func testZeroCostZeroTokenMessageIsSkipped() throws {
+        let content = [
+            header,
+            assistantLine(
+                id: "a1b2c3e4",
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                costTotal: 0
+            ),
+        ].joined(separator: "\n")
+        try write("2026-08-03T03-58-26-079Z_019fc5c5-db1f-7e9a-acbd-6762c05e364e.jsonl", content)
+
+        let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
+        XCTAssertTrue(result.entries.isEmpty)
     }
 
     // MARK: - 增量扫描

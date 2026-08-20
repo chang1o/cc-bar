@@ -3,7 +3,8 @@ import Foundation
 /// 扫 `~/.pi/agent/sessions/**/*.jsonl`（pi coding agent 的会话日志）。
 ///
 /// pi 的会话文件是 append-only JSONL，assistant 消息自带 `usage`（token 明细）
-/// 与 `cost`（USD 费用）字段，直接累加即可，无需本地价格表计费。
+/// 与可选的 `cost`（USD 费用）字段。有效日志价格优先；价格缺失或为 0 时复用统一
+/// Pricing 的在线目录 / 本地价格表补算。
 ///
 /// 解析规则：
 ///   - `type=session`：取 `cwd` / `id` 作为会话元数据（对话统计用）。
@@ -138,7 +139,8 @@ enum PiJSONLScanner {
                     guard let resolvedID = sessionID ?? fileNameUUID(from: url) else { continue }
 
                     guard let parsed = parseUsage(usage) else { continue }
-                    if parsed.totalTokens <= 0 && parsed.cost == nil { continue }
+                    let hasPositiveLoggedCost = (parsed.cost?.total ?? 0) > 0
+                    if parsed.totalTokens <= 0 && !hasPositiveLoggedCost { continue }
                     entries.append(makeEntry(
                         app: .pi,
                         conversationID: resolvedID,
@@ -157,7 +159,8 @@ enum PiJSONLScanner {
                     let ts = JSONLTimestamp.parse(entryTimestamp) ?? Date()
                     guard let resolvedID = sessionID ?? fileNameUUID(from: url) else { continue }
                     guard let parsed = parseUsage(usage) else { continue }
-                    if parsed.totalTokens <= 0 && parsed.cost == nil { continue }
+                    let hasPositiveLoggedCost = (parsed.cost?.total ?? 0) > 0
+                    if parsed.totalTokens <= 0 && !hasPositiveLoggedCost { continue }
                     entries.append(makeEntry(
                         app: .pi,
                         conversationID: resolvedID,
@@ -250,7 +253,10 @@ enum PiJSONLScanner {
         let output = intValue(usage["output"])
         let cacheRead = intValue(usage["cacheRead"])
         let cacheWrite = intValue(usage["cacheWrite"])
-        let totalTokens = intValue(usage["totalTokens"])
+        let totalTokens = max(
+            intValue(usage["totalTokens"]),
+            input + output + cacheRead + cacheWrite
+        )
         let cost = (usage["cost"] as? [String: Any]).flatMap { parseCost($0) }
         return ParsedUsage(
             input: input,
@@ -298,7 +304,7 @@ enum PiJSONLScanner {
         timestamp: Date,
         usage: ParsedUsage
     ) -> UsageEntry {
-        let breakdown = usage.cost.map {
+        let reportedBreakdown = usage.cost.map {
             CostBreakdown(
                 input: $0.input,
                 output: $0.output,
@@ -306,6 +312,19 @@ enum PiJSONLScanner {
                 cacheCreation: $0.cacheWrite
             )
         }
+        let breakdown = Pricing.resolveCostBreakdown(
+            app: app,
+            model: model,
+            speed: speed,
+            input: usage.input,
+            output: usage.output,
+            cacheRead: usage.cacheRead,
+            cacheCreation: usage.cacheWrite,
+            totalTokens: usage.totalTokens,
+            reportedCost: usage.cost?.total,
+            reportedBreakdown: reportedBreakdown,
+            at: timestamp
+        )
         return UsageEntry(
             app: app,
             conversationKey: "pi:\(conversationID)",
@@ -317,7 +336,7 @@ enum PiJSONLScanner {
             outputTokens: usage.output,
             cacheReadTokens: usage.cacheRead,
             cacheCreationTokens: usage.cacheWrite,
-            costUSD: usage.cost?.total,
+            costUSD: breakdown?.total,
             costBreakdown: breakdown
         )
     }

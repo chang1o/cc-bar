@@ -3,7 +3,7 @@ import SQLite3
 @testable import CCBar
 
 /// OpencodeScanner 的 SQLite fixture 测试：全量解析、增量 watermark、seen 去重、
-/// reasoning 并入 output、官方 cost 与分项补算、空标题 part 兜底、项目与 branch。
+/// reasoning 并入 output、日志价格优先与统一 Pricing 补算、空标题 part 兜底、项目与 branch。
 final class OpencodeScannerTests: XCTestCase {
     private var tempDir: URL!
     private var dbURL: URL!
@@ -103,7 +103,7 @@ final class OpencodeScannerTests: XCTestCase {
     }
 
     private func assistantMessageData(
-        cost: Double = 0.00148148,
+        cost: Double? = 0.00148148,
         input: Int = 10_546,
         output: Int = 18,
         reasoning: Int = 0,
@@ -119,7 +119,8 @@ final class OpencodeScannerTests: XCTestCase {
         } else {
             modelPart = ""
         }
-        return #"{"role":"assistant","cost":\#(cost),"tokens":{"total":\#(total),"input":\#(input),"output":\#(output),"reasoning":\#(reasoning),"cache":{"write":\#(cacheWrite),"read":\#(cacheRead)}}\#(modelPart)}"#
+        let costPart = cost.map { "\"cost\":\($0),"} ?? ""
+        return "{\"role\":\"assistant\",\(costPart)\"tokens\":{\"total\":\(total),\"input\":\(input),\"output\":\(output),\"reasoning\":\(reasoning),\"cache\":{\"write\":\(cacheWrite),\"read\":\(cacheRead)}}\(modelPart)}"
     }
 
     private func scan() -> OpencodeScanner.Result {
@@ -154,13 +155,11 @@ final class OpencodeScannerTests: XCTestCase {
         XCTAssertEqual(first.cacheReadTokens, 0)
         XCTAssertEqual(first.cacheCreationTokens, 0)
         XCTAssertEqual(first.costUSD, Decimal(string: "0.00148148"))
-        // deepseek-v4-flash 在本地价格表有价（normalize 剥 opencode-go/ 前缀），分项补算非 nil。
-        // 分项价格来自 Pricing.table 的浮点字面量（Decimal 经 Double 中转有固有尾差），
-        // 与官方 costUSD（String 中转精确）允许极小容差，不与 exact Decimal 强比较。
-        XCTAssertNotNil(first.costBreakdown)
-        let breakdownTotal = try XCTUnwrap(first.costBreakdown?.total)
-        let expectedTotal = try XCTUnwrap(Decimal(string: "0.00148148"))
-        XCTAssertLessThan(abs(breakdownTotal - expectedTotal), Decimal(string: "0.0000000001") ?? 0)
+        // 有效日志总价优先，不能被本地或在线价格表覆盖；分项总额必须与其一致。
+        XCTAssertEqual(first.costBreakdown?.total, Decimal(string: "0.00148148"))
+        XCTAssertGreaterThan(first.costBreakdown?.input ?? 0, 0)
+        XCTAssertGreaterThan(first.costBreakdown?.output ?? 0, 0)
+        XCTAssertNotEqual(first.costBreakdown?.output, first.costUSD)
 
         // reasoning 并入 output：137 + 51 = 188。
         let second = result.entries[1]
@@ -175,6 +174,74 @@ final class OpencodeScannerTests: XCTestCase {
         XCTAssertEqual(seed.title, "ccbar 对 OpenCode 用量监测探讨")
         XCTAssertEqual(seed.project.path, "/Users/nanvon/Code/cc-bar")
         XCTAssertEqual(seed.project.status, .available)
+    }
+
+    func testZeroOrMissingCostFallsBackToSharedPricing() throws {
+        let db = try createSchema()
+        insertSession(db, id: "ses-1", title: "T1", directory: "/tmp/a")
+        insertMessage(
+            db,
+            id: "msg-a1",
+            sessionID: "ses-1",
+            timeCreated: 1_786_075_934_000,
+            data: assistantMessageData(
+                cost: 0,
+                input: 1_000,
+                output: 1_000,
+                providerID: "openai-codex",
+                modelID: "gpt-5.5-codex"
+            )
+        )
+        insertMessage(
+            db,
+            id: "msg-a2",
+            sessionID: "ses-1",
+            timeCreated: 1_786_075_936_000,
+            data: assistantMessageData(
+                cost: nil,
+                input: 1_000,
+                output: 1_000,
+                providerID: "openai-codex",
+                modelID: "gpt-5.5-codex"
+            )
+        )
+        sqlite3_close(db)
+
+        let result = scan()
+        XCTAssertEqual(result.entries.count, 2)
+
+        let expected = Decimal(string: "0.035")
+        for entry in result.entries {
+            XCTAssertEqual(entry.costUSD, expected)
+            XCTAssertEqual(entry.costBreakdown?.total, expected)
+        }
+    }
+
+    func testMissingCostForUnknownModelKeepsTokensAndShowsZeroCost() throws {
+        let db = try createSchema()
+        insertSession(db, id: "ses-1", title: "T1", directory: "/tmp/a")
+        insertMessage(
+            db,
+            id: "msg-a1",
+            sessionID: "ses-1",
+            timeCreated: 1_786_075_934_000,
+            data: assistantMessageData(
+                cost: nil,
+                input: 100,
+                output: 50,
+                providerID: "ccbar-test-provider",
+                modelID: "ccbar-test-model-without-price-019fc5c5"
+            )
+        )
+        sqlite3_close(db)
+
+        let result = scan()
+        let entry = try XCTUnwrap(result.entries.first)
+
+        XCTAssertEqual(entry.inputTokens, 100)
+        XCTAssertEqual(entry.outputTokens, 50)
+        XCTAssertNil(entry.costUSD)
+        XCTAssertNil(entry.costBreakdown)
     }
 
     // MARK: - 增量扫描

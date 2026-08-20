@@ -2120,6 +2120,18 @@ final class QuotaParsingTests: XCTestCase {
             app: .codex,
             speed: .standard
         ))
+        XCTAssertTrue(Pricing.needsRemotePriceRefresh(
+            model: "ccbar-pi-future-model-019fc5c5",
+            app: .pi,
+            speed: .standard
+        ))
+        XCTAssertTrue(Pricing.needsRemotePriceRefresh(
+            model: "ccbar-opencode-future-model-019fc5c5",
+            app: .opencode,
+            speed: .standard
+        ))
+        XCTAssertEqual(Pricing.normalize(model: "openai-codex/gpt-5.5-codex"), "gpt-5.5-codex")
+        XCTAssertEqual(Pricing.normalize(model: "anthropic/claude-sonnet-4-5"), "claude-sonnet-4-5")
     }
 
     func testGPT55StandardLongContextProAndFastRates() throws {
@@ -2351,6 +2363,33 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(bucket?.cacheReadTokens, 20)
     }
 
+    @MainActor
+    func testResolvedCostMatchesDailyAndConversationRollups() {
+        let timestamp = Date(timeIntervalSince1970: 1_786_075_934)
+        let breakdown = CostBreakdown(
+            input: Decimal(string: "0.01")!,
+            output: Decimal(string: "0.02")!,
+            cacheRead: Decimal(string: "0.003")!,
+            cacheCreation: Decimal(string: "0.004")!
+        )
+        let entry = UsageEntry(
+            app: .opencode,
+            conversationKey: "opencode:resolved-cost",
+            model: "openai-codex/gpt-5.5-codex",
+            speed: .standard,
+            day: UsageDay.startOfDay(for: timestamp),
+            timestamp: timestamp,
+            inputTokens: 1_000,
+            outputTokens: 2_000,
+            cacheReadTokens: 300,
+            cacheCreationTokens: 400,
+            costUSD: breakdown.total,
+            costBreakdown: breakdown
+        )
+
+        assertRollupsMatch(entries: [entry], seeds: [])
+    }
+
     func testFastEquivalentTokensAreSeparateFromRawTokens() {
         var breakdown = UsageSpeedBreakdown()
         breakdown.add(speed: .standard, totals: usageTotals(tokens: 100), app: .codex, model: "gpt-5.6-sol")
@@ -2505,9 +2544,9 @@ final class QuotaParsingTests: XCTestCase {
     }
 
     func testFastCacheSchemaVersionsAreUpgradedTogether() {
-        XCTAssertEqual(ScanState.currentVersion, 11)
-        XCTAssertEqual(UsageRollupPayload.currentVersion, 8)
-        XCTAssertEqual(ConversationRollupPayload.currentVersion, 5)
+        XCTAssertEqual(ScanState.currentVersion, 12)
+        XCTAssertEqual(UsageRollupPayload.currentVersion, 9)
+        XCTAssertEqual(ConversationRollupPayload.currentVersion, 6)
         XCTAssertEqual(QuotaCyclePayload.currentVersion, 4)
         XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 4)
         XCTAssertEqual(PricingCatalogCachePayload.currentVersion, 2)
@@ -2689,7 +2728,13 @@ final class QuotaParsingTests: XCTestCase {
                     XCTAssertEqual(daily.reduce(0) { $0 + $1.cacheReadTokens }, detail.reduce(0) { $0 + $1.cacheReadTokens })
                     XCTAssertEqual(daily.reduce(0) { $0 + $1.cacheCreationTokens }, detail.reduce(0) { $0 + $1.cacheCreationTokens })
                     XCTAssertEqual(daily.reduce(0) { $0 + $1.requestCount }, detail.reduce(0) { $0 + $1.requestCount })
-                    XCTAssertEqual(daily.reduce(Decimal.zero) { $0 + $1.costUSD }, detail.reduce(Decimal.zero) { $0 + $1.costUSD })
+                    let dailyCost = daily.reduce(Decimal.zero) { $0 + $1.costUSD }
+                    let conversationCost = detail.reduce(Decimal.zero) { $0 + $1.costUSD }
+                    let componentCost = detail.reduce(Decimal.zero) {
+                        $0 + $1.inputCostUSD + $1.outputCostUSD + $1.cacheReadCostUSD + $1.cacheCreationCostUSD
+                    }
+                    XCTAssertEqual(dailyCost, conversationCost)
+                    XCTAssertEqual(conversationCost, componentCost)
                 }
             }
         }

@@ -9,7 +9,7 @@ nonisolated struct ModelPrice: Sendable, Codable, Equatable {
     var cacheCreation: Decimal
 }
 
-/// 单次调用四类 token 的成本拆分。只有模型已定价时才会生成；未定价继续用 `nil` 表达。
+/// 单次调用四类 token 的成本拆分。日志有有效总价，或模型已定价时才会生成；未定价继续用 `nil` 表达。
 nonisolated struct CostBreakdown: Sendable, Equatable {
     var input: Decimal
     var output: Decimal
@@ -40,7 +40,9 @@ nonisolated private struct PricedPeriod: Sendable {
 
 nonisolated enum Pricing {
     /// 价格表与 cc-switch `seed_model_pricing` / CodexBar `CostUsagePricing` 对齐（2026 上半年价位）。
-    /// 命中不到时返回 nil。键为归一化后的模型名（剥 `openai/` 前缀和末尾 `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
+    /// 命中不到时返回 nil。键为归一化后的模型名（剥 provider 前缀 `openai-codex/` / `openai/` /
+    /// `anthropic/` / `deepseek/` / `opencode-go/` 和末尾
+    /// `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
     static let table: [String: ModelPrice] = [
         // —— Claude 4.x 系（input 已不含 cache_read）——
         "claude-fable-5":    .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
@@ -265,24 +267,23 @@ nonisolated enum Pricing {
                 return PricingCatalogStore.shared.rate(for: key, app: app, speed: .fast)
                     ?? claudeFastPrices[key]
             case .pi:
-                // pi 会话自带 cost 字段，不走本地/在线价格表。
+                // pi 没有 Fast 档位概念。
                 return nil
             case .opencode:
-                // opencode 会话自带官方 cost 字段，不走本地/在线价格表。
+                // opencode 没有 Fast 档位概念。
                 return nil
             }
         }
     }
 
-    /// 归一化模型名：去 `openai/` 前缀；剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；
+    /// 归一化模型名：去支持的 provider 前缀；剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；
     /// 兼容 Vertex AI 的 `@日期` 写法。
     nonisolated static func normalize(model: String) -> String {
         var m = model
-        if m.hasPrefix("openai/") {
-            m.removeFirst("openai/".count)
-        }
-        if m.hasPrefix("deepseek/") {
-            m.removeFirst("deepseek/".count)
+        let providerPrefixes = ["openai-codex/", "openai/", "anthropic/", "deepseek/"]
+        for prefix in providerPrefixes where m.hasPrefix(prefix) {
+            m.removeFirst(prefix.count)
+            break
         }
         // OpenCode 的模型标签形如 `opencode-go/deepseek-v4-flash`，剥 provider 前缀后与本地表/远端目录对齐。
         if m.hasPrefix("opencode-go/") {
@@ -368,6 +369,112 @@ nonisolated enum Pricing {
         return CostBreakdown(input: i, output: o, cacheRead: cr, cacheCreation: cc)
     }
 
+    /// 统一解析扫描日志中的最终参考费用。
+    ///
+    /// 日志提供大于 0 的总价时，总额已经由上游确定，不再被本地或在线价格覆盖。
+    /// Pi 的日志分项在浮点尾差范围内会保留并对齐到官方总额；OpenCode 只有总额时，
+    /// 价格表只用于估算四项占比，估算结果按官方总额缩放，不改变总费用。
+    /// 日志价格缺失或为 0 时，只要存在 Token，就复用当前标准 API 价格链；未命中价格则返回 nil。
+    /// 日志分项明显无效、且也无法估算占比时，才用总价作为单项费用；
+    /// 所有路径都保证 `UsageEntry.costUSD` 与 `CostBreakdown.total` 一致。
+    static func resolveCostBreakdown(
+        app: UsageApp,
+        model: String,
+        speed: UsageSpeed,
+        input: Int,
+        output: Int,
+        cacheRead: Int,
+        cacheCreation: Int,
+        cacheCreation1h: Int = 0,
+        totalTokens: Int,
+        reportedCost: Decimal?,
+        reportedBreakdown: CostBreakdown?,
+        at date: Date,
+        inputTotal: Int? = nil
+    ) -> CostBreakdown? {
+        if let reportedCost, reportedCost > 0 {
+            if let reportedBreakdown {
+                if let reconciled = reconcileReportedBreakdown(
+                    reportedBreakdown,
+                    to: reportedCost,
+                    requiresCloseMatch: true
+                ) {
+                    return reconciled
+                }
+            } else if let estimated = costBreakdown(
+                app: app,
+                model: model,
+                speed: speed,
+                input: input,
+                output: output,
+                cacheRead: cacheRead,
+                cacheCreation: cacheCreation,
+                cacheCreation1h: cacheCreation1h,
+                at: date,
+                inputTotal: inputTotal
+            ), estimated.total > 0 {
+                let scale = reportedCost / estimated.total
+                let scaled = CostBreakdown(
+                    input: estimated.input * scale,
+                    output: estimated.output * scale,
+                    cacheRead: estimated.cacheRead * scale,
+                    cacheCreation: estimated.cacheCreation * scale
+                )
+                if let reconciled = reconcileReportedBreakdown(
+                    scaled,
+                    to: reportedCost,
+                    requiresCloseMatch: false
+                ) {
+                    return reconciled
+                }
+            }
+            return CostBreakdown(input: 0, output: reportedCost, cacheRead: 0, cacheCreation: 0)
+        }
+
+        guard totalTokens > 0 else { return nil }
+        return costBreakdown(
+            app: app,
+            model: model,
+            speed: speed,
+            input: input,
+            output: output,
+            cacheRead: cacheRead,
+            cacheCreation: cacheCreation,
+            cacheCreation1h: cacheCreation1h,
+            at: date,
+            inputTotal: inputTotal
+        )
+    }
+
+    /// JSON number 经过 Double 后常带 1e-16 级尾差；这不应让 Pi 的可用分项退化为“全部输出”。
+    /// 缩放后也用同一逻辑把最后的 Decimal 舍入差吸收到某个非负分项中。
+    private static func reconcileReportedBreakdown(
+        _ breakdown: CostBreakdown,
+        to reportedCost: Decimal,
+        requiresCloseMatch: Bool
+    ) -> CostBreakdown? {
+        let difference = reportedCost - breakdown.total
+        if requiresCloseMatch {
+            let absoluteTolerance = Decimal(string: "0.000000000001")!
+            let relativeTolerance = abs(reportedCost) * Decimal(string: "0.000000001")!
+            guard abs(difference) <= max(absoluteTolerance, relativeTolerance) else { return nil }
+        }
+
+        var adjusted = breakdown
+        if difference >= 0 || adjusted.output + difference >= 0 {
+            adjusted.output += difference
+        } else if adjusted.input + difference >= 0 {
+            adjusted.input += difference
+        } else if adjusted.cacheRead + difference >= 0 {
+            adjusted.cacheRead += difference
+        } else if adjusted.cacheCreation + difference >= 0 {
+            adjusted.cacheCreation += difference
+        } else {
+            return nil
+        }
+        return adjusted
+    }
+
     /// 该模型是否已有可用价格（本地表 / 阶梯价 / 远端价格目录任一命中）。唯一权威接口，
     /// 供扫描层区分「已定价（含真实 $0）/ 未定价」。
     static func hasPrice(
@@ -385,9 +492,6 @@ nonisolated enum Pricing {
         let key = normalize(model: model)
         guard speed != .unknown else { return false }
         if app == .codex, key == "codex-auto-review" { return false }
-        // pi / opencode 会话自带 cost 字段，不走本地/在线价格表；缺价无需（也不应）触发远端刷新。
-        if app == .pi { return false }
-        if app == .opencode { return false }
         return price(for: key, app: app, speed: speed, at: Date(), inputTotal: 0) == nil
     }
 

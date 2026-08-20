@@ -47,6 +47,7 @@ nonisolated struct UsageEntry: Sendable, Equatable {
     var cacheCreationTokens: Int
     var requestCount: Int = 1
     /// `nil` = 没有可靠价格；聚合和 UI 金额按 0，桶内标记仅供诊断。
+    /// 有价时必须与 `costBreakdown?.total` 使用同一个最终费用。
     var costUSD: Decimal?
     var costBreakdown: CostBreakdown?
 }

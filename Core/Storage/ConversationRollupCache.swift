@@ -2,7 +2,8 @@ import Foundation
 
 nonisolated struct ConversationRollupPayload: Sendable, Codable {
     /// v5: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
-    static let currentVersion = 5
+    /// v6: Pi/OpenCode 统一费用解析规则改变，旧聚合结果必须全量重算。
+    static let currentVersion = 6
     var version = Self.currentVersion
     var generationID = ""
     var pricingFingerprint = ""

@@ -19,11 +19,12 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
 }
 
 nonisolated struct ScanState: Sendable, Equatable, Codable {
-    /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
+    /// version 管「结构变更」（字段增减或费用口径改变时 bump）；价格变更由 pricingFingerprint 接管。
     /// v9: Claude 流式半成品不再入账；旧 seen / rollup 可能已污染，必须全量重建。
     /// v10: 新增 pi 扫描 watermark（`pi` / `piSeenEntryIds`）。
     /// v11: 新增 opencode 扫描 watermark（`opencodeLastMessageTime` / `opencodeSeenMessageIds`）。
-    static let currentVersion: Int = 11
+    /// v12: Pi/OpenCode 统一费用解析规则改变，旧扫描结果必须全量重算。
+    static let currentVersion: Int = 12
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownUsage:)` 不一致即视为缓存失效、全量重扫重算。
@@ -102,9 +103,10 @@ enum ScanCache {
 
 /// 聚合结果磁盘缓存，启动后立刻 UI 有数。
 nonisolated struct UsageRollupPayload: Sendable, Codable {
-    /// version 管「结构变更」；价格变更由 pricingFingerprint 接管。
+    /// version 管「结构变更或费用口径改变」；价格变更由 pricingFingerprint 接管。
     /// v8: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
-    static let currentVersion: Int = 8
+    /// v9: Pi/OpenCode 统一费用解析规则改变，旧聚合结果必须全量重算。
+    static let currentVersion: Int = 9
     var version: Int = UsageRollupPayload.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownUsage:)` 不一致即丢弃，全量重扫重建。
