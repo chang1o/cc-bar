@@ -33,9 +33,11 @@
 - **额度总览** —— Codex、Claude Code、Antigravity 的 5 小时 / 周窗口剩余额度,菜单栏图标直接显示剩余百分比
 - **悬浮 HUD** —— 可选的桌面悬浮窗,可拖动、边缘吸附、置顶且不抢焦点
 - **多 Codex 账号** —— 导入多个 Codex 账号,主副账号在 Popover 同屏展示;设置页可查看每个账号的额外重置次数与到期时间
-- **用量统计** —— 汇总 Codex、Claude Code 与 Pi 的 Token 用量与费用,按今天 / 昨天 / 本周 / 本月 / 本年 / 近 7 天 / 近 30 天 / 全部 / 自定义范围切换,支持按服务、按模型、按单个对话拆分
+- **用量统计** —— 汇总 Codex、Claude Code、Pi 与 OpenCode 的 Token 用量与费用,按今天 / 昨天 / 本周 / 本月 / 本年 / 近 7 天 / 近 30 天 / 全部 / 自定义范围切换,支持按服务、按模型、按单个对话、按模型提供商拆分,并带每日用量图表
+- **周期用量** —— 按 Codex / Claude 主账号真实重置窗口统计本机 Tokens 与费用,给出用满预估与重置倒计时
 - **额度时间线** —— 5 小时窗口额度随时间变化的记录
-- **设置项** —— 账号开关、菜单栏显示内容、悬浮窗、刷新间隔、重置时间显示、中英双语、开机自启
+- **服务状态** —— Popover 中显示 OpenAI / Anthropic 官方状态页圆点
+- **设置项** —— 账号开关、菜单栏显示内容、悬浮窗、刷新间隔、服务状态、价格目录更新、重新计算用量、重置时间显示、隐私模式、中英双语、开机自启
 
 ### 📸 界面预览
 
@@ -78,7 +80,7 @@ cc-bar 是为个人需求开发的开源小工具。为了查询额度,它会读
 - Claude Code:`~/.claude/.credentials.json` 与 macOS Keychain
 - Antigravity:仅连接官方进程在 `127.0.0.1` 暴露的本地 Language Server,不保存 Google OAuth 凭据,不启动 CLI,也不发送模型请求
 
-用量统计基于扫描 Codex、Claude Code 与 Pi(pi coding agent,日志位于 `~/.pi/agent/sessions`)的本机会话日志(JSONL)得出。
+用量统计基于扫描本机会话日志得出:Codex(`~/.codex/sessions` 与 `~/.codex/archived_sessions`)、Claude Code(`~/.claude/projects`)与 Pi(pi coding agent,日志位于 `~/.pi/agent/sessions`)的 JSONL 日志,以及 OpenCode 的 SQLite 会话库(`~/.local/share/opencode/opencode.db`,只读打开)。
 
 > [!TIP]
 > 发布的 `CCBar.app` 为 ad-hoc 签名、未做 Apple 公证;如果介意,可以自行审阅代码后[从源码构建](#-从源码构建),不依赖发布的二进制包。

@@ -33,9 +33,11 @@
 - **Quota overview** — remaining 5-hour / weekly window quota for Codex, Claude Code, and Antigravity; the menu bar icon shows the remaining percentage
 - **Floating HUD** — optional desktop overlay; draggable, snaps to screen edges, stays on top without stealing focus
 - **Multiple Codex accounts** — import multiple Codex accounts and see primary and secondary side by side in the popover; per-account bonus reset counts and expiry dates in Settings
-- **Usage statistics** — token and cost totals for Codex, Claude Code, and Pi, by today / yesterday / this week / this month / this year / last 7 days / last 30 days / all time / custom range, broken down by service, by model, and by individual conversation
+- **Usage statistics** — token and cost totals for Codex, Claude Code, Pi, and OpenCode, by today / yesterday / this week / this month / this year / last 7 days / last 30 days / all time / custom range, broken down by service, by model, by individual conversation, and by model provider, with a daily usage chart
+- **Cycle usage** — per-reset-window token and cost stats for the primary Codex / Claude accounts, with a full-cycle projection and reset countdown
 - **Quota timeline** — a record of how the 5-hour window quota changed over time
-- **Preferences** — account toggles, menu bar display options, floating HUD, refresh interval, reset-time display, English/Chinese UI, launch at login
+- **Service status** — OpenAI / Anthropic statuspage dots in the popover
+- **Preferences** — account toggles, menu bar display options, floating HUD, refresh interval, service status, price catalog updates, usage recalculation, reset-time display, privacy mode, English/Chinese UI, launch at login
 
 ### 📸 Screenshots
 
@@ -78,7 +80,7 @@ cc-bar is a small open-source tool built for personal use. To query quotas, it r
 - Claude Code: `~/.claude/.credentials.json` and the macOS Keychain
 - Antigravity: only connects to the local Language Server the official process exposes on `127.0.0.1`; it does not store Google OAuth credentials, launch the CLI, or send model requests
 
-Usage statistics are computed from the local session logs (JSONL) of Codex, Claude Code, and Pi (the pi coding agent; logs under `~/.pi/agent/sessions`).
+Usage statistics are computed from local session logs: the JSONL logs of Codex (`~/.codex/sessions` and `~/.codex/archived_sessions`), Claude Code (`~/.claude/projects`), and Pi (the pi coding agent; under `~/.pi/agent/sessions`), plus OpenCode's SQLite session database (`~/.local/share/opencode/opencode.db`, opened read-only).
 
 > [!TIP]
 > The released `CCBar.app` is ad-hoc signed and not notarized. If that concerns you, review the code yourself and [build from source](#-building-from-source) instead of relying on the released binaries.
