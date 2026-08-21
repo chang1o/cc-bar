@@ -59,6 +59,7 @@
 		49C1B158000000000001AABB /* LiteLLMPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */; };
 		49C1B159000000000001AABB /* ModelsDevPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */; };
 		49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B15A000000000001AAAA /* PricingCatalogStore.swift */; };
+		49C1B16A000000000001AABB /* ModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B16A000000000001AAAA /* ModelProvider.swift */; };
 		49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B161000000000001AAAA /* MainWindowRootView.swift */; };
 		49C1B162000000000001AABB /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B162000000000001AAAA /* StatsView.swift */; };
 		49C1B163000000000001AABB /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B163000000000001AAAA /* DesignSystem.swift */; };
@@ -146,6 +147,7 @@
 		49C1B32000000000000FAAAA /* PiJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScanner.swift; sourceTree = "<group>"; };
 		49C1B90000000000000FAAAA /* OpencodeScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScanner.swift; sourceTree = "<group>"; };
 		49C1B155000000000001AAAA /* UsageAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAggregator.swift; sourceTree = "<group>"; };
+		49C1B16A000000000001AAAA /* ModelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelProvider.swift; sourceTree = "<group>"; };
 		49C1B156000000000001AAAA /* UsageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageService.swift; sourceTree = "<group>"; };
 		49C1BA11000000000001AAAA /* CycleUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CycleUsage.swift; sourceTree = "<group>"; };
 		49C1B157000000000001AAAA /* PricingCatalogModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogModels.swift; sourceTree = "<group>"; };
@@ -355,6 +357,7 @@
 				49C1B32000000000000FAAAA /* PiJSONLScanner.swift */,
 				49C1B90000000000000FAAAA /* OpencodeScanner.swift */,
 				49C1B155000000000001AAAA /* UsageAggregator.swift */,
+				49C1B16A000000000001AAAA /* ModelProvider.swift */,
 				49C1B156000000000001AAAA /* UsageService.swift */,
 				49C1BA11000000000001AAAA /* CycleUsage.swift */,
 				49C1B165000000000001AAAA /* ConversationModels.swift */,
@@ -612,6 +615,7 @@
 				49C1B32000000000000FAABB /* PiJSONLScanner.swift in Sources */,
 				49C1B90000000000000FAABB /* OpencodeScanner.swift in Sources */,
 				49C1B155000000000001AABB /* UsageAggregator.swift in Sources */,
+				49C1B16A000000000001AABB /* ModelProvider.swift in Sources */,
 				49C1B156000000000001AABB /* UsageService.swift in Sources */,
 				49C1BA11000000000001AABB /* CycleUsage.swift in Sources */,
 				49C1B157000000000001AABB /* PricingCatalogModels.swift in Sources */,

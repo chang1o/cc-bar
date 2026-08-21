@@ -161,6 +161,26 @@ enum StatsViewMode: Hashable {
     case timeline
 }
 
+/// 「按提供商」面板的排序键；`other` 组在任何排序下都固定排最后。
+enum ProviderSort: CaseIterable, Identifiable {
+    case cost
+    case tokens
+    case requests
+    case name
+
+    var id: Self { self }
+
+    @MainActor
+    var label: String {
+        switch self {
+        case .cost: return tr("Cost", "费用")
+        case .tokens: return tr("Tokens", "Tokens")
+        case .requests: return tr("Requests", "请求数")
+        case .name: return tr("Name", "名称")
+        }
+    }
+}
+
 // MARK: - StatsView
 
 struct StatsView: View {
@@ -173,6 +193,8 @@ struct StatsView: View {
         for: Date().addingTimeInterval(-7 * 86400)
     )
     @State private var customTo: Date = Calendar.current.startOfDay(for: Date())
+    @State private var providerSort: ProviderSort = .cost
+    @State private var expandedProvider: ModelProvider?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -211,6 +233,8 @@ struct StatsView: View {
         .onChange(of: viewMode) { _, _ in
             reconcileServiceFilter()
         }
+        .onChange(of: range) { _, _ in expandedProvider = nil }
+        .onChange(of: serviceFilter) { _, _ in expandedProvider = nil }
     }
 
     /// 本地日志读取或聚合持久化失败时必须在统计页可见，并给出直接恢复入口。
@@ -273,6 +297,7 @@ struct StatsView: View {
             dailyUsagePanel
 
             byModelPanel
+            byProviderPanel
         }
         .padding(20)
     }
@@ -669,6 +694,222 @@ struct StatsView: View {
         case .claude: return "Anthropic"
         case .pi: return "pi.dev"
         case .opencode: return "opencode.ai"
+        }
+    }
+
+    // MARK: By provider panel(按模型提供商,跨服务归并)
+
+    /// 按提供商查看 token 与费用：所有有数据的提供商平铺一行一眼可见；
+    /// 右上角四档排序（费用 / Tokens / 请求数 / 名称，`other` 恒排最后）；
+    /// 点击行就地展开该提供商全部数据（Token 拆分 + 来源服务 + 按模型明细）。
+    private var byProviderPanel: some View {
+        Panel(title: "By provider", chinese: "按提供商", right: AnyView(
+            Picker("", selection: $providerSort) {
+                ForEach(ProviderSort.allCases) { item in Text(item.label).tag(item) }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .help(tr("Sort by cost / tokens / requests / name", "按费用 / Tokens / 请求数 / 名称排序"))
+        )) {
+            let groups = providerGroups()
+            if groups.isEmpty {
+                placeholderHeight(60, message: tr("No data", "无数据"))
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(groups) { group in
+                        providerRow(group)
+                        if group.id != groups.last?.id {
+                            Divider().padding(.vertical, 6)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func providerRow(_ group: ProviderGroup) -> some View {
+        let isExpanded = expandedProvider == group.provider
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    expandedProvider = isExpanded ? nil : group.provider
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.secondary.opacity(0.45))
+                        .frame(width: 8, height: 8)
+                    Text(group.provider.displayName)
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Spacer()
+                    Text("\(StatsFormatter.compactToken(group.totals.totalTokens)) Tokens")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                    Text(StatsFormatter.tierCost(
+                        group.totals.costUSD,
+                        hasUnpricedUsage: group.totals.hasUnpricedUsage
+                    ))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .monospacedDigit()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 10)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+
+            if isExpanded {
+                providerDetail(group)
+                    .padding(.leading, 16)
+                    .padding(.top, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, 7)
+    }
+
+    /// 展开后的提供商全部数据：整体 Token 拆分 + 来源服务 + 按模型明细。
+    private func providerDetail(_ group: ProviderGroup) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TokenBreakdownView(totals: group.totals, showsHero: false)
+
+            if group.sources.count > 1 || !group.models.isEmpty {
+                HStack(spacing: 6) {
+                    Text(tr("Sources", "来源"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    ForEach(UsageApp.allCases.filter { group.sources.contains($0) }, id: \.self) { app in
+                        HStack(spacing: 4) {
+                            ServiceMark(color: app.tintColor, size: 6, cornerRadius: 1.5)
+                            Text(app.displayName)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if group.sources.count > 1 {
+                        Text("· \(group.totals.requestCount) \(tr("requests", "次请求"))")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
+            if !group.models.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(group.models) { row in
+                        providerModelRow(row)
+                    }
+                }
+            }
+        }
+    }
+
+    private func providerModelRow(_ row: ProviderModelRow) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                ServiceMark(color: row.app.tintColor, size: 6, cornerRadius: 1.5)
+                Text(row.model)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text("\(StatsFormatter.compactToken(row.totals.totalTokens)) Tokens")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .monospacedDigit()
+                Text(StatsFormatter.tierCost(
+                    row.totals.costUSD,
+                    hasUnpricedUsage: row.totals.hasUnpricedUsage
+                ))
+                    .font(.system(size: 12, weight: .semibold))
+                    .monospacedDigit()
+            }
+            TokenBreakdownInlineRow(totals: row.totals)
+                .padding(.leading, 12)
+            if row.speed.fast.requestCount > 0 {
+                FastUsageInlineRow(breakdown: row.speed)
+                    .padding(.leading, 12)
+            }
+        }
+    }
+
+    /// 跨服务按 `ModelProvider` 归并（totals + 速度拆分 + 来源服务 + 模型子明细），按排序键排列。
+    private func providerGroups() -> [ProviderGroup] {
+        var byProvider: [ModelProvider: ProviderGroup] = [:]
+        for b in filteredBuckets {
+            let provider = ModelProvider.resolve(app: b.app, model: b.model)
+            var group = byProvider[provider] ?? ProviderGroup(provider: provider)
+            group.totals.add(b)
+            group.speed.add(b)
+            group.sources.insert(b.app)
+            if let idx = group.models.firstIndex(where: { $0.app == b.app && $0.model == b.model }) {
+                var row = group.models[idx]
+                row.totals.add(b)
+                row.speed.add(b)
+                group.models[idx] = row
+            } else {
+                var totals = UsageTotals.zero
+                totals.add(b)
+                var speed = UsageSpeedBreakdown()
+                speed.add(b)
+                group.models.append(ProviderModelRow(model: b.model, app: b.app, totals: totals, speed: speed))
+            }
+            byProvider[provider] = group
+        }
+        return byProvider.values
+            .map { group in
+                var g = group
+                g.models = sortedModels(g.models)
+                return g
+            }
+            .sorted { lhs, rhs in
+                let lOther = lhs.provider == .other
+                let rOther = rhs.provider == .other
+                if lOther != rOther { return !lOther }
+                switch providerSort {
+                case .cost:
+                    if lhs.totals.costUSD == rhs.totals.costUSD { return compareProvidersByName(lhs, rhs) }
+                    return lhs.totals.costUSD > rhs.totals.costUSD
+                case .tokens:
+                    if lhs.totals.totalTokens == rhs.totals.totalTokens { return compareProvidersByName(lhs, rhs) }
+                    return lhs.totals.totalTokens > rhs.totals.totalTokens
+                case .requests:
+                    if lhs.totals.requestCount == rhs.totals.requestCount { return compareProvidersByName(lhs, rhs) }
+                    return lhs.totals.requestCount > rhs.totals.requestCount
+                case .name:
+                    return compareProvidersByName(lhs, rhs)
+                }
+            }
+    }
+
+    /// 排序 tie-breaker：数值键相等时按提供商名升序，保证跨渲染顺序稳定（`byProvider.values` 字典遍历无序）。
+    private func compareProvidersByName(_ lhs: ProviderGroup, _ rhs: ProviderGroup) -> Bool {
+        lhs.provider.displayName.localizedCaseInsensitiveCompare(
+            rhs.provider.displayName
+        ) == .orderedAscending
+    }
+
+    /// 提供商展开区模型明细行：跟随面板排序键，数值大的在前，同值按模型名升序稳定。
+    private func sortedModels(_ models: [ProviderModelRow]) -> [ProviderModelRow] {
+        models.sorted { lhs, rhs in
+            switch providerSort {
+            case .cost:
+                if lhs.totals.costUSD == rhs.totals.costUSD { return lhs.model < rhs.model }
+                return lhs.totals.costUSD > rhs.totals.costUSD
+            case .tokens:
+                if lhs.totals.totalTokens == rhs.totals.totalTokens { return lhs.model < rhs.model }
+                return lhs.totals.totalTokens > rhs.totals.totalTokens
+            case .requests:
+                if lhs.totals.requestCount == rhs.totals.requestCount { return lhs.model < rhs.model }
+                return lhs.totals.requestCount > rhs.totals.requestCount
+            case .name:
+                return lhs.model < rhs.model
+            }
         }
     }
 
@@ -1791,6 +2032,25 @@ private struct ModelRow: Identifiable {
     let model: String
     let totals: UsageTotals
     let speed: UsageSpeedBreakdown
+}
+
+/// 「按提供商」面板的提供商级聚合：跨服务归并 totals / 速度拆分，保留来源服务与模型子明细。
+private struct ProviderGroup: Identifiable {
+    var id: ModelProvider { provider }
+    let provider: ModelProvider
+    var totals = UsageTotals.zero
+    var speed = UsageSpeedBreakdown()
+    var sources: Set<UsageApp> = []
+    var models: [ProviderModelRow] = []
+}
+
+/// 提供商展开区内的模型明细行（模型 + 来源服务）。
+private struct ProviderModelRow: Identifiable {
+    var id: String { "\(app.rawValue)/\(model)" }
+    let model: String
+    let app: UsageApp
+    var totals: UsageTotals
+    var speed: UsageSpeedBreakdown
 }
 
 private struct QuotaTimelineSection: Identifiable {
