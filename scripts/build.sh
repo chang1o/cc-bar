@@ -39,8 +39,7 @@ xcodebuild \
 echo "==> [3/4] 签名并校验"
 xattr -cr "$APP"
 
-# 内嵌的 CCBarClaudeWatchdog 已经在 Xcode 的 Embed 脚本阶段单独签过了;
-# 这里对整个 CCBar.app 做一次外层签名,封装 Bundle 的 sealed resources,
+# 对整个 CCBar.app 做一次外层签名,封装 Bundle 的 sealed resources,
 # 否则 CODE_SIGNING_ALLOWED=NO 下主可执行文件只有裸 ad-hoc 签名、没有资源封装,
 # Gatekeeper 会报 "应用程序已损坏"。
 echo "   -> 对 Bundle 做最终签名(ad-hoc,封装资源)"

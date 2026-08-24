@@ -171,7 +171,6 @@
 		49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexAccountsView.swift; sourceTree = "<group>"; };
 		49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsDetailView.swift; sourceTree = "<group>"; };
 		49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedUsageBackfill.swift; sourceTree = "<group>"; };
-		49C1B200000000000001AAAA /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		49C1B300000000000001AAAA /* QuotaParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaParsingTests.swift; sourceTree = "<group>"; };
 		49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScannerTests.swift; sourceTree = "<group>"; };
 		49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScannerTests.swift; sourceTree = "<group>"; };
@@ -207,7 +206,6 @@
 				4931AC412FC02A4200EE598C /* CCBarApp.swift */,
 				4931AC432FC02A4200EE598C /* Core */,
 				49C1B170000000000001AAAA /* Floating */,
-				49C1B203000000000001AAAA /* Helpers */,
 				4931AC4E2FC02A4200EE598C /* Info.plist */,
 				49C1B160000000000001AAAA /* Main */,
 				4931AC512FC02A4200EE598C /* MenuBar */,
@@ -394,22 +392,6 @@
 			path = Onboarding;
 			sourceTree = "<group>";
 		};
-		49C1B201000000000001AAAA /* CCBarClaudeWatchdog */ = {
-			isa = PBXGroup;
-			children = (
-				49C1B200000000000001AAAA /* main.swift */,
-			);
-			path = CCBarClaudeWatchdog;
-			sourceTree = "<group>";
-		};
-		49C1B203000000000001AAAA /* Helpers */ = {
-			isa = PBXGroup;
-			children = (
-				49C1B201000000000001AAAA /* CCBarClaudeWatchdog */,
-			);
-			path = Helpers;
-			sourceTree = "<group>";
-		};
 		49C1B302000000000001AAAA /* CCBarTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -445,7 +427,6 @@
 				4931AC2C2FC029A000EE598C /* Sources */,
 				4931AC2D2FC029A000EE598C /* Frameworks */,
 				4931AC2E2FC029A000EE598C /* Resources */,
-				49C1B202000000000001AABB /* Embed CCBarClaudeWatchdog */,
 			);
 			buildRules = (
 			);
@@ -545,29 +526,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		49C1B202000000000001AABB /* Embed CCBarClaudeWatchdog */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/Helpers/CCBarClaudeWatchdog/main.swift",
-			);
-			name = "Embed CCBarClaudeWatchdog";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/CCBarClaudeWatchdog",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n\nSOURCE=\"${SRCROOT}/Helpers/CCBarClaudeWatchdog/main.swift\"\nOUTPUT_DIR=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\nOUTPUT_BIN=\"${OUTPUT_DIR}/CCBarClaudeWatchdog\"\n\nmkdir -p \"${OUTPUT_DIR}\"\n\n# 编译为当前架构。cc-bar 是个人 / 单机分发,native arch 够用;\n# 真要做 universal 在这里加 lipo 即可。\nARCH=\"${NATIVE_ARCH_ACTUAL:-$(uname -m)}\"\nDEPLOYMENT_TARGET=\"${MACOSX_DEPLOYMENT_TARGET:-13.0}\"\n\nxcrun -sdk macosx swiftc -O \\\n  -target \"${ARCH}-apple-macos${DEPLOYMENT_TARGET}\" \\\n  -o \"${OUTPUT_BIN}\" \\\n  \"${SOURCE}\"\n\n# 跟父 target 同一个签名身份,签上;Debug 下 EXPANDED_CODE_SIGN_IDENTITY 可能是 -,\n# 等价 ad-hoc 签名,够用。\nIDENT=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\ncodesign --force --sign \"${IDENT}\" --options runtime --timestamp=none \"${OUTPUT_BIN}\"\n\necho \"embedded watchdog: ${OUTPUT_BIN}\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4931AC2C2FC029A000EE598C /* Sources */ = {
