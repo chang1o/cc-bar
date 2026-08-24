@@ -189,7 +189,12 @@ final class FloatingPanelController: NSObject {
 ///
 /// 代价:悬浮窗内所有 SwiftUI 点击/手势都失效。当前 HUD 只有 tile、进度条和文本,
 /// 没有可交互控件;后续若要加点击交互,需要改成只在局部区域放行拖拽。
-private final class DraggableHostingView<Content: View>: NSHostingView<Content> {
+///
+/// 这里**刻意不做成泛型**。Swift 6.2.4 在 Release(-O)下编译泛型 NSHostingView 子类的
+/// 隐式 deinit 时,SILPerformanceInliner 的 isCallerAndCalleeLayoutConstraintsCompatible
+/// 会无限递归,直接把 swift-frontend 打崩(CI 上 exit 65)。唯一的调用方本来就只传 AnyView,
+/// 固定成 NSHostingView<AnyView> 既绕开编译器 bug,也没有任何功能损失。
+private final class DraggableHostingView: NSHostingView<AnyView> {
     override var mouseDownCanMoveWindow: Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
