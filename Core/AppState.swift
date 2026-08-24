@@ -116,10 +116,6 @@ final class AppState {
     /// 周期性后台刷新(Scheduler 的 quotaLoop/usageLoop)不走 `refreshNow()`,不会触发这个信号。
     var isRefreshing: Bool { refreshInFlight != nil }
 
-    /// `ClaudeDelegatedRefresh` 完成成功时的通知订阅。
-    /// 保留引用以便释放时取消(目前 AppState 生命周期 = App 生命周期,实际不会释放)。
-    private var delegatedRefreshObserver: NSObjectProtocol?
-
     private let minSuccessInterval: TimeInterval = 60
     private let rateLimitBackoff: TimeInterval = 10 * 60
 
@@ -127,7 +123,6 @@ final class AppState {
         guard !didBootstrap else { return }
         didBootstrap = true
 
-        subscribeToDelegatedRefreshSuccess()
         loadQuotaCache()
         loadQuotaHistory()
         loadQuotaCycles()
@@ -181,25 +176,6 @@ final class AppState {
         refreshInFlight = task
         await task.value
         refreshInFlight = nil
-    }
-
-    /// 订阅 `ClaudeDelegatedRefresh` 后台委托刷新成功的通知。
-    /// 一旦 claude CLI 在后台帮我们刷新了 token 并写回了 keychain,
-    /// 这里会自动触发一次完整刷新,UI 拿到新数据,用户全程无感。
-    private func subscribeToDelegatedRefreshSuccess() {
-        delegatedRefreshObserver = NotificationCenter.default.addObserver(
-            forName: .claudeDelegatedRefreshDidSucceed,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            // queue: .main 保证回调线程,再 Task 进 MainActor 做异步刷新。
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                // 用 .periodic 而不是 .userInitiated,避免被当作"用户操作"
-                // 影响速率限制 / 退避策略。
-                await self.refreshQuotas(reason: .periodic)
-            }
-        }
     }
 
     /// 每次刷新(手动 / Scheduler 定时)只重读已启用主 Provider 的本地凭据,
@@ -1109,6 +1085,12 @@ final class AppState {
             }
         case .failure(let err):
             markClaudeFailure(err.description, error: err)
+            // 凭据过期时 cc-bar 不再自己刷新(会作废 Claude Code 的 refresh_token),
+            // 用户手动刷新时改走 claude CLI 兜底取数——CLI 用自己的会话身份,
+            // 刷新对它是安全的。已有快照会被 markClaudeFailure 保留,不会被清空。
+            if err.isCredentialsExpired, reason == .userInitiated {
+                await loadClaudeCLIFallback(apiError: err)
+            }
             return
         }
         let result = await ClaudeQuotaClient.fetch(accessToken: activeToken)

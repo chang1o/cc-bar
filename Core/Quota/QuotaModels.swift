@@ -4,6 +4,15 @@ nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
     case antigravity
+
+    /// 对应的本地用量数据源；`nil` = 该服务没有可解析的本地日志。
+    var usageApp: UsageApp? {
+        switch self {
+        case .codex: return .codex
+        case .claude: return .claude
+        case .antigravity: return nil
+        }
+    }
 }
 
 nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
@@ -350,10 +359,11 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
     case transport(String)
     case decode(String)
     case tokenRefreshFailed(String)
-    /// OAuth 服务端拒绝了 refresh_token(典型为 `invalid_grant`),
-    /// 通常是 Claude Code CLI / Desktop / cc-switch 等其他客户端抢先刷新使旧 token 失效,
-    /// 或用户主动退登 / 改密码。此时只能重新登录。
-    case tokenRevoked
+    /// 本地存着的 access_token 已过期,且 cc-bar 不会自己去刷新
+    /// (刷新会作废 Claude Code 手里的 refresh_token,把用户挤下线,
+    /// 详见 `ClaudeTokenRefresher` 的说明)。
+    /// 需要用户打开 Claude Code / 运行 `claude`,由它刷新登录态。
+    case credentialsExpired
 
     var description: String {
         switch self {
@@ -362,8 +372,8 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
         case .transport(let msg): return "transport: \(msg)"
         case .decode(let msg): return "decode: \(msg)"
         case .tokenRefreshFailed(let msg): return "token refresh failed: \(msg)"
-        case .tokenRevoked:
-            return "Claude 登录已失效,请在终端运行 claude 重新登录后再回来刷新"
+        case .credentialsExpired:
+            return "Claude 凭据已过期,请打开 Claude Code(或在终端运行 claude)刷新登录后再回来"
         }
     }
 
@@ -380,9 +390,10 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
         httpStatusCode == 401 || httpStatusCode == 403
     }
 
-    /// 是否为"需要用户重新登录"级别的失败。UI 可据此降级提示文案。
-    var isAuthRevoked: Bool {
-        if case .tokenRevoked = self { return true }
+    /// 是否为"需要用户去 Claude Code 刷新登录态"级别的失败。
+    /// UI 可据此降级提示文案;取数侧可据此走 CLI 兜底。
+    var isCredentialsExpired: Bool {
+        if case .credentialsExpired = self { return true }
         return false
     }
 }

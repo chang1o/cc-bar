@@ -76,8 +76,8 @@
 
 cc-bar is a small open-source tool built for personal use. To query quotas, it reads local credentials:
 
-- Codex: `~/.codex/auth.json`
-- Claude Code: `~/.claude/.credentials.json` and the macOS Keychain
+- Codex: `~/.codex/auth.json`. When the access token is close to expiry it is renewed with the refresh token and written back; before renewing, the file is re-read so that a token the `codex` CLI already rotated is adopted rather than raced
+- Claude Code: `~/.claude/.credentials.json` and the macOS Keychain — **read-only**. cc-bar never refreshes or writes back Claude credentials: Anthropic's refresh tokens are single-use, so a third-party refresh signs you out of Claude Code. When the credentials expire, the last quota snapshot is kept along with a prompt to refresh your login in Claude Code; local token/cost statistics are unaffected
 - Antigravity: only connects to the local Language Server the official process exposes on `127.0.0.1`; it does not store Google OAuth credentials, launch the CLI, or send model requests
 
 Usage statistics are computed from local session logs: the JSONL logs of Codex (`~/.codex/sessions` and `~/.codex/archived_sessions`), Claude Code (`~/.claude/projects`), and Pi (the pi coding agent; under `~/.pi/agent/sessions`), plus OpenCode's SQLite session database (`~/.local/share/opencode/opencode.db`, opened read-only).

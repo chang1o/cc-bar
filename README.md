@@ -76,8 +76,8 @@
 
 cc-bar 是为个人需求开发的开源小工具。为了查询额度,它会读取本地凭据:
 
-- Codex:`~/.codex/auth.json`
-- Claude Code:`~/.claude/.credentials.json` 与 macOS Keychain
+- Codex:`~/.codex/auth.json`。access_token 临期时会用 refresh_token 续期并写回;续期前先重读一次文件,`codex` CLI 已经自己刷过就直接采用,不去跟它抢
+- Claude Code:`~/.claude/.credentials.json` 与 macOS Keychain,**只读**。cc-bar 不刷新、也不写回 Claude 的凭据 —— Anthropic 的 refresh_token 是一次性的,第三方刷新会把你从 Claude Code 挤下线。凭据过期时保留上一次额度快照并提示你去 Claude Code 刷新登录,本地 Token / 费用统计不受影响
 - Antigravity:仅连接官方进程在 `127.0.0.1` 暴露的本地 Language Server,不保存 Google OAuth 凭据,不启动 CLI,也不发送模型请求
 
 用量统计基于扫描本机会话日志得出:Codex(`~/.codex/sessions` 与 `~/.codex/archived_sessions`)、Claude Code(`~/.claude/projects`)与 Pi(pi coding agent,日志位于 `~/.pi/agent/sessions`)的 JSONL 日志,以及 OpenCode 的 SQLite 会话库(`~/.local/share/opencode/opencode.db`,只读打开)。
