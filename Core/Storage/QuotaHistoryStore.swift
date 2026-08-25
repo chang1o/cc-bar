@@ -76,6 +76,11 @@ enum QuotaHistoryStore {
     /// 保留天数：覆盖完整滚动周窗口（7 天）+ 上一轮周窗口对比 + 5H 重叠缓冲。
     /// 老版本事件只存在「当天」，升级后只能从当天开始积累，不回补历史。
     nonisolated private static let retentionDays = 15
+    /// 同窗对齐容差：服务端每次返回的 resets_at 都有亚秒~秒级抖动（实测 Claude
+    /// 0.2~0.4 秒、Codex 1~3 秒），同窗口的相邻采样差在容差量级；差出半小时以上
+    /// 必须视为窗口已滚动（跨周 / 制式换档）。与 `QuotaCycleStore`
+    /// 的 `windowAlignmentTolerance` 语义一致。
+    nonisolated private static let windowAlignmentTolerance: TimeInterval = 30 * 60
 
     nonisolated static func seriesKey(accountKey: String, limitKind: QuotaLimitKind) -> String {
         "\(accountKey)|\(limitKind.rawValue)"
@@ -216,19 +221,44 @@ enum QuotaHistoryStore {
             resetsAt: limit.window.resetsAt
         )
 
-        guard let previous = sameLimitPrevious,
-              previous.remainingPercent != remaining
-        else {
-            return next
+        guard let previous = sameLimitPrevious else { return next }
+
+        // 断链自愈：lastSample 与同系列最后一条事件脱节（同窗、采样晚于链尾且值不同）
+        // 时，基线已被旧值/残留污染（现象是链上出现连续「before 恒定」的假差值）。
+        // 以链尾为有效基线，本次采样与链尾相等时不产事件，等于直接把链条接回真值；
+        // 等值或后续变化采样则按链尾差分，虚假涨跌无法继续发生。
+        var baseline = previous
+        if let tail = next.events.last(where: { $0.accountKey == accountKey && $0.limitKind == limit.kind }),
+           isSameWindow(previous.resetsAt, tail.resetsAt),
+           previous.sampledAt >= tail.sampledAt,
+           previous.remainingPercent != tail.afterRemainingPercent
+        {
+            baseline = QuotaHistorySample(
+                accountKey: tail.accountKey,
+                app: tail.app,
+                kind: tail.kind,
+                sampledAt: tail.sampledAt,
+                limitID: tail.limitID,
+                limitKind: tail.limitKind,
+                remainingPercent: tail.afterRemainingPercent,
+                resetsAt: tail.resetsAt
+            )
         }
 
-        let delta = remaining - previous.remainingPercent
+        guard baseline.remainingPercent != remaining else { return next }
+
+        // 跨窗闸：基线窗口与本次采样窗口不同窗（resets_at 偏移超出抖动容差）时，
+        // 视为窗口已滚动（跨周重置）或旧窗口残留值窜入，不产变动事件，仅把本次
+        // 采样写为新基线；旧窗口事件保持独立历史，互不差分。
+        guard isSameWindow(baseline.resetsAt, limit.window.resetsAt) else { return next }
+
+        let delta = remaining - baseline.remainingPercent
         next.events.append(QuotaChangeEvent(
             id: eventId(
                 accountKey: accountKey,
                 limitID: limit.id,
                 sampledAt: sampledAt,
-                before: previous.remainingPercent,
+                before: baseline.remainingPercent,
                 after: remaining
             ),
             accountKey: accountKey,
@@ -237,12 +267,19 @@ enum QuotaHistoryStore {
             sampledAt: sampledAt,
             limitID: limit.id,
             limitKind: limit.kind,
-            beforeRemainingPercent: previous.remainingPercent,
+            beforeRemainingPercent: baseline.remainingPercent,
             afterRemainingPercent: remaining,
             deltaPercent: delta,
             resetsAt: limit.window.resetsAt
         ))
         return next
+    }
+
+    /// 同窗判定：两端 resets_at 都给定时差在 `windowAlignmentTolerance`（半小时）内；
+    /// 任一端缺失时无从判定，按同窗处理（断链自愈规则仍兜底异常值）。
+    nonisolated private static func isSameWindow(_ a: Date?, _ b: Date?) -> Bool {
+        guard let a, let b else { return true }
+        return abs(a.timeIntervalSince(b)) <= windowAlignmentTolerance
     }
 
     nonisolated static func todayStart(now: Date = Date()) -> Date {
@@ -260,17 +297,61 @@ enum QuotaHistoryStore {
 
     /// 只保留最近 `retentionDays` 个自然日（含今天）的数据；更老的样本和事件清理，
     /// 保证完整的滚动周窗口（7 天）与上一轮周窗口对比始终可用。
+    /// 先做一次幂等的断链清洗（见 `cleanupInconsistentChains`），再按时间窗裁剪。
     nonisolated private static func prune(_ payload: QuotaHistoryPayload, now: Date) -> QuotaHistoryPayload {
+        let cleaned = cleanupInconsistentChains(payload)
         let start = todayStart(now: now)
         let cutoff = Calendar.current.date(
             byAdding: .day,
             value: -(Self.retentionDays - 1),
             to: start
         ) ?? start
-        var next = payload
+        var next = cleaned
         next.dayStart = start
         next.events = next.events.filter { $0.sampledAt >= cutoff }
         next.lastSamples = next.lastSamples.filter { $0.value.sampledAt >= cutoff }
+        return next
+    }
+
+    /// 幂等清洗：跨窗差分与断链差分的事件基于「窗口边界变化」或「被旧值污染的基线」
+    /// 生成，都是虚假变动。按系列保留「链首」与「与前一保留事件同窗且数值衔接」的事件，
+    /// 删除其余；并把同窗内与链尾脱节的 lastSample 回滚为链尾值，保证后续采样从干净
+    /// 基线继续（链首事件无法可靠判定真伪，保留）。
+    nonisolated static func cleanupInconsistentChains(_ payload: QuotaHistoryPayload) -> QuotaHistoryPayload {
+        var keptBySeries: [String: QuotaChangeEvent] = [:]
+        var cleaned: [QuotaChangeEvent] = []
+        for event in payload.events {
+            let series = "\(event.accountKey)|\(event.limitKind.rawValue)"
+            let keep = keptBySeries[series].map { prev in
+                isSameWindow(prev.resetsAt, event.resetsAt)
+                    && prev.afterRemainingPercent == event.beforeRemainingPercent
+            } ?? true
+            if keep {
+                cleaned.append(event)
+                keptBySeries[series] = event
+            }
+        }
+
+        var next = payload
+        next.events = cleaned
+
+        var samples = payload.lastSamples
+        for sample in samples.values {
+            guard sample.limitKind == .fiveHour || sample.limitKind == .weekly else { continue }
+            guard let tail = cleaned.last(where: {
+                $0.accountKey == sample.accountKey
+                    && $0.limitKind == sample.limitKind
+                    && $0.sampledAt <= sample.sampledAt
+            }) else { continue }
+            guard tail.limitID == sample.limitID,
+                  isSameWindow(tail.resetsAt, sample.resetsAt),
+                  sample.remainingPercent != tail.afterRemainingPercent
+            else { continue }
+            var fixed = sample
+            fixed.remainingPercent = tail.afterRemainingPercent
+            samples[seriesKey(accountKey: sample.accountKey, limitKind: sample.limitKind)] = fixed
+        }
+        next.lastSamples = samples
         return next
     }
 

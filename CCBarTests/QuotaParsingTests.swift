@@ -247,6 +247,184 @@ final class QuotaParsingTests: XCTestCase {
         )
     }
 
+    func testHistorySkipsCrossWindowDelta() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let oldEnd = start.addingTimeInterval(604_800)
+        let newEnd = oldEnd.addingTimeInterval(604_800)
+        let key = "codex:primary"
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+
+        // 旧窗内：已用 56% → 58%（剩余 44 → 42），正常同窗差分
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 56, reset: oldEnd),
+            sampledAt: start
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 58, reset: oldEnd.addingTimeInterval(1)),
+            sampledAt: start.addingTimeInterval(60)
+        )
+        XCTAssertEqual(payload.events.count, 1)
+        XCTAssertEqual(payload.events.first?.deltaPercent, -2)
+
+        // 跨周滚动（resets_at 偏移一个窗口、剩余回到 100）：不产变动事件，仅更新基线
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 0, reset: newEnd),
+            sampledAt: start.addingTimeInterval(120)
+        )
+        XCTAssertEqual(payload.events.count, 1, "跨窗滚动不产生变动事件")
+        let series = QuotaHistoryStore.seriesKey(accountKey: key, limitKind: .weekly)
+        XCTAssertEqual(payload.lastSamples[series]?.remainingPercent, 100)
+
+        // 新窗内首次变化：before 必须取新窗基线 100，而不是旧窗的 42
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 2, reset: newEnd.addingTimeInterval(2)),
+            sampledAt: start.addingTimeInterval(180)
+        )
+        XCTAssertEqual(payload.events.count, 2)
+        XCTAssertEqual(payload.events.last?.beforeRemainingPercent, 100)
+        XCTAssertEqual(payload.events.last?.deltaPercent, -2)
+    }
+
+    func testHistorySticksToTailWhenLastSampleBroken() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let end = start.addingTimeInterval(604_800)
+        let key = "codex:primary"
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 20, reset: end),
+            sampledAt: start
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 21, reset: end.addingTimeInterval(1)),
+            sampledAt: start.addingTimeInterval(60)
+        )
+        XCTAssertEqual(payload.events.count, 1)
+        XCTAssertEqual(payload.events.first?.deltaPercent, -1)
+
+        // 模拟旧值污染：lastSample 被改写成 44%，与链尾（79）脱节
+        let series = QuotaHistoryStore.seriesKey(accountKey: key, limitKind: .weekly)
+        var polluted = payload
+        polluted.lastSamples[series]?.remainingPercent = 44
+
+        // 采样值未变（剩余 79）：不产虚假事件，链条接回链尾
+        let same = QuotaHistoryStore.record(
+            payload: polluted,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 21, reset: end.addingTimeInterval(1)),
+            sampledAt: start.addingTimeInterval(120)
+        )
+        XCTAssertEqual(same.events.count, 1, "污染基线不产虚假变动事件")
+
+        // 后续真实变化：before 应为链尾指回的 79，而不是 44
+        let next = QuotaHistoryStore.record(
+            payload: same,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 22, reset: end.addingTimeInterval(1)),
+            sampledAt: start.addingTimeInterval(180)
+        )
+        XCTAssertEqual(next.events.count, 2)
+        XCTAssertEqual(next.events.last?.beforeRemainingPercent, 79)
+        XCTAssertEqual(next.events.last?.deltaPercent, -1)
+    }
+
+    func testHistoryKeepsSameWindowJitterEvents() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let end = start.addingTimeInterval(604_800)
+        let key = "codex:primary"
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 40, reset: end),
+            sampledAt: start
+        )
+        XCTAssertEqual(payload.events.count, 0)
+
+        // resets_at 秒级抖动（2 秒）：仍视为同窗，正常产事件
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 41, reset: end.addingTimeInterval(2)),
+            sampledAt: start.addingTimeInterval(60)
+        )
+        XCTAssertEqual(payload.events.count, 1)
+        XCTAssertEqual(payload.events.first?.deltaPercent, -1)
+    }
+
+    func testCleanupInconsistentChainsRemovesBrokenDeltas() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let end = start.addingTimeInterval(604_800)
+        let endNew = end.addingTimeInterval(604_800)
+
+        // 断链链：before 恒为 44，与「前一事件 after」不衔接 → 除链首外全部删除
+        func event(_ t: TimeInterval, before: Int, after: Int, resetsAt: Date = end) -> QuotaChangeEvent {
+            QuotaChangeEvent(
+                id: "\(t)",
+                accountKey: "claude:primary",
+                app: .claude,
+                kind: .claudePrimary,
+                sampledAt: start.addingTimeInterval(t),
+                limitID: "weekly",
+                limitKind: .weekly,
+                beforeRemainingPercent: before,
+                afterRemainingPercent: after,
+                deltaPercent: after - before,
+                resetsAt: resetsAt
+            )
+        }
+        var payload = QuotaHistoryPayload(dayStart: start)
+        payload.events = [
+            event(0, before: 44, after: 80),
+            event(60, before: 44, after: 79),
+            event(120, before: 79, after: 78),
+            event(180, before: 78, after: 77),
+        ]
+        let cleaned = QuotaHistoryStore.cleanupInconsistentChains(payload)
+        XCTAssertEqual(cleaned.events.map(\.afterRemainingPercent), [80])
+
+        // 跨窗差分：相邻事件 resets_at 差一个窗口 → 后者删除
+        var cross = QuotaHistoryPayload(dayStart: start)
+        cross.events = [
+            event(0, before: 44, after: 42, resetsAt: end),
+            event(60, before: 42, after: 100, resetsAt: endNew),
+        ]
+        let cleaned2 = QuotaHistoryStore.cleanupInconsistentChains(cross)
+        XCTAssertEqual(cleaned2.events.count, 1)
+        XCTAssertEqual(cleaned2.events.first?.afterRemainingPercent, 42)
+    }
+
     func testClaudePrimaryAccountKeyNormalizesAndHashesEmail() {
         let first = QuotaHistoryAccountKey.claudePrimary(email: " User@Example.COM ")
         let same = QuotaHistoryAccountKey.claudePrimary(email: "user@example.com")
