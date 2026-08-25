@@ -227,20 +227,28 @@ enum QuotaCycleStore {
     /// 数千倍。低于此阈值不做去重——`merging` 只保留 base 的 startAt / endAt，
     /// 一旦误判，被吞记录覆盖的整段周期历史会永久丢失且无法从日志重建。
     nonisolated private static let overlapDeduplicationMinimum: TimeInterval = 60
+    /// 同窗对齐容差：漂移残片（秒级抖动 / 低用量分钟级漂移）与所属周期的
+    /// scheduledEndAt 只差在容差量级；服务端窗口制式换档（如周四 11:34 → 周一 09:01）
+    /// 让相邻片段差出数天。两处合并逻辑都以它判定「同窗」，换档片段保留为独立周期。
+    nonisolated private static let windowAlignmentTolerance: TimeInterval = 30 * 60
+    /// 周期时长超过「窗口长度 × 该系数」视为被漂移/合并污染的超长记录，
+    /// 启动与每次采样时按「恢复时刻 − 窗口长度」回写起点。正常 7 天窗口只会
+    /// 有亚秒~分钟级抖动，系数 1.15 绝不误伤。
+    nonisolated private static let oversizedCycleFactor = 1.15
 
-    nonisolated static func load() -> QuotaCyclePayload {
+    nonisolated static func load() -> (payload: QuotaCyclePayload, repairedCycleIDs: Set<String>) {
         let url = fileURL()
         guard let data = try? Data(contentsOf: url),
               var payload = try? JSONDecoder().decode(QuotaCyclePayload.self, from: data),
               payload.version == QuotaCyclePayload.currentVersion || payload.version == 2 || payload.version == 3
         else {
-            return QuotaCyclePayload()
+            return (QuotaCyclePayload(), [])
         }
         // v4 之后仍可能收到会缓慢漂移的 Codex resetAt。每次载入都做幂等清理，
         // 让已经落盘的短周期残片也能在升级后立即恢复成一个真实周期。
         payload = cleaningUpLegacyPayload(payload)
         payload.version = QuotaCyclePayload.currentVersion
-        return payload
+        return repairingOversizedCycles(payload)
     }
 
     nonisolated static func save(_ payload: QuotaCyclePayload) throws {
@@ -289,6 +297,43 @@ enum QuotaCycleStore {
         return next
     }
 
+    /// 超长记录自检：正常周期时长 ≈ 窗口长度（±漂移抖动）；若漂移累积 / 换档合并
+    /// 把记录拉长超过 `窗口 × oversizedCycleFactor`，按「恢复时刻 − 窗口长度」回写
+    /// 起点。返回值中的 `repairedCycleIDs` 供调用方触发聚合重算（起点变了，
+    /// 旧 rollup 桶已按旧窗口切分，必须重灌）。
+    nonisolated static func repairingOversizedCycles(
+        _ payload: QuotaCyclePayload
+    ) -> (payload: QuotaCyclePayload, repairedCycleIDs: Set<String>) {
+        var next = payload
+        var repaired = Set<String>()
+        for index in next.records.indices {
+            let record = next.records[index]
+            guard let seconds = windowSeconds(forKind: record.limitKind),
+                  seconds > 0
+            else { continue }
+            let duration = record.endAt.timeIntervalSince(record.startAt)
+            guard duration > TimeInterval(seconds) * Self.oversizedCycleFactor else { continue }
+            let fixedStart = record.scheduledEndAt.addingTimeInterval(-TimeInterval(seconds))
+            guard fixedStart > record.startAt else { continue }
+            next.records[index].startAt = fixedStart
+            if let firstSampleAt = next.records[index].firstSampleAt, firstSampleAt < fixedStart {
+                next.records[index].firstSampleAt = fixedStart
+            }
+            repaired.insert(record.id)
+        }
+        return (next, repaired)
+    }
+
+    /// 同窗对齐校验：只有恢复时刻差在容差内才是同一窗口的漂移残片；
+    /// 服务端制式换档（数天级）的相邻片段不得合并。
+    nonisolated private static func sameWindowAlignment(
+        _ a: QuotaCycleRecord,
+        _ b: QuotaCycleRecord
+    ) -> Bool {
+        abs(a.scheduledEndAt.timeIntervalSince(b.scheduledEndAt))
+            <= Self.windowAlignmentTolerance
+    }
+
     nonisolated private static func coalescingResetDriftFragments(
         _ records: [QuotaCycleRecord]
     ) -> [QuotaCycleRecord] {
@@ -332,7 +377,9 @@ enum QuotaCycleStore {
             previousUsedPercent: earlier.latestUsedPercent,
             usedPercent: later.latestUsedPercent
         )
-        return isAdjacent && isMeaningfullyTruncated && usageDidNotReset
+        // 同窗漂移的恢复时刻差在容差内；服务端制式换档（数天级）不得归并成伪长周期。
+        let sameWindowAt = sameWindowAlignment(earlier, later)
+        return isAdjacent && isMeaningfullyTruncated && usageDidNotReset && sameWindowAt
     }
 
     nonisolated private static func mergingResetDriftContinuation(
@@ -342,7 +389,14 @@ enum QuotaCycleStore {
         // 保留较新的 ID，让当前 rollup 与后续采样继续命中同一条记录；边界则向前
         // 扩回第一个片段，额度段也在伪切点处合并，避免把同一额度误当重置。
         var merged = later
-        merged.startAt = min(earlier.startAt, later.startAt)
+        // 恢复时刻纪元取最早片段（漂移后片段会越记越晚），否则链式合并时后段
+        // 的漂移值会覆盖原始窗口起点。
+        merged.scheduledEndAt = min(earlier.scheduledEndAt, later.scheduledEndAt)
+        if let seconds = windowSeconds(forKind: merged.limitKind) {
+            merged.startAt = merged.scheduledEndAt.addingTimeInterval(-TimeInterval(seconds))
+        } else {
+            merged.startAt = min(earlier.startAt, later.startAt)
+        }
         if let earlierFirst = earlier.firstSampleAt {
             merged.firstSampleAt = min(merged.firstSampleAt ?? earlierFirst, earlierFirst)
         }
@@ -388,10 +442,13 @@ enum QuotaCycleStore {
             var merged = record
             consumed.insert(record.id)
             for other in records where !consumed.contains(other.id) {
+                // 同窗对齐：同一周期的漂移副本恢复时刻几乎相同；不同窗口（换档）的
+                // 重叠是两条独立周期，去重合并会把历史吞成伪长周期，必须拒绝。
                 guard other.accountKey == merged.accountKey,
                       other.app == merged.app,
                       other.limitKind == merged.limitKind,
-                      intervalsOverlap(merged, other)
+                      intervalsOverlap(merged, other),
+                      sameWindowAlignment(merged, other)
                 else { continue }
                 consumed.insert(other.id)
                 merged = merging(base: merged, other: other)
@@ -419,6 +476,13 @@ enum QuotaCycleStore {
            otherLast > baseLast
         {
             merged.latestUsedPercent = other.latestUsedPercent
+        }
+        // 恢复时刻纪元取最早片段、起点以「恢复时刻 − 窗口长度」反推：
+        // 重复记录的边界来自同一周期的 resetAt 漂移视图，各片只差秒/分钟级，
+        // 最早者对应窗口起点。
+        merged.scheduledEndAt = min(merged.scheduledEndAt, other.scheduledEndAt)
+        if let seconds = windowSeconds(forKind: merged.limitKind) {
+            merged.startAt = merged.scheduledEndAt.addingTimeInterval(-TimeInterval(seconds))
         }
         merged.allowanceSegments = mergedAllowanceSegments(merged.allowanceSegments, other.allowanceSegments)
         merged.source = preferredSource(merged.source, other.source)
@@ -597,7 +661,9 @@ enum QuotaCycleStore {
             if lhs.endAt == rhs.endAt { return lhs.id < rhs.id }
             return lhs.endAt > rhs.endAt
         }
-        return next
+        // 超长自检：漂移累积/换档合并可能把周期拉长，按窗口语义回写起点；
+        // 起点变化会让调用方的 partition 比对触发受限重建，无需额外钩子。
+        return repairingOversizedCycles(next).payload
     }
 
     nonisolated private static func updateAllowanceSegments(
@@ -755,13 +821,17 @@ enum QuotaCycleStore {
             .appendingPathComponent(fileName, isDirectory: false)
     }
 
-    nonisolated private static func windowSeconds(for limit: QuotaLimit) -> Int? {
-        if let seconds = limit.window.windowSeconds { return seconds }
-        switch limit.kind {
+    nonisolated private static func windowSeconds(forKind kind: QuotaLimitKind) -> Int? {
+        switch kind {
         case .fiveHour: return 5 * 60 * 60
         case .weekly: return 7 * 24 * 60 * 60
         case .modelWeekly, .unknown: return nil
         }
+    }
+
+    nonisolated private static func windowSeconds(for limit: QuotaLimit) -> Int? {
+        if let seconds = limit.window.windowSeconds { return seconds }
+        return windowSeconds(forKind: limit.kind)
     }
 
     nonisolated private static func cycleID(

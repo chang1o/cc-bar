@@ -129,7 +129,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(MenuBarQuotaSelection.limits(in: weeklyOnly, choice: .both).count, 1)
     }
 
-    func testHistoryResetsBaselineWhenPrimaryKindChanges() {
+    func testHistoryKeepsSeriesSeparatelyWhenPrimaryKindChanges() {
         let start = Date(timeIntervalSince1970: 1_000)
         var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
         payload = QuotaHistoryStore.record(
@@ -150,6 +150,7 @@ final class QuotaParsingTests: XCTestCase {
         )
         XCTAssertEqual(payload.events.count, 1)
 
+        // 主额度从 WK 切成 5H：两条窗口是不同系列，仅 5H 系列重建基准，WK 系列事件保留。
         payload = QuotaHistoryStore.record(
             payload: payload,
             accountKey: "codex:primary",
@@ -159,8 +160,93 @@ final class QuotaParsingTests: XCTestCase {
             sampledAt: start.addingTimeInterval(120)
         )
 
-        XCTAssertTrue(payload.events.isEmpty)
-        XCTAssertEqual(payload.lastSamples["codex:primary"]?.limitKind, .fiveHour)
+        XCTAssertEqual(payload.events.count, 1, "仅重排基准，不抹掉其他窗口的事件")
+        XCTAssertEqual(payload.events.first?.limitKind, .weekly)
+        let fiveHourSeries = QuotaHistoryStore.seriesKey(accountKey: "codex:primary", limitKind: .fiveHour)
+        XCTAssertEqual(payload.lastSamples[fiveHourSeries]?.limitKind, .fiveHour)
+    }
+
+    func testHistoryRecordsFiveHourAndWeeklySeriesInParallel() {
+        let sampledAt = Date(timeIntervalSince1970: 1_000)
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: sampledAt))
+        let fiveHourEnd = sampledAt.addingTimeInterval(18_000)
+        let weeklyEnd = sampledAt.addingTimeInterval(604_800)
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: "claude:primary",
+            app: .claude,
+            kind: .claudePrimary,
+            snapshot: snapshot(
+                fiveHour: 88,
+                weekly: 65,
+                fiveHourEnd: fiveHourEnd,
+                weeklyEnd: weeklyEnd
+            ),
+            sampledAt: sampledAt
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: "claude:primary",
+            app: .claude,
+            kind: .claudePrimary,
+            snapshot: snapshot(
+                fiveHour: 80,
+                weekly: 62,
+                fiveHourEnd: fiveHourEnd,
+                weeklyEnd: weeklyEnd
+            ),
+            sampledAt: sampledAt.addingTimeInterval(60)
+        )
+
+        XCTAssertEqual(payload.events.count, 2, "两个窗口各自产生一条变动事件")
+        XCTAssertEqual(
+            Set(payload.events.map(\.limitKind)),
+            Set([.fiveHour, .weekly])
+        )
+        let fiveHourKey = QuotaHistoryStore.seriesKey(accountKey: "claude:primary", limitKind: .fiveHour)
+        let weeklyKey = QuotaHistoryStore.seriesKey(accountKey: "claude:primary", limitKind: .weekly)
+        // 样本记录的是剩余比例（remaining = 100 − used）。
+        XCTAssertEqual(payload.lastSamples[fiveHourKey]?.remainingPercent, 20)
+        XCTAssertEqual(payload.lastSamples[weeklyKey]?.remainingPercent, 38)
+    }
+
+    func testHistoryPrunesSamplesOlderThanRetentionWindow() {
+        let old = Date(timeIntervalSince1970: 2_000) - 20 * 86_400
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: old))
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: "codex:primary",
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 60, reset: nil),
+            sampledAt: old
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: "codex:primary",
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 40, reset: nil),
+            sampledAt: old.addingTimeInterval(60)
+        )
+        XCTAssertEqual(payload.events.count, 1)
+
+        // 下次采样回到「现在」：20 天前的老事件与样本被 15 天保留窗口清掉。
+        let now = Date()
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: "codex:primary",
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 90, reset: nil),
+            sampledAt: now
+        )
+        XCTAssertTrue(
+            payload.events.allSatisfy { $0.sampledAt >= now.addingTimeInterval(-15 * 86_400) }
+        )
+        XCTAssertTrue(
+            payload.lastSamples.values.allSatisfy { $0.sampledAt >= now.addingTimeInterval(-15 * 86_400) }
+        )
     }
 
     func testClaudePrimaryAccountKeyNormalizesAndHashesEmail() {
@@ -192,8 +278,9 @@ final class QuotaParsingTests: XCTestCase {
 
         let migrated = QuotaHistoryStore.migratingLegacyClaudeAccountKey(payload, to: accountKey)
 
+        let series = QuotaHistoryStore.seriesKey(accountKey: accountKey, limitKind: .fiveHour)
         XCTAssertNil(migrated.lastSamples["claude:primary"])
-        XCTAssertEqual(migrated.lastSamples[accountKey]?.accountKey, accountKey)
+        XCTAssertEqual(migrated.lastSamples[series]?.accountKey, accountKey)
         XCTAssertTrue(migrated.events.allSatisfy { $0.accountKey == accountKey })
     }
 
@@ -796,6 +883,69 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(merged.latestUsedPercent, 20)
         XCTAssertEqual(merged.reportedUsedPercent, 20)
         XCTAssertEqual(merged.allowanceSegments.count, 1)
+    }
+
+    func testCycleStoreKeepsSeparateCyclesWhenWindowScheduleShifts() {
+        // 服务端制式换档（如周四 11:34 → 周一 09:01）：新旧窗口的恢复时刻差数天。
+        // 旧周期残片与新建周期不得归并，否则聚合被伪长周期污染。
+        let start = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        var earlier = cycleRecord(
+            id: "legacy-truncated",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start.addingTimeInterval(-4 * 86_400),
+            end: start,
+            usedPercent: 38
+        )
+        earlier.scheduledEndAt = start.addingTimeInterval(3 * 86_400)
+        let later = cycleRecord(
+            id: "shifted-window",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: start.addingTimeInterval(week),
+            usedPercent: 40
+        )
+
+        let cleaned = QuotaCycleStore.cleaningUpLegacyPayload(QuotaCyclePayload(
+            version: 4,
+            trackingStartedAt: start,
+            records: [earlier, later]
+        ))
+
+        XCTAssertEqual(cleaned.records.count, 2, "恢复时刻差数天的换档片段不得合并")
+        XCTAssertNotNil(cleaned.records.first { $0.id == "legacy-truncated" })
+        XCTAssertNotNil(cleaned.records.first { $0.id == "shifted-window" })
+    }
+
+    func testCycleStoreRepairsOversizedCycleWindowStart() {
+        let start = Date(timeIntervalSince1970: 100_000)
+        let week: TimeInterval = 604_800
+        var oversized = cycleRecord(
+            id: "oversized",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: start.addingTimeInterval(week + 4 * 86_400),
+            usedPercent: 56
+        )
+        oversized.scheduledEndAt = start.addingTimeInterval(week + 4 * 86_400)
+
+        let (repaired, ids) = QuotaCycleStore.repairingOversizedCycles(QuotaCyclePayload(
+            version: 4,
+            trackingStartedAt: start,
+            records: [oversized]
+        ))
+        XCTAssertEqual(ids, ["oversized"])
+        XCTAssertEqual(
+            repaired.records.first?.startAt,
+            start.addingTimeInterval(4 * 86_400),
+            "超长记录起点 = 恢复时刻 − 窗口长度"
+        )
+
+        let (again, secondIDs) = QuotaCycleStore.repairingOversizedCycles(repaired)
+        XCTAssertTrue(secondIDs.isEmpty, "修复后应幂等")
     }
 
     func testCycleStoreCreatesAccountSegmentsWithoutBackdatingSwitchedAccount() {
@@ -2597,6 +2747,27 @@ final class QuotaParsingTests: XCTestCase {
             primaryLimit: .standard(kind: kind, window: window),
             secondaryLimit: nil,
             planType: "plus",
+            fetchedAt: Date(timeIntervalSince1970: 1_000)
+        )
+    }
+
+    private func snapshot(
+        fiveHour: Double,
+        weekly: Double,
+        fiveHourEnd: Date,
+        weeklyEnd: Date
+    ) -> QuotaSnapshot {
+        QuotaSnapshot(
+            app: .claude,
+            primaryLimit: .standard(
+                kind: .fiveHour,
+                window: QuotaWindow(usedPercent: fiveHour, resetsAt: fiveHourEnd, windowSeconds: 18_000)
+            ),
+            secondaryLimit: .standard(
+                kind: .weekly,
+                window: QuotaWindow(usedPercent: weekly, resetsAt: weeklyEnd, windowSeconds: 604_800)
+            ),
+            planType: nil,
             fetchedAt: Date(timeIntervalSince1970: 1_000)
         )
     }

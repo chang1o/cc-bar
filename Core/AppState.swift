@@ -100,6 +100,8 @@ final class AppState {
     private var claudeFallbackBackoffUntil: Date?
     /// 批次 C：本轮标脏的额度持久化文件，刷新 / bootstrap / 设置操作末尾统一落盘。
     private var dirtyQuotaFiles: Set<QuotaFile> = []
+    /// load 时被超长自检修复的周期 ID；在启动扫描后触发受限重建。
+    private var pendingCycleRepairs: Set<String> = []
     /// 批次 C：额度持久化 coordinator，编码与原子写移出 MainActor。
     private let quotaPersistenceCoordinator = QuotaPersistenceCoordinator()
     /// 批次 C：持久化提交的单调递增序列号。`Task.detached` 的执行顺序无语言保证，
@@ -149,6 +151,13 @@ final class AppState {
         Task {
             await usageService.scanNow()
             await usageService.rebuildCycleUsageIfNeeded()
+            // load 时修复过超长周期记录：旧 rollup 桶按污染窗口切分过，必须重算。
+            // 放在初始重建之后，避免与全量重建的桶清空互相干扰（两者都能自愈，
+            // 前一置位后一幂等）。
+            if !pendingCycleRepairs.isEmpty {
+                pendingCycleRepairs = []
+                await usageService.rebuildCycleUsageForRecentChanges()
+            }
         }
         // 启动后异步拉一次服务状态;后续由 Scheduler 5 分钟刷新一次
         Task { await refreshServiceStatus() }
@@ -304,7 +313,12 @@ final class AppState {
     }
 
     private func loadQuotaCycles() {
-        quotaCycles = QuotaCycleStore.load()
+        let (payload, repairedCycleIDs) = QuotaCycleStore.load()
+        quotaCycles = payload
+        pendingCycleRepairs = repairedCycleIDs
+        if !repairedCycleIDs.isEmpty {
+            dirtyQuotaFiles.insert(.cycles)
+        }
     }
 
     private func recordCachedQuotaCycleObservations() {
