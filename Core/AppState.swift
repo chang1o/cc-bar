@@ -2,6 +2,17 @@ import AppKit
 import Foundation
 import Observation
 
+// MARK: - UpdateStatus
+
+/// 设置页「检查更新」的展示状态。`checking` 时不再重复发起请求(去重)。
+enum UpdateStatus: Equatable {
+    case idle
+    case checking
+    case upToDate(latest: String)
+    case updateAvailable(version: String)
+    case failed
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -100,6 +111,9 @@ final class AppState {
     /// 周期性后台刷新(Scheduler 的 quotaLoop/usageLoop)不走 `refreshNow()`,不会触发这个信号。
     var isRefreshing: Bool { refreshInFlight != nil }
 
+    /// 设置页「检查更新」状态;初始 idle,首次检查前不显示任何文案。
+    var updateStatus: UpdateStatus = .idle
+
     private let minSuccessInterval: TimeInterval = 60
     private let rateLimitBackoff: TimeInterval = 10 * 60
 
@@ -142,6 +156,14 @@ final class AppState {
         }
         // 启动后异步拉一次服务状态;后续由 Scheduler 5 分钟刷新一次
         Task { await refreshServiceStatus() }
+        // 启动时自动检查更新(可在设置中关闭)。延迟几秒避开启动高峰,不阻塞 bootstrap;
+        // 检查结果由设置页「检查更新」行展示。
+        if settings.autoCheckForUpdates {
+            Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await checkForUpdates()
+            }
+        }
         // 启动 7 秒后打一次官方额度请求,让 Popover 尽快有最新额度(不阻塞 bootstrap)。
         // 走 .periodic:与定时刷新同规则,60s 最小间隔与 429 退避照常生效,不绕过限流;
         // 延迟期内的手动刷新会先置 inFlight,本任务到点后自动跳过。
@@ -222,6 +244,32 @@ final class AppState {
             print("[service-status] \(tag) fetch failed: \(error)")
             return nil
         }
+    }
+
+    // MARK: - Update check
+
+    /// 检查 GitHub 是否有新版本。`checking` 期间重复调用直接返回(与 refreshNow 同款去重);
+    /// 失败置 `failed`,用户可再次点击重试。
+    func checkForUpdates() async {
+        guard updateStatus != .checking else { return }
+        updateStatus = .checking
+        do {
+            let info = try await UpdateChecker.fetchLatestRelease()
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
+            if UpdateChecker.isNewer(tag: info.tag, than: current) {
+                updateStatus = .updateAvailable(version: info.tag)
+            } else {
+                updateStatus = .upToDate(latest: info.tag)
+            }
+        } catch {
+            print("[update-check] fetch failed: \(error)")
+            updateStatus = .failed
+        }
+    }
+
+    /// 打开 GitHub Releases 下载页。
+    func openReleasePage() {
+        NSWorkspace.shared.open(UpdateChecker.releasePageURL)
     }
 
     func quotaStatusLine(for app: QuotaApp) -> String? {

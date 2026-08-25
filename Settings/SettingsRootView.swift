@@ -493,7 +493,83 @@ struct SettingsRootView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+            PrefsRow(
+                label: "Check for updates",
+                chinese: "检查更新",
+                desc: "Fetch the newest release info from GitHub.",
+                chineseDesc: "从 GitHub 获取最新版本信息"
+            ) {
+                HStack(spacing: 8) {
+                    if let updateStatusText {
+                        Text(updateStatusText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(updateStatusIsError ? Color.red : (updateStatusHasNewVersion ? Color.accentColor : Color.secondary))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Button {
+                        if updateStatusHasNewVersion {
+                            appState.openReleasePage()
+                        } else {
+                            Task { await appState.checkForUpdates() }
+                        }
+                    } label: {
+                        if isUpdateCheckInProgress {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(updateButtonTitle)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isUpdateCheckInProgress)
+                }
+            }
+            PrefsRow(label: "Check at launch", chinese: "启动时自动检查") {
+                Toggle("", isOn: Binding(
+                    get: { settings.autoCheckForUpdates },
+                    set: { settings.autoCheckForUpdates = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(.green)
+            }
         }
+    }
+
+    // MARK: Update check helpers
+
+    private var isUpdateCheckInProgress: Bool {
+        appState.updateStatus == .checking
+    }
+
+    private var updateStatusHasNewVersion: Bool {
+        if case .updateAvailable = appState.updateStatus { return true }
+        return false
+    }
+
+    private var updateStatusIsError: Bool {
+        appState.updateStatus == .failed
+    }
+
+    private var updateStatusText: String? {
+        switch appState.updateStatus {
+        case .idle, .checking:
+            return nil
+        case .upToDate(let latest):
+            return tr("Up to date (\(latest))", "已是最新（\(latest)）")
+        case .updateAvailable(let version):
+            return tr("Version \(version) is available", "发现新版本 \(version)")
+        case .failed:
+            return tr("Check failed", "检查失败")
+        }
+    }
+
+    private var updateButtonTitle: String {
+        updateStatusHasNewVersion
+            ? tr("Download", "前往下载")
+            : tr("Check", "检查")
     }
 
     private var launchAtLoginApprovalMessage: String {

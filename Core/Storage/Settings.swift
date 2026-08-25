@@ -163,6 +163,9 @@ final class SettingsStore {
     /// 隐私模式：Popover 中主账号邮箱、Codex 副账号名称均隐藏
     var privacyMode: Bool { didSet { defaults.set(privacyMode, forKey: Keys.privacyMode) } }
 
+    /// 启动时自动检查 GitHub 是否有新版本(默认关;手动检查始终可用)
+    var autoCheckForUpdates: Bool { didSet { defaults.set(autoCheckForUpdates, forKey: Keys.autoCheckForUpdates) } }
+
     /// 是否已经向用户解释过"接下来会出现 Keychain 授权弹窗"
     var didShowKeychainPrompt: Bool {
         didSet { defaults.set(didShowKeychainPrompt, forKey: Keys.didShowKeychainPrompt) }
@@ -200,6 +203,7 @@ final class SettingsStore {
         appLanguage = AppLanguage(rawValue: langRaw) ?? .system
         launchAtLogin = Self.isLaunchAtLoginOn(SMAppService.mainApp.status)
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? true
+        autoCheckForUpdates = defaults.object(forKey: Keys.autoCheckForUpdates) as? Bool ?? false
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false
         saveProviderDisplaySettings()
@@ -433,6 +437,7 @@ final class SettingsStore {
         static let launchAtLogin = "ccbar.settings.launchAtLogin"
         static let appLanguage = "ccbar.settings.appLanguage"
         static let privacyMode = "ccbar.settings.privacyMode"
+        static let autoCheckForUpdates = "ccbar.settings.autoCheckForUpdates"
         static let didShowKeychainPrompt = "ccbar.settings.didShowKeychainPrompt"
         static let didCompleteOnboarding = "ccbar.settings.didCompleteOnboarding"
         static let floatingFrameX = "ccbar.settings.floatingFrame.x"
