@@ -3,94 +3,59 @@ import XCTest
 
 /// 草案 §4.1 的 Provider 开关组合矩阵：计划构造与镜像判定。
 final class QuotaRefreshPlanTests: XCTestCase {
-    // MARK: - Plan 组合矩阵（纯函数，8 组合）
+    // MARK: - Plan 组合矩阵（纯函数）
 
     func testAllProvidersEnabled() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: true, showAntigravity: true, hasVisibleImported: true
+            showCodex: true, showClaude: true, hasVisibleImported: true
         )
         XCTAssertTrue(plan.refreshCodex)
         XCTAssertTrue(plan.refreshClaude)
-        XCTAssertTrue(plan.refreshAntigravity)
         XCTAssertTrue(plan.refreshImported)
         XCTAssertTrue(plan.canMirrorPrimary)
     }
 
     func testAllProvidersDisabled() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: false, showAntigravity: false, hasVisibleImported: false
+            showCodex: false, showClaude: false, hasVisibleImported: false
         )
         XCTAssertFalse(plan.refreshCodex)
         XCTAssertFalse(plan.refreshClaude)
-        XCTAssertFalse(plan.refreshAntigravity)
         XCTAssertFalse(plan.refreshImported)
         XCTAssertFalse(plan.canMirrorPrimary)
     }
 
     func testCodexOnly() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: false, showAntigravity: false, hasVisibleImported: false
+            showCodex: true, showClaude: false, hasVisibleImported: false
         )
         XCTAssertTrue(plan.refreshCodex)
         XCTAssertFalse(plan.refreshClaude)
-        XCTAssertFalse(plan.refreshAntigravity)
         XCTAssertTrue(plan.canMirrorPrimary)
     }
 
     func testClaudeOnly() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: true, showAntigravity: false, hasVisibleImported: false
+            showCodex: false, showClaude: true, hasVisibleImported: false
         )
         XCTAssertFalse(plan.refreshCodex)
         XCTAssertTrue(plan.refreshClaude)
-        XCTAssertFalse(plan.refreshAntigravity)
-        XCTAssertFalse(plan.canMirrorPrimary)
-    }
-
-    func testAntigravityOnly() {
-        let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: false, showAntigravity: true, hasVisibleImported: false
-        )
-        XCTAssertFalse(plan.refreshCodex)
-        XCTAssertFalse(plan.refreshClaude)
-        XCTAssertTrue(plan.refreshAntigravity)
         XCTAssertFalse(plan.canMirrorPrimary)
     }
 
     func testCodexPlusClaude() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: true, showAntigravity: false, hasVisibleImported: false
+            showCodex: true, showClaude: true, hasVisibleImported: false
         )
         XCTAssertTrue(plan.refreshCodex)
         XCTAssertTrue(plan.refreshClaude)
-        XCTAssertFalse(plan.refreshAntigravity)
-        XCTAssertTrue(plan.canMirrorPrimary)
-    }
-
-    func testClaudePlusAntigravity() {
-        let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: true, showAntigravity: true, hasVisibleImported: false
-        )
-        XCTAssertFalse(plan.refreshCodex)
-        XCTAssertTrue(plan.refreshClaude)
-        XCTAssertTrue(plan.refreshAntigravity)
-        XCTAssertFalse(plan.canMirrorPrimary)
-    }
-
-    func testCodexPlusAntigravity() {
-        let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: false, showAntigravity: true, hasVisibleImported: false
-        )
-        XCTAssertTrue(plan.refreshCodex)
-        XCTAssertFalse(plan.refreshClaude)
-        XCTAssertTrue(plan.refreshAntigravity)
         XCTAssertTrue(plan.canMirrorPrimary)
     }
 
     /// hasVisibleImported 只影响导入调度标志，不影响主 Provider 与镜像能力。
     func testVisibleImportedIndependentFromProviders() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: false, showAntigravity: false, hasVisibleImported: true
+            showCodex: false, showClaude: false, hasVisibleImported: true
         )
         XCTAssertFalse(plan.refreshCodex)
         XCTAssertFalse(plan.canMirrorPrimary)

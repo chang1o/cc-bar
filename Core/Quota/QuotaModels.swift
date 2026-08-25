@@ -3,14 +3,12 @@ import Foundation
 nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
-    case antigravity
 
     /// 对应的本地用量数据源；`nil` = 该服务没有可解析的本地日志。
     var usageApp: UsageApp? {
         switch self {
         case .codex: return .codex
         case .claude: return .claude
-        case .antigravity: return nil
         }
     }
 }
@@ -41,14 +39,6 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             logoName: "claude",
             fallback: "K",
             supportsLocalCost: true
-        ),
-        QuotaProviderDescriptor(
-            app: .antigravity,
-            title: "Antigravity",
-            vendor: "Google",
-            logoName: "antigravity",
-            fallback: "A",
-            supportsLocalCost: false
         ),
     ]
 }
@@ -88,18 +78,6 @@ nonisolated struct PrimaryQuotaState: Sendable, Equatable {
     var error: String?
     var source: QuotaSnapshotSource?
     var refresh = QuotaRefreshState()
-}
-
-nonisolated struct AntigravityAccount: Sendable, Equatable {
-    var email: String?
-    var planType: String?
-}
-
-nonisolated enum AntigravityAvailability: Sendable, Equatable {
-    case notInstalled
-    case installed
-    case running
-    case unavailable(String)
 }
 
 nonisolated struct QuotaWindow: Sendable, Equatable, Codable {
@@ -185,8 +163,6 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     var primaryLimit: QuotaLimit?
     var secondaryLimit: QuotaLimit?
     var modelLimits: [QuotaLimit]
-    var geminiWindow: QuotaWindow?    // 仅 Antigravity，Gemini 5h 额度
-    var geminiWeekly: QuotaWindow?    // 仅 Antigravity，Gemini 周额度
     var planType: String?
     var fetchedAt: Date
 
@@ -195,8 +171,6 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         primaryLimit: QuotaLimit?,
         secondaryLimit: QuotaLimit?,
         modelLimits: [QuotaLimit] = [],
-        geminiWindow: QuotaWindow? = nil,
-        geminiWeekly: QuotaWindow? = nil,
         planType: String?,
         fetchedAt: Date
     ) {
@@ -204,8 +178,6 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         self.primaryLimit = primaryLimit
         self.secondaryLimit = secondaryLimit
         self.modelLimits = modelLimits
-        self.geminiWindow = geminiWindow
-        self.geminiWeekly = geminiWeekly
         self.planType = planType
         self.fetchedAt = fetchedAt
     }
@@ -280,8 +252,6 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         case primaryLimit
         case secondaryLimit
         case modelLimits
-        case geminiWindow
-        case geminiWeekly
         case planType
         case fetchedAt
         // v2 及更早缓存字段。
@@ -294,8 +264,6 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         app = try container.decode(QuotaApp.self, forKey: .app)
-        geminiWindow = try container.decodeIfPresent(QuotaWindow.self, forKey: .geminiWindow)
-        geminiWeekly = try container.decodeIfPresent(QuotaWindow.self, forKey: .geminiWeekly)
         planType = try container.decodeIfPresent(String.self, forKey: .planType)
         fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
 
@@ -335,8 +303,6 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         try container.encodeIfPresent(primaryLimit, forKey: .primaryLimit)
         try container.encodeIfPresent(secondaryLimit, forKey: .secondaryLimit)
         try container.encode(modelLimits, forKey: .modelLimits)
-        try container.encodeIfPresent(geminiWindow, forKey: .geminiWindow)
-        try container.encodeIfPresent(geminiWeekly, forKey: .geminiWeekly)
         try container.encodeIfPresent(planType, forKey: .planType)
         try container.encode(fetchedAt, forKey: .fetchedAt)
     }

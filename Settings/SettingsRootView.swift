@@ -113,21 +113,6 @@ struct SettingsRootView: View {
                         set: { settings.showClaude = $0 }
                     )
                 )
-                AccountRow(
-                    title: "Antigravity",
-                    subtitle: "Google",
-                    tint: .antigravityAccent,
-                    logoName: "antigravity",
-                    fallback: "A",
-                    email: appState.antigravityAccount?.email,
-                    plan: appState.antigravityAccount?.planType,
-                    availability: antigravityAccountAvailability,
-                    canToggle: true,
-                    isOn: Binding(
-                        get: { settings.showAntigravity },
-                        set: { settings.showAntigravity = $0 }
-                    )
-                )
             }
 
             // 其他 Codex 账号（手动导入）
@@ -564,18 +549,6 @@ struct SettingsRootView: View {
     }
 }
 
-private extension SettingsRootView {
-    var antigravityAccountAvailability: AccountAvailability {
-        switch appState.antigravityAvailability {
-        case .running:
-            return appState.antigravityAccount == nil ? .running : .connected
-        case .installed: return .installed
-        case .notInstalled: return .notDetected
-        case .unavailable: return .unavailable
-        }
-    }
-}
-
 // MARK: - PrefsGroup
 
 private struct PrefsGroup<Content: View>: View {
@@ -699,9 +672,6 @@ private struct AccountRow: View {
         }
         switch availability {
         case .connected: return plan ?? tr("Connected", "已连接")
-        case .running: return tr("Running · waiting for quota", "运行中 · 等待额度")
-        case .installed: return tr("Installed · not running", "已安装 · 未运行")
-        case .unavailable: return tr("Local service unavailable", "本地服务不可用")
         case .notDetected: return tr("Not detected", "未检测到")
         }
     }
@@ -728,9 +698,6 @@ private struct AccountRow: View {
     private var statusText: String {
         switch availability {
         case .connected: tr("Connected", "已连接")
-        case .running: tr("Running", "运行中")
-        case .installed: tr("Not running", "未运行")
-        case .unavailable: tr("Unavailable", "不可用")
         case .notDetected: tr("Not detected", "未检测到")
         }
     }
@@ -738,9 +705,6 @@ private struct AccountRow: View {
 
 private enum AccountAvailability: Equatable {
     case connected
-    case running
-    case installed
-    case unavailable
     case notDetected
 }
 

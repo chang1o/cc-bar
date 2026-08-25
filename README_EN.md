@@ -4,7 +4,7 @@
 
 <h1 align="center">cc-bar</h1>
 
-<p align="center">A macOS menu bar utility: real-time remaining quota for Codex, Claude Code, and Antigravity,<br>plus local token usage and cost statistics.</p>
+<p align="center">A macOS menu bar utility: real-time remaining quota for Codex, and Claude Code,<br>plus local token usage and cost statistics.</p>
 
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white">
@@ -30,7 +30,7 @@
 
 ## ✨ Features
 
-- **Quota overview** — remaining 5-hour / weekly window quota for Codex, Claude Code, and Antigravity; the menu bar icon shows the remaining percentage
+- **Quota overview** — remaining 5-hour / weekly window quota for Codex and Claude Code; the menu bar icon shows the remaining percentage
 - **Floating HUD** — optional desktop overlay; draggable, snaps to screen edges, stays on top without stealing focus
 - **Multiple Codex accounts** — import multiple Codex accounts and see primary and secondary side by side in the popover; per-account bonus reset counts and expiry dates in Settings
 - **Usage statistics** — token and cost totals for Codex, Claude Code, Pi, and OpenCode, by today / yesterday / this week / this month / this year / last 7 days / last 30 days / all time / custom range, broken down by service, by model, by individual conversation, and by model provider, with a daily usage chart
@@ -58,7 +58,7 @@
 
 ## 📦 Installation
 
-🍎 Requires macOS 14 (Sonoma) or later. Codex / Claude Code must already be logged in via their CLIs; Antigravity requires the official app or IDE to be installed and running to provide the local quota service.
+🍎 Requires macOS 14 (Sonoma) or later. Codex / Claude Code must already be logged in via their CLIs.
 
 1. Download `CCBar.dmg` (or the fallback `CCBar.app.zip`) from [Releases](https://github.com/nanvon/cc-bar/releases/latest) and drag `CCBar.app` into `/Applications`.
 2. CCBar is not notarized by Apple, so Gatekeeper blocks the first launch: after the blocked attempt, open **System Settings → Privacy & Security**, scroll down to the CCBar prompt, and click **"Open Anyway"**.
@@ -78,7 +78,6 @@ cc-bar is a small open-source tool built for personal use. To query quotas, it r
 
 - Codex: `~/.codex/auth.json`. When the access token is close to expiry it is renewed with the refresh token and written back; before renewing, the file is re-read so that a token the `codex` CLI already rotated is adopted rather than raced
 - Claude Code: `~/.claude/.credentials.json` and the macOS Keychain — **read-only**. cc-bar never refreshes or writes back Claude credentials: Anthropic's refresh tokens are single-use, so a third-party refresh signs you out of Claude Code. When the credentials expire, the last quota snapshot is kept along with a prompt to refresh your login in Claude Code; local token/cost statistics are unaffected
-- Antigravity: only connects to the local Language Server the official process exposes on `127.0.0.1`; it does not store Google OAuth credentials, launch the CLI, or send model requests
 
 Usage statistics are computed from local session logs: the JSONL logs of Codex (`~/.codex/sessions` and `~/.codex/archived_sessions`), Claude Code (`~/.claude/projects`), and Pi (the pi coding agent; under `~/.pi/agent/sessions`), plus OpenCode's SQLite session database (`~/.local/share/opencode/opencode.db`, opened read-only).
 

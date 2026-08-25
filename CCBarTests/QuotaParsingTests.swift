@@ -109,8 +109,6 @@ final class QuotaParsingTests: XCTestCase {
           "weekly": null,
           "weeklyOpus": null,
           "weeklySonnet": null,
-          "geminiWindow": null,
-          "geminiWeekly": null,
           "planType": "plus",
           "fetchedAt": 0
         }

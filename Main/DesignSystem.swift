@@ -12,7 +12,6 @@ extension QuotaApp {
         switch self {
         case .codex: .codexAccent
         case .claude: .claudeAccent
-        case .antigravity: .antigravityAccent
         }
     }
 }

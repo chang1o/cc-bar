@@ -25,11 +25,6 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
         set { providers[.claude] = newValue }
     }
 
-    var antigravity: QuotaCacheRecord? {
-        get { providers[.antigravity] }
-        set { providers[.antigravity] = newValue }
-    }
-
     private enum CodingKeys: String, CodingKey {
         case version
         case providers
@@ -58,10 +53,17 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
 
         if decodedVersion >= 2 {
             version = Self.currentVersion
-            providers = try container.decodeIfPresent(
-                [QuotaApp: QuotaCacheRecord].self,
+            // 以 String 键解码后按 QuotaApp(rawValue:) 过滤，丢弃已删除的
+            // provider（如旧版缓存中的 antigravity），避免整个缓存解码失败。
+            let rawProviders = try container.decodeIfPresent(
+                [String: QuotaCacheRecord].self,
                 forKey: .providers
             ) ?? [:]
+            providers = Dictionary(
+                uniqueKeysWithValues: rawProviders.compactMap { key, record in
+                    QuotaApp(rawValue: key).map { ($0, record) }
+                }
+            )
         } else {
             version = Self.currentVersion
             providers = [:]

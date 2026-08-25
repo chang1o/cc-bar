@@ -31,7 +31,6 @@
 		49C1B125000000000001AABB /* ClaudeTokenRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */; };
 		49C1B126000000000001AABB /* ServiceStatusClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B126000000000001AAAA /* ServiceStatusClient.swift */; };
 		49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */; };
-		49C1B129000000000001AABB /* AntigravityQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */; };
 		49C1BF01000000000001AABB /* QuotaRefreshPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */; };
 		49C1BF06000000000001AABB /* QuotaPersistenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */; };
 		49C1BF07000000000001AABB /* QuotaPersistenceCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */; };
@@ -43,7 +42,6 @@
 		49C1B132000000000001AABB /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B132000000000001AAAA /* L10n.swift */; };
 		49C1B140000000000001AABB /* codex.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B140000000000001AAAA /* codex.svg */; };
 		49C1B141000000000001AABB /* claude.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B141000000000001AAAA /* claude.svg */; };
-		49C1B143000000000001AABB /* antigravity.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B143000000000001AAAA /* antigravity.svg */; };
 		49C1B150000000000001AABB /* UsageModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B150000000000001AAAA /* UsageModels.swift */; };
 		49C1B151000000000001AABB /* Pricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B151000000000001AAAA /* Pricing.swift */; };
 		49C1B152000000000001AABB /* JSONLLineReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B152000000000001AAAA /* JSONLLineReader.swift */; };
@@ -124,7 +122,6 @@
 		49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeTokenRefresher.swift; sourceTree = "<group>"; };
 		49C1B126000000000001AAAA /* ServiceStatusClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceStatusClient.swift; sourceTree = "<group>"; };
 		49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsClient.swift; sourceTree = "<group>"; };
-		49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityQuotaClient.swift; sourceTree = "<group>"; };
 		49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRefreshPlan.swift; sourceTree = "<group>"; };
 		49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPersistenceCoordinator.swift; sourceTree = "<group>"; };
 		49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPersistenceCoordinatorTests.swift; sourceTree = "<group>"; };
@@ -136,7 +133,6 @@
 		49C1B132000000000001AAAA /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		49C1B140000000000001AAAA /* codex.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = codex.svg; sourceTree = "<group>"; };
 		49C1B141000000000001AAAA /* claude.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = claude.svg; sourceTree = "<group>"; };
-		49C1B143000000000001AAAA /* antigravity.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = antigravity.svg; sourceTree = "<group>"; };
 		49C1B150000000000001AAAA /* UsageModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModels.swift; sourceTree = "<group>"; };
 		49C1B151000000000001AAAA /* Pricing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pricing.swift; sourceTree = "<group>"; };
 		49C1B152000000000001AAAA /* JSONLLineReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONLLineReader.swift; sourceTree = "<group>"; };
@@ -309,7 +305,6 @@
 				49C1B121000000000001AAAA /* CodexTokenRefresher.swift */,
 				49C1B122000000000001AAAA /* CodexQuotaClient.swift */,
 				49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */,
-				49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */,
 				49C1B123000000000001AAAA /* ClaudeQuotaClient.swift */,
 				49C1B124000000000001AAAA /* ClaudeCLIFallbackQuotaClient.swift */,
 				49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */,
@@ -325,7 +320,6 @@
 			children = (
 				49C1B140000000000001AAAA /* codex.svg */,
 				49C1B141000000000001AAAA /* claude.svg */,
-				49C1B143000000000001AAAA /* antigravity.svg */,
 			);
 			path = Logos;
 			sourceTree = "<group>";
@@ -512,7 +506,6 @@
 				4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */,
 				49C1B140000000000001AABB /* codex.svg in Resources */,
 				49C1B141000000000001AABB /* claude.svg in Resources */,
-				49C1B143000000000001AABB /* antigravity.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -548,7 +541,6 @@
 				49C1B121000000000001AABB /* CodexTokenRefresher.swift in Sources */,
 				49C1B122000000000001AABB /* CodexQuotaClient.swift in Sources */,
 				49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */,
-				49C1B129000000000001AABB /* AntigravityQuotaClient.swift in Sources */,
 				49C1BF01000000000001AABB /* QuotaRefreshPlan.swift in Sources */,
 				49C1BF06000000000001AABB /* QuotaPersistenceCoordinator.swift in Sources */,
 				49C1B123000000000001AABB /* ClaudeQuotaClient.swift in Sources */,

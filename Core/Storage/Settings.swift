@@ -125,10 +125,6 @@ final class SettingsStore {
         get { isProviderEnabled(.claude) }
         set { setProviderEnabled(newValue, for: .claude) }
     }
-    var showAntigravity: Bool {
-        get { isProviderEnabled(.antigravity) }
-        set { setProviderEnabled(newValue, for: .antigravity) }
-    }
     var menuBarShowCodex: Bool {
         get { isProviderShownInMenuBar(.codex) }
         set { setProviderShownInMenuBar(newValue, for: .codex) }
@@ -136,10 +132,6 @@ final class SettingsStore {
     var menuBarShowClaude: Bool {
         get { isProviderShownInMenuBar(.claude) }
         set { setProviderShownInMenuBar(newValue, for: .claude) }
-    }
-    var menuBarShowAntigravity: Bool {
-        get { isProviderShownInMenuBar(.antigravity) }
-        set { setProviderShownInMenuBar(newValue, for: .antigravity) }
     }
 
     // 菜单栏
@@ -154,10 +146,6 @@ final class SettingsStore {
     var floatingShowClaude: Bool {
         get { isProviderShownInFloatingHUD(.claude) }
         set { setProviderShownInFloatingHUD(newValue, for: .claude) }
-    }
-    var floatingShowAntigravity: Bool {
-        get { isProviderShownInFloatingHUD(.antigravity) }
-        set { setProviderShownInFloatingHUD(newValue, for: .antigravity) }
     }
 
     // 刷新
@@ -273,7 +261,7 @@ final class SettingsStore {
             return result
         }
 
-        // 第一次升级到统一结构时读取旧 key；Antigravity 没有旧值，按计划默认开启。
+        // 第一次升级到统一结构时读取旧 key。
         return [
             .codex: ProviderDisplaySettings(
                 enabled: defaults.object(forKey: Keys.showCodex) as? Bool ?? true,
@@ -285,7 +273,6 @@ final class SettingsStore {
                 menuBar: defaults.object(forKey: Keys.menuBarShowClaude) as? Bool ?? true,
                 floatingHUD: defaults.object(forKey: Keys.floatingShowClaude) as? Bool ?? true
             ),
-            .antigravity: .enabledByDefault,
         ]
     }
 

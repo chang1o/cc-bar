@@ -81,8 +81,8 @@ private struct WelcomeStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Track Codex, Claude Code, and Antigravity quota right from your menu bar. We'll detect local providers automatically.",
-                "在菜单栏即时查看 Codex、Claude Code 与 Antigravity 的额度,我们将自动检测本机服务。"
+                "Track Codex and Claude Code quota right from your menu bar. We'll detect local providers automatically.",
+                "在菜单栏即时查看 Codex 与 Claude Code 的额度,我们将自动检测本机服务。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -178,17 +178,6 @@ private struct DetectAccountsStep: View {
                     fallback: "K",
                     isDetected: appState.claudeAccount != nil
                 )
-                DetectedAccountRow(
-                    title: "Antigravity",
-                    subtitle: "Google",
-                    plan: appState.antigravityAccount?.planType,
-                    email: appState.antigravityAccount?.email,
-                    source: tr("Local Language Server", "本机 Language Server"),
-                    tint: .antigravityAccent,
-                    logoName: "antigravity",
-                    fallback: "A",
-                    isDetected: antigravityDetected
-                )
             }
             .padding(.top, 18)
 
@@ -219,15 +208,8 @@ private struct DetectAccountsStep: View {
         }
     }
 
-    private var antigravityDetected: Bool {
-        switch appState.antigravityAvailability {
-        case .notInstalled: false
-        case .installed, .running, .unavailable: true
-        }
-    }
-
     private var anyDetected: Bool {
-        appState.codexAccount != nil || appState.claudeAccount != nil || antigravityDetected
+        appState.codexAccount != nil || appState.claudeAccount != nil
     }
 }
 
@@ -344,12 +326,6 @@ private struct ConfigureStep: View {
                         Toggle("Claude Code", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
                             .toggleStyle(.switch)
                             .tint(.green)
-                        Toggle("Antigravity", isOn: Binding(
-                            get: { settings.menuBarShowAntigravity },
-                            set: { settings.menuBarShowAntigravity = $0 }
-                        ))
-                        .toggleStyle(.switch)
-                        .tint(.green)
                     }
                 }
 

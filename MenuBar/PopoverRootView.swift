@@ -180,10 +180,6 @@ struct PopoverRootView: View {
             email = appState.claudeAccount?.email
             plan = appState.claudeAccount?.subscriptionType?.capitalized
             fallback = "Anthropic"
-        case .antigravity:
-            email = appState.antigravityAccount?.email
-            plan = appState.antigravityAccount?.planType
-            fallback = "Google"
         }
         if !privacy, let email, !email.isEmpty { parts.append(email) }
         if let plan, !plan.isEmpty { parts.append(plan) }
@@ -206,9 +202,7 @@ struct PopoverRootView: View {
             error: appState.quotaError(for: provider.app),
             weekSpend: weekSpend(for: provider.app),
             todayCost: todayCost(for: provider.app),
-            serviceStatus: serviceStatus(for: provider.app),
-            geminiWindow: snap?.geminiWindow,
-            geminiWeekly: snap?.geminiWeekly
+            serviceStatus: serviceStatus(for: provider.app)
         )
     }
 
@@ -217,7 +211,6 @@ struct PopoverRootView: View {
         switch app {
         case .codex: usageApp = .codex
         case .claude: usageApp = .claude
-        case .antigravity: return nil
         }
         let (from, to) = Self.weekBounds()
         let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
@@ -228,7 +221,6 @@ struct PopoverRootView: View {
         switch app {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
-        case .antigravity: nil
         }
     }
 
@@ -237,7 +229,6 @@ struct PopoverRootView: View {
         return switch app {
         case .codex: appState.codexServiceStatus
         case .claude: appState.claudeServiceStatus
-        case .antigravity: nil as ServiceStatus?
         }
     }
 
@@ -330,8 +321,6 @@ private struct ServiceBlockView: View {
     let weekSpend: Decimal?
     let todayCost: Decimal?
     let serviceStatus: ServiceStatus?
-    var geminiWindow: QuotaWindow? = nil
-    var geminiWeekly: QuotaWindow? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -342,12 +331,6 @@ private struct ServiceBlockView: View {
             }
             ForEach(snapshot?.modelLimits ?? []) { limit in
                 compactLimitRow(limit)
-            }
-            if let gemini = geminiWindow {
-                geminiRow(gemini)
-            }
-            if let geminiWk = geminiWeekly {
-                geminiWeeklyRow(geminiWk)
             }
             if let message = shortError(error) {
                 HStack(alignment: .top, spacing: 5) {
@@ -524,52 +507,6 @@ private struct ServiceBlockView: View {
               !name.isEmpty
         else { return nil }
         return name.caseInsensitiveCompare("Fable") == .orderedSame ? "Fable" : name
-    }
-
-    private func geminiRow(_ gemini: QuotaWindow) -> some View {
-        let remaining = gemini.remainingPercent
-        let color = statusColor(remainingPercent: remaining, tint: tint)
-        return HStack(spacing: 10) {
-            Text("GM")
-                .font(.system(size: 9, weight: .semibold))
-                .kerning(0.6)
-                .foregroundStyle(.quaternary)
-                .frame(width: 70, alignment: .leading)
-
-            ProgressBar(value: remaining / 100, tint: color, height: 2.5)
-
-            Text("\(Int(remaining.rounded()))%")
-                .font(.system(size: 10.5, weight: .medium))
-                .monospacedDigit()
-                .foregroundStyle(color)
-
-            ResetTimeText(resetsAt: gemini.resetsAt)
-                .font(.system(size: 10.5))
-                .foregroundStyle(.quaternary)
-        }
-    }
-
-    private func geminiWeeklyRow(_ geminiWk: QuotaWindow) -> some View {
-        let remaining = geminiWk.remainingPercent
-        let color = statusColor(remainingPercent: remaining, tint: tint)
-        return HStack(spacing: 10) {
-            Text("GW")
-                .font(.system(size: 9, weight: .semibold))
-                .kerning(0.6)
-                .foregroundStyle(.quaternary)
-                .frame(width: 70, alignment: .leading)
-
-            ProgressBar(value: remaining / 100, tint: color, height: 2.5)
-
-            Text("\(Int(remaining.rounded()))%")
-                .font(.system(size: 10.5, weight: .medium))
-                .monospacedDigit()
-                .foregroundStyle(color)
-
-            ResetTimeText(resetsAt: geminiWk.resetsAt)
-                .font(.system(size: 10.5))
-                .foregroundStyle(.quaternary)
-        }
     }
 
     private func statInline(value: String, english: String, chinese: String) -> some View {
