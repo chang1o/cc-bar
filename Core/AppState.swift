@@ -142,6 +142,13 @@ final class AppState {
         }
         // 启动后异步拉一次服务状态;后续由 Scheduler 5 分钟刷新一次
         Task { await refreshServiceStatus() }
+        // 启动 7 秒后打一次官方额度请求,让 Popover 尽快有最新额度(不阻塞 bootstrap)。
+        // 走 .periodic:与定时刷新同规则,60s 最小间隔与 429 退避照常生效,不绕过限流;
+        // 延迟期内的手动刷新会先置 inFlight,本任务到点后自动跳过。
+        Task {
+            try? await Task.sleep(nanoseconds: 7_000_000_000)
+            await refreshQuotas(reason: .periodic)
+        }
         // 批次 C：bootstrap 期间标脏的额度文件统一落盘
         scheduleQuotaPersistenceFlush()
     }
