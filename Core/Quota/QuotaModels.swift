@@ -115,7 +115,7 @@ nonisolated struct QuotaWindow: Sendable, Equatable, Codable {
     }
 }
 
-nonisolated enum QuotaLimitKind: String, Sendable, Equatable, Codable {
+nonisolated enum QuotaLimitKind: String, Sendable, Equatable, Hashable, Codable {
     case fiveHour
     case weekly
     case modelWeekly

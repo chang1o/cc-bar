@@ -195,6 +195,8 @@ struct StatsView: View {
     @State private var customTo: Date = Calendar.current.startOfDay(for: Date())
     @State private var providerSort: ProviderSort = .cost
     @State private var expandedProvider: ModelProvider?
+    /// 时间线窗口视角：nil = 跟随各账号当前主额度，否则固定看 5H / 每周。
+    @State private var timelineWindow: QuotaLimitKind?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -313,8 +315,12 @@ struct StatsView: View {
                     .ccPanel(cornerRadius: 12)
             } else {
                 ForEach(timelineSections) { section in
-                    QuotaTimelineAccountPanel(section: section, isWide: isWide)
-                        .frame(maxHeight: .infinity)
+                    QuotaTimelineAccountPanel(
+                        section: section,
+                        selectedKind: timelineWindow,
+                        isWide: isWide
+                    )
+                    .frame(maxHeight: .infinity)
                 }
             }
         }
@@ -941,17 +947,50 @@ struct StatsView: View {
     private var timelineHeader: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(tr("Today's Primary Quota", "今日主要额度"))
+                Text(tr("Quota Timeline", "额度时间线"))
                     .font(.system(size: 18, weight: .semibold))
-                Text(tr("Only quota changes are shown.", "仅展示额度发生变化的时间点。"))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
+                Text(tr(
+                    "Only quota changes are shown. Each window follows quota resets; the last 15 days are kept.",
+                    "仅展示额度发生变化的时间点；窗口沿额度重置时刻滚动，保留最近 15 天数据。"
+                ))
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
             }
             Spacer()
+            Picker(tr("Quota window", "额度窗口"), selection: timelineWindowBinding) {
+                ForEach(QuotaTimelineWindowKind.pickable, id: \.self) { item in
+                    Text(item.label).tag(item.kind)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 128)
             Text(StatsFormatter.day(Date()))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// 用户未手动选择窗口视角时：未固定选择跟随各账号主额度，Picker 显示首个账号的主额度档。
+    private var defaultTimelineWindowKind: QuotaLimitKind {
+        if let primary = appState.codexQuota?.primaryLimit?.kind,
+           primary == .fiveHour || primary == .weekly
+        {
+            return primary
+        }
+        if let primary = appState.claudeQuota?.primaryLimit?.kind,
+           primary == .fiveHour || primary == .weekly
+        {
+            return primary
+        }
+        return .fiveHour
+    }
+
+    private var timelineWindowBinding: Binding<QuotaLimitKind> {
+        Binding(
+            get: { timelineWindow ?? defaultTimelineWindowKind },
+            set: { timelineWindow = $0 }
+        )
     }
 
     private var timelineSections: [QuotaTimelineSection] {
@@ -962,9 +1001,9 @@ struct StatsView: View {
         if serviceFilter != .claude {
             let key = QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
             var addedPrimaryCodex = false
-            if shouldShowTimelineSection(key: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
+            if shouldShowTimelineSection(accountKey: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
                 sections.append(timelineSection(
-                    key: key,
+                    accountKey: key,
                     title: "Codex",
                     tint: .codexAccent,
                     snapshot: appState.codexQuota,
@@ -978,7 +1017,7 @@ struct StatsView: View {
                 if addedPrimaryCodex && appState.importedCodexAccountMirrorsPrimary(account) { continue }
                 let key = QuotaHistoryAccountKey.codexImported(id: account.id)
                 sections.append(timelineSection(
-                    key: key,
+                    accountKey: key,
                     title: importedCodexTimelineTitle(account, index: idx),
                     tint: .codexAccent,
                     snapshot: appState.importedCodexQuota(for: account),
@@ -989,9 +1028,9 @@ struct StatsView: View {
 
         if serviceFilter != .codex {
             let key = QuotaHistoryAccountKey.claudePrimary(email: appState.claudeAccount?.email)
-            if shouldShowTimelineSection(key: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
+            if shouldShowTimelineSection(accountKey: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
                 sections.append(timelineSection(
-                    key: key,
+                    accountKey: key,
                     title: "Claude Code",
                     tint: .claudeAccent,
                     snapshot: appState.claudeQuota,
@@ -1004,40 +1043,112 @@ struct StatsView: View {
     }
 
     private func timelineSection(
-        key: String,
+        accountKey: String,
         title: String,
         tint: Color,
         snapshot: QuotaSnapshot?,
         isLoading: Bool
     ) -> QuotaTimelineSection {
-        let events = timelineEvents(for: key)
-        let sample = appState.quotaHistory.lastSamples[key]
+        let windows: [QuotaTimelineWindow] = [.fiveHour, .weekly].compactMap { kind in
+            timelineWindowSection(accountKey: accountKey, kind: kind, snapshot: snapshot)
+        }
         return QuotaTimelineSection(
-            accountKey: key,
+            accountKey: accountKey,
             title: title,
             tint: tint,
-            limitKind: sample?.limitKind ?? snapshot?.primaryLimit?.kind,
-            currentRemaining: sample?.remainingPercent ?? roundedRemaining(snapshot),
-            totalDelta: events.reduce(0) { $0 + $1.deltaPercent },
-            latestEventAt: events.last?.sampledAt,
-            events: events,
+            preferredKind: snapshot?.primaryLimit?.kind,
+            windows: windows,
             isLoading: isLoading
         )
     }
 
-    private func shouldShowTimelineSection(key: String, snapshot: QuotaSnapshot?, accountExists: Bool) -> Bool {
-        accountExists || snapshot != nil || appState.quotaHistory.lastSamples[key] != nil || !timelineEvents(for: key).isEmpty
+    /// 每个标准窗口（5H / 每周）在「快照当前持有该窗口」或「历史留有该系列数据」时展示。
+    private func timelineWindowSection(
+        accountKey: String,
+        kind: QuotaLimitKind,
+        snapshot: QuotaSnapshot?
+    ) -> QuotaTimelineWindow? {
+        let events = timelineEvents(for: accountKey, kind: kind)
+        let sample = appState.quotaHistory.lastSamples[
+            QuotaHistoryStore.seriesKey(accountKey: accountKey, limitKind: kind)
+        ]
+        let snapshotWindow = window(of: kind, in: snapshot)
+        guard sample != nil || !events.isEmpty || snapshotWindow != nil else { return nil }
+
+        let bounds = windowBounds(events: events, sample: sample, kind: kind)
+        return QuotaTimelineWindow(
+            kind: kind,
+            currentRemaining: sample?.remainingPercent ?? roundedRemaining(snapshotWindow),
+            totalDelta: windowDelta(events: events, windowStart: bounds?.start),
+            latestEventAt: events.last?.sampledAt,
+            windowStart: bounds?.start,
+            windowEnd: bounds?.end,
+            events: events
+        )
     }
 
-    private func timelineEvents(for key: String) -> [QuotaChangeEvent] {
-        appState.quotaHistory.events
-            .filter { $0.accountKey == key }
-            .sorted { $0.sampledAt < $1.sampledAt }
-    }
-
-    private func roundedRemaining(_ snapshot: QuotaSnapshot?) -> Int? {
-        guard let remaining = snapshot?.primaryWindow?.remainingPercent else { return nil }
+    private func roundedRemaining(_ window: QuotaWindow?) -> Int? {
+        guard let remaining = window?.remainingPercent else { return nil }
         return max(0, min(100, Int(remaining.rounded())))
+    }
+
+    private func window(of kind: QuotaLimitKind, in snapshot: QuotaSnapshot?) -> QuotaWindow? {
+        guard let snapshot else { return nil }
+        switch kind {
+        case .fiveHour: return snapshot.fiveHourLimit?.window
+        case .weekly: return snapshot.weeklyLimit?.window
+        case .modelWeekly, .unknown: return nil
+        }
+    }
+
+    /// 窗口边界取自该系列最新样本的重置时刻：终点 = resetsAt，起点 = resetsAt − 窗口长度。
+    private func windowBounds(
+        events: [QuotaChangeEvent],
+        sample: QuotaHistorySample?,
+        kind: QuotaLimitKind
+    ) -> (start: Date, end: Date)? {
+        let resetsAt = events.last?.resetsAt ?? sample?.resetsAt
+        guard let resetsAt, let seconds = windowSeconds(for: kind) else { return nil }
+        return (resetsAt.addingTimeInterval(-TimeInterval(seconds)), resetsAt)
+    }
+
+    private func windowSeconds(for kind: QuotaLimitKind) -> Int? {
+        switch kind {
+        case .fiveHour: return 5 * 60 * 60
+        case .weekly: return 7 * 24 * 60 * 60
+        case .modelWeekly, .unknown: return nil
+        }
+    }
+
+    /// 本窗口消耗：窗口起点（含）之后的变动事件 delta 之和；跨窗重置造成的剩余大幅回升
+    /// （Δ ≥ 20）不是消耗，不计入，避免把「旧窗口归零」误算成用掉额度。
+    private func windowDelta(events: [QuotaChangeEvent], windowStart: Date?) -> Int {
+        let inWindow: [QuotaChangeEvent]
+        if let windowStart {
+            inWindow = events.filter { $0.sampledAt >= windowStart }
+        } else {
+            inWindow = events
+        }
+        return inWindow.reduce(0) { acc, event in
+            let rebound = event.afterRemainingPercent - event.beforeRemainingPercent
+            guard rebound < 20 else { return acc }
+            return acc + event.deltaPercent
+        }
+    }
+
+    private func shouldShowTimelineSection(accountKey: String, snapshot: QuotaSnapshot?, accountExists: Bool) -> Bool {
+        let history = appState.quotaHistory
+        let hasSeries = history.lastSamples.keys.contains {
+            $0.hasPrefix("\(accountKey)|")
+        }
+        return accountExists || snapshot != nil || hasSeries
+            || history.events.contains { $0.accountKey == accountKey }
+    }
+
+    private func timelineEvents(for accountKey: String, kind: QuotaLimitKind) -> [QuotaChangeEvent] {
+        appState.quotaHistory.events
+            .filter { $0.accountKey == accountKey && $0.limitKind == kind }
+            .sorted { $0.sampledAt < $1.sampledAt }
     }
 
     private func importedCodexTimelineTitle(_ account: ImportedCodexAccount, index: Int) -> String {
@@ -1726,46 +1837,79 @@ private struct ByServiceRow: View {
 
 private struct QuotaTimelineAccountPanel: View {
     let section: QuotaTimelineSection
+    /// 全局选定的窗口视角；nil = 跟随该账号主额度档。
+    let selectedKind: QuotaLimitKind?
     var isWide: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            if section.events.isEmpty {
-                if section.isLoading {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text(tr("Loading…", "加载中…"))
+            if let window = activeWindow {
+                windowBoundsLabel(window)
+                if window.events.isEmpty {
+                    if section.isLoading {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text(tr("Loading…", "加载中…"))
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Text(tr("No changes in this window", "该窗口暂无变动"))
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if isWide {
+                    // 图表与表格是同一数据的两个视角,宽画布下左图右表;
+                    // 两者等高撑满面板剩余高度(表格行少时边框拉满、行顶对齐)。
+                    HStack(alignment: .top, spacing: 14) {
+                        QuotaTimelineChart(events: window.events, tint: section.tint, spansDays: spansDays(window))
+                            .frame(minHeight: 140, maxHeight: .infinity)
+                            .frame(maxWidth: .infinity)
+                        QuotaTimelineTable(events: window.events, spansDays: spansDays(window))
+                            .frame(width: 384)
+                            .frame(maxHeight: .infinity)
+                    }
                 } else {
-                    Text(tr("No changes today", "今天暂无变动"))
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else if isWide {
-                // 图表与表格是同一数据的两个视角,宽画布下左图右表;
-                // 两者等高撑满面板剩余高度(表格行少时边框拉满、行顶对齐)。
-                HStack(alignment: .top, spacing: 14) {
-                    QuotaTimelineChart(events: section.events, tint: section.tint)
+                    QuotaTimelineChart(events: window.events, tint: section.tint, spansDays: spansDays(window))
                         .frame(minHeight: 140, maxHeight: .infinity)
-                        .frame(maxWidth: .infinity)
-                    QuotaTimelineTable(events: section.events)
-                        .frame(width: 384)
-                        .frame(maxHeight: .infinity)
+                    QuotaTimelineTable(events: window.events, spansDays: spansDays(window))
                 }
             } else {
-                QuotaTimelineChart(events: section.events, tint: section.tint)
-                    .frame(minHeight: 140, maxHeight: .infinity)
-                QuotaTimelineTable(events: section.events)
+                Text(tr("No data for this window", "该窗口暂无数据"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .ccPanel(cornerRadius: 12)
+    }
+
+    /// 选中视角优先；未手动选择时跟随该账号主额度档；该账号没有选中窗口数据时取第一个可用窗口。
+    private var activeWindow: QuotaTimelineWindow? {
+        let kind = selectedKind ?? section.preferredKind ?? .fiveHour
+        return section.windows.first { $0.kind == kind } ?? section.windows.first
+    }
+
+    /// 事件跨天（滚动周窗口 / 跨午夜的 5H）时图表与表格自动切换为含日期的格式。
+    private func spansDays(_ window: QuotaTimelineWindow) -> Bool {
+        guard let first = window.events.first?.sampledAt,
+              let last = window.events.last?.sampledAt
+        else { return false }
+        return !Calendar.current.isDate(first, inSameDayAs: last)
+    }
+
+    @ViewBuilder
+    private func windowBoundsLabel(_ window: QuotaTimelineWindow) -> some View {
+        if let start = window.windowStart, let end = window.windowEnd {
+            Text("\(StatsFormatter.timelineTime(start, spansDays: true)) → \(StatsFormatter.timelineTime(end, spansDays: true))")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
     }
 
     private var header: some View {
@@ -1774,7 +1918,7 @@ private struct QuotaTimelineAccountPanel: View {
                 ServiceMark(color: section.tint, size: 8)
                 Text(section.title)
                     .font(.system(size: 13, weight: .semibold))
-                if let kind = section.limitKind {
+                if let kind = activeWindow?.kind ?? section.preferredKind {
                     Text(limitKindLabel(kind))
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -1784,9 +1928,23 @@ private struct QuotaTimelineAccountPanel: View {
                 }
             }
             Spacer()
-            timelineMetric(label: tr("Current", "当前"), value: currentText)
-            timelineMetric(label: tr("Today", "今日"), value: StatsFormatter.quotaDelta(section.totalDelta))
-            timelineMetric(label: tr("Latest", "最近"), value: latestText)
+            if let window = activeWindow {
+                timelineMetric(label: tr("Current", "当前"), value: currentText(window))
+                timelineMetric(
+                    label: tr("Window", "本窗口"),
+                    value: StatsFormatter.quotaDelta(window.totalDelta)
+                )
+                timelineMetric(label: tr("Latest", "最近"), value: latestText(window))
+            }
+        }
+    }
+
+    private func limitKindLabel(_ kind: QuotaLimitKind) -> String {
+        switch kind {
+        case .fiveHour: return "5H"
+        case .weekly: return "WK"
+        case .modelWeekly: return tr("MODEL", "模型")
+        case .unknown: return tr("CURRENT", "当前")
         }
     }
 
@@ -1801,29 +1959,44 @@ private struct QuotaTimelineAccountPanel: View {
         }
     }
 
-    private var currentText: String {
-        guard let value = section.currentRemaining else { return "--" }
+    private func currentText(_ window: QuotaTimelineWindow) -> String {
+        guard let value = window.currentRemaining else { return "--" }
         return "\(value)%"
     }
 
-    private var latestText: String {
-        guard let date = section.latestEventAt else { return "--" }
-        return StatsFormatter.time(date)
+    private func latestText(_ window: QuotaTimelineWindow) -> String {
+        guard let date = window.latestEventAt else { return "--" }
+        return StatsFormatter.timelineTime(date, spansDays: spansDays(window))
     }
+}
 
-    private func limitKindLabel(_ kind: QuotaLimitKind) -> String {
-        switch kind {
-        case .fiveHour: return "5H"
-        case .weekly: return "WK"
-        case .modelWeekly: return tr("MODEL", "模型")
-        case .unknown: return tr("CURRENT", "当前")
+/// 窗口切换分段的可选项；固定 5H → 每周顺序。
+@MainActor
+private enum QuotaTimelineWindowKind: Hashable {
+    case fiveHour
+    case weekly
+
+    var kind: QuotaLimitKind {
+        switch self {
+        case .fiveHour: return .fiveHour
+        case .weekly: return .weekly
         }
     }
+
+    var label: String {
+        switch self {
+        case .fiveHour: return tr("5H", "5小时")
+        case .weekly: return tr("WK", "本周")
+        }
+    }
+
+    static let pickable: [QuotaTimelineWindowKind] = [.fiveHour, .weekly]
 }
 
 private struct QuotaTimelineChart: View {
     let events: [QuotaChangeEvent]
     let tint: Color
+    var spansDays: Bool = false
 
     var body: some View {
         Chart(events) { event in
@@ -1846,9 +2019,15 @@ private struct QuotaTimelineChart: View {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine()
                     .foregroundStyle(.secondary.opacity(0.18))
-                AxisValueLabel(format: .dateTime.hour().minute())
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                if spansDays {
+                    AxisValueLabel(format: .dateTime.month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else {
+                    AxisValueLabel(format: .dateTime.hour().minute())
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .chartYAxis {
@@ -1893,6 +2072,7 @@ private struct QuotaTimelineChart: View {
 
 private struct QuotaTimelineTable: View {
     let events: [QuotaChangeEvent]
+    var spansDays: Bool = false
 
     /// 行数超过该值时,表体固定高度内部滚动(表头固定),保证面板高度稳定。
     private static let maxVisibleRows = 8
@@ -1947,12 +2127,12 @@ private struct QuotaTimelineTable: View {
 
     private func row(_ event: QuotaChangeEvent) -> some View {
         HStack {
-            tableText(StatsFormatter.time(event.sampledAt), width: 82, alignment: .leading)
+            tableText(StatsFormatter.timelineTime(event.sampledAt, spansDays: spansDays), width: 82, alignment: .leading)
             tableText(StatsFormatter.quotaDelta(event.deltaPercent), width: 82, alignment: .trailing)
                 .foregroundStyle(event.deltaPercent < 0 ? Color.red : Color.green)
             tableText("\(event.afterRemainingPercent)%", width: 104, alignment: .trailing)
                 .foregroundStyle(statusColor(remainingPercent: Double(event.afterRemainingPercent), tint: .secondary))
-            tableText(StatsFormatter.resetTime(event.resetsAt), width: 96, alignment: .trailing)
+            tableText(StatsFormatter.resetTime(event.resetsAt, spansDays: spansDays), width: 96, alignment: .trailing)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
@@ -2058,12 +2238,22 @@ private struct QuotaTimelineSection: Identifiable {
     let accountKey: String
     let title: String
     let tint: Color
-    let limitKind: QuotaLimitKind?
+    /// 账号当前主额度窗口类型；用户未手动选择窗口视角时作为默认档。
+    let preferredKind: QuotaLimitKind?
+    let windows: [QuotaTimelineWindow]
+    var isLoading: Bool = false
+}
+
+/// 单个标准窗口（5H / 每周）的时间线数据：最新样本、窗口边界与变动事件。
+private struct QuotaTimelineWindow: Identifiable {
+    var id: QuotaLimitKind { kind }
+    let kind: QuotaLimitKind
     let currentRemaining: Int?
     let totalDelta: Int
     let latestEventAt: Date?
+    let windowStart: Date?
+    let windowEnd: Date?
     let events: [QuotaChangeEvent]
-    var isLoading: Bool = false
 }
 
 // MARK: - Formatter
@@ -2235,9 +2425,26 @@ enum StatsFormatter {
         timeFormatter.string(from: date)
     }
 
+    private static let resetTimeWithDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM-dd HH:mm"
+        return f
+    }()
+
     static func resetTime(_ date: Date?) -> String {
         guard let date else { return "--" }
         return time(date)
+    }
+
+    static func resetTime(_ date: Date?, spansDays: Bool) -> String {
+        guard let date else { return "--" }
+        return timelineTime(date, spansDays: spansDays)
+    }
+
+    /// 时间线使用的时刻格式：同一窗口跨天（滚动周窗口 / 跨午夜 5H）时带 MM-dd 前缀。
+    static func timelineTime(_ date: Date, spansDays: Bool) -> String {
+        spansDays ? resetTimeWithDayFormatter.string(from: date) : time(date)
     }
 
     static func quotaDelta(_ value: Int) -> String {
