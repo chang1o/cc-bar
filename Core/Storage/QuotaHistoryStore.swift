@@ -136,10 +136,11 @@ enum QuotaHistoryStore {
         let legacyKey = "claude:primary"
         guard accountKey != legacyKey else { return payload }
         var next = payload
-        // seriesKey = "\(accountKey)|\(kind)"；仅迁移恰好是旧常量键（或其后缀系列）的条目，
-        // 已哈希账号键形如 "claude:primary:hash|fiveHour"，前缀为 "claude:primary:"，不会误匹配。
+        // seriesKey = "\(accountKey)|\(kind)"；仅迁移恰好是旧常量键 "claude:primary" 的条目，
+        // 与下方 events 的迁移条件一致；已哈希账号键（"claude:primary:hash"）与
+        // 其他账号的系列（如 "codex:primary:*"）一律保留，不能误迁。
         next.lastSamples = next.lastSamples.reduce(into: [:]) { result, entry in
-            guard !entry.value.accountKey.hasPrefix(legacyKey + ":") else {
+            guard entry.value.accountKey == legacyKey else {
                 result[entry.key] = entry.value
                 return
             }

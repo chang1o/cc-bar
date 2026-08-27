@@ -460,6 +460,30 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertTrue(migrated.events.allSatisfy { $0.accountKey == accountKey })
     }
 
+    func testQuotaHistoryMigrationKeepsCodexSeriesUntouched() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let codexKey = "codex:primary:505d1da1-4b83-4209-bae2-8fe138250019"
+        let accountKey = QuotaHistoryAccountKey.claudePrimary(email: "user@example.com")
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        for (offset, used) in [(0.0, 10.0), (60.0, 20.0)] {
+            payload = QuotaHistoryStore.record(
+                payload: payload,
+                accountKey: codexKey,
+                app: .codex,
+                kind: .codexPrimary,
+                snapshot: snapshot(kind: .fiveHour, usedPercent: used, reset: start.addingTimeInterval(18_000)),
+                sampledAt: start.addingTimeInterval(offset)
+            )
+        }
+
+        let migrated = QuotaHistoryStore.migratingLegacyClaudeAccountKey(payload, to: accountKey)
+
+        let codexSeries = QuotaHistoryStore.seriesKey(accountKey: codexKey, limitKind: .fiveHour)
+        XCTAssertEqual(migrated.lastSamples[codexSeries]?.accountKey, codexKey, "Codex 系列不能被 Claude 迁移改写")
+        XCTAssertEqual(migrated.events.count, 1)
+        XCTAssertTrue(migrated.events.allSatisfy { $0.accountKey == codexKey })
+    }
+
     func testCycleStoreRecordsFiveHourAndWeeklyButExcludesModelWeekly() {
         let sampledAt = Date(timeIntervalSince1970: 1_000)
         let fiveHourEnd = sampledAt.addingTimeInterval(18_000)
