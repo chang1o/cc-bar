@@ -14,36 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 读取发布说明
-        id: release_notes
+      - name: 校验发布说明
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           notes_path="release-notes/${TAG}.md"
-          release_body="${RUNNER_TEMP}/release-notes.md"
-
-          if [[ ! -s "$notes_path" ]]; then
+          if [[ ! -s "$notes_path" ]] || ! grep -q '[^[:space:]]' "$notes_path"; then
             echo "缺少 ${notes_path}；请在创建发布 tag 前补充面向用户的更新说明。" >&2
             exit 1
           fi
-
-          title_line="$(head -n 1 "$notes_path")"
-          if [[ ! "$title_line" =~ ^\<\!--\ title:\ .+\ --\>$ ]]; then
-            echo "${notes_path} 的首行必须是 <!-- title: 本版核心价值 -->。" >&2
-            exit 1
-          fi
-
-          title="${title_line#<!-- title: }"
-          title="${title% -->}"
-          tail -n +2 "$notes_path" > "$release_body"
-          if ! grep -q '[^[:space:]]' "$release_body"; then
-            echo "${notes_path} 缺少 Release 正文。" >&2
-            exit 1
-          fi
-
-          printf 'release_name=CCBar %s · %s\n' "$TAG" "$title" >> "$GITHUB_OUTPUT"
 
       - name: 选择最新 Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -53,12 +34,28 @@ jobs:
       - name: 构建并打包(ad-hoc 签名,无需证书)
         run: ./scripts/build.sh
 
+      - name: 生成版本清单(供 App 无限流检查更新)
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # App 主路读取 releases/latest/download/version.json,走 302 + CDN,不占用
+          # GitHub API 的匿名额度(60 次/小时/IP)。见 Core/UpdateChecker.swift。
+          printf '{"tag":"%s","version":"%s","page":"%s"}\n' \
+            "$TAG" \
+            "${TAG#v}" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            > dist/version.json
+          cat dist/version.json
+
       - name: 上传到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ steps.release_notes.outputs.release_name }}
-          body_path: ${{ runner.temp }}/release-notes.md
+          # 不设 name:Release 标题沿用默认的 tag 名(如 v1.0.40)。
+          body_path: release-notes/${{ github.ref_name }}.md
           files: |
             dist/CCBar.dmg
             dist/CCBar.app.zip
+            dist/version.json
           generate_release_notes: false
