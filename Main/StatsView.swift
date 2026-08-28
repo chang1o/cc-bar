@@ -1967,13 +1967,7 @@ private struct QuotaTimelineAccountPanel: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if let window = activeWindow {
-                if window.periods.isEmpty {
-                    loadingOrEmpty(message: tr("No data for this window", "该窗口暂无数据"))
-                } else {
-                    ForEach(window.periods) { period in
-                        periodContent(period, window: window)
-                    }
-                }
+                windowContent(window)
             } else {
                 loadingOrEmpty(message: tr("No data for this window", "该窗口暂无数据"))
             }
@@ -2057,50 +2051,90 @@ private struct QuotaTimelineAccountPanel: View {
     }
 
     @ViewBuilder
-    private func periodContent(_ period: QuotaTimelinePeriod, window: QuotaTimelineWindow) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(periodLabel(period.kind))
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text("\(StatsFormatter.timelineTime(period.start, spansDays: window.kind == .weekly)) → \(StatsFormatter.timelineTime(period.end, spansDays: window.kind == .weekly))")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Text(StatsFormatter.quotaDelta(period.totalDelta))
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
+    private func windowContent(_ window: QuotaTimelineWindow) -> some View {
+        let entries = mergedEntries(in: window)
 
-            if period.entries.isEmpty {
-                // 固定高度：空周期若跟着 maxHeight .infinity 一起等分，会把另一个有数据
-                // 的周期压到图表最小高度。
-                loadingOrEmpty(message: tr("No data in this period", "该周期暂无数据"))
-                    .frame(height: 80)
-            } else if isWide {
-                HStack(alignment: .top, spacing: 14) {
-                    timelineChart(period, isWeekly: window.kind == .weekly)
-                        .frame(minHeight: 140, maxHeight: .infinity)
-                        .frame(maxWidth: .infinity)
-                    QuotaTimelineTable(entries: period.entries, spansDays: window.kind == .weekly)
-                        .frame(width: 384)
-                        .frame(maxHeight: .infinity)
-                }
-            } else {
-                timelineChart(period, isWeekly: window.kind == .weekly)
-                    .frame(minHeight: 140, maxHeight: .infinity)
-                QuotaTimelineTable(entries: period.entries, spansDays: window.kind == .weekly)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(window.periods) { period in
+                periodSummary(period, window: window)
             }
+        }
+
+        if entries.isEmpty {
+            loadingOrEmpty(message: tr("No data for this window", "该窗口暂无数据"))
+                .frame(height: 80)
+        } else if isWide {
+            HStack(alignment: .top, spacing: 14) {
+                timelineChart(entries, window: window)
+                    .frame(minHeight: 140, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity)
+                QuotaTimelineTable(entries: entries, spansDays: window.kind == .weekly)
+                    .frame(width: 384)
+                    .frame(maxHeight: .infinity)
+            }
+        } else {
+            timelineChart(entries, window: window)
+                .frame(minHeight: 140, maxHeight: .infinity)
+            QuotaTimelineTable(entries: entries, spansDays: window.kind == .weekly)
         }
     }
 
-    private func timelineChart(_ period: QuotaTimelinePeriod, isWeekly: Bool) -> some View {
+    /// 周视图的当前/上一周期共用一张图和一张表；合并时给每个周期的窗口序号加偏移，
+    /// 保留跨额度窗口断线语义，不把不同周期的最后一点和第一点连成假回升。
+    private func mergedEntries(in window: QuotaTimelineWindow) -> [QuotaTimelineEntry] {
+        var result: [QuotaTimelineEntry] = []
+        var windowIndexOffset = 0
+
+        for period in window.periods {
+            let periodEntries = period.entries
+            result.append(contentsOf: periodEntries.map { entry in
+                var merged = entry
+                merged.windowIndex += windowIndexOffset
+                return merged
+            })
+
+            let periodWindowCount = (periodEntries.map(\.windowIndex).max() ?? -1) + 1
+            windowIndexOffset += periodWindowCount
+        }
+
+        return result.sorted { $0.sampledAt < $1.sampledAt }
+    }
+
+    private func periodSummary(_ period: QuotaTimelinePeriod, window: QuotaTimelineWindow) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(periodLabel(period.kind))
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text("\(StatsFormatter.timelineTime(period.start, spansDays: window.kind == .weekly)) → \(StatsFormatter.timelineTime(period.end, spansDays: window.kind == .weekly))")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+            Spacer()
+            Text(StatsFormatter.quotaDelta(period.totalDelta))
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func timelineChart(
+        _ entries: [QuotaTimelineEntry],
+        window: QuotaTimelineWindow
+    ) -> some View {
         QuotaTimelineChart(
-            entries: period.entries,
+            entries: entries,
             tint: section.tint,
-            spansDays: isWeekly,
-            domain: period.start...period.end
+            spansDays: window.kind == .weekly,
+            domain: timelineDomain(for: window)
         )
+    }
+
+    private func timelineDomain(for window: QuotaTimelineWindow) -> ClosedRange<Date> {
+        guard let start = window.periods.map(\.start).min(),
+              let end = window.periods.map(\.end).max()
+        else {
+            let now = Date()
+            return now...now.addingTimeInterval(1_800)
+        }
+        return start...max(start, end)
     }
 
     private func periodLabel(_ kind: QuotaTimelinePeriodKind) -> String {
