@@ -14,6 +14,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 读取发布说明
+        id: release_notes
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes_path="release-notes/${TAG}.md"
+          release_body="${RUNNER_TEMP}/release-notes.md"
+
+          if [[ ! -s "$notes_path" ]]; then
+            echo "缺少 ${notes_path}；请在创建发布 tag 前补充面向用户的更新说明。" >&2
+            exit 1
+          fi
+
+          title_line="$(head -n 1 "$notes_path")"
+          if [[ ! "$title_line" =~ ^\<\!--\ title:\ .+\ --\>$ ]]; then
+            echo "${notes_path} 的首行必须是 <!-- title: 本版核心价值 -->。" >&2
+            exit 1
+          fi
+
+          title="${title_line#<!-- title: }"
+          title="${title% -->}"
+          tail -n +2 "$notes_path" > "$release_body"
+          if ! grep -q '[^[:space:]]' "$release_body"; then
+            echo "${notes_path} 缺少 Release 正文。" >&2
+            exit 1
+          fi
+
+          printf 'release_name=CCBar %s · %s\n' "$TAG" "$title" >> "$GITHUB_OUTPUT"
+
       - name: 选择最新 Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -25,7 +56,9 @@ jobs:
       - name: 上传到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.release_notes.outputs.release_name }}
+          body_path: ${{ runner.temp }}/release-notes.md
           files: |
             dist/CCBar.dmg
             dist/CCBar.app.zip
-          generate_release_notes: true
+          generate_release_notes: false
