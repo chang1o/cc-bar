@@ -1533,6 +1533,8 @@ private struct KPICard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // delta 放在 Label 行右侧：利用标题行原有留白，让 22pt 主值独占整行，
+            // 服务变多、卡片被压窄时主值不再被 delta 挤掉。
             HStack(spacing: 4) {
                 if let tint {
                     ServiceMark(color: tint, size: 6, cornerRadius: 1.5)
@@ -1541,20 +1543,21 @@ private struct KPICard: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(value)
-                    .font(.system(size: 22, weight: .semibold))
-                    .kerning(-0.5)
-                    .monospacedDigit()
-                    .foregroundStyle(tint ?? .primary)
+                Spacer(minLength: 6)
                 if let delta, delta != 0 {
                     Text(formatDelta(delta))
                         .font(.system(size: 11, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(delta >= 0 ? Color.red : Color.green)
+                        .lineLimit(1)
                 }
             }
+            Text(value)
+                .font(.system(size: 22, weight: .semibold))
+                .kerning(-0.5)
+                .monospacedDigit()
+                .foregroundStyle(tint ?? .primary)
+                .lineLimit(1)
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 14)
@@ -1566,7 +1569,7 @@ private struct KPICard: View {
     private func formatDelta(_ value: Double) -> String {
         let arrow = value >= 0 ? "↑" : "↓"
         let abs = Swift.abs(value)
-        return "\(arrow) \(String(format: "%.1f", abs))%"
+        return "\(arrow)\(String(format: "%.1f", abs))%"
     }
 }
 

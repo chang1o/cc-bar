@@ -203,7 +203,7 @@ struct PopoverRootView: View {
             logoName: provider.logoName,
             fallback: provider.fallback,
             snapshot: snap,
-            error: provider.app == .cursor ? nil : appState.quotaError(for: provider.app),
+            error: providerDisplayError(for: provider.app),
             weekSpend: weekSpend(for: provider.app),
             todayCost: todayCost(for: provider.app),
             serviceStatus: serviceStatus(for: provider.app),
@@ -211,10 +211,26 @@ struct PopoverRootView: View {
         )
     }
 
+    private func providerDisplayError(for app: QuotaApp) -> String? {
+        guard let error = appState.quotaError(for: app) else { return nil }
+        guard app == .cursor else { return error }
+        return tr("refresh failed", "刷新失败")
+    }
+
     private func weekSpend(for app: QuotaApp) -> Decimal? {
-        guard let usageApp = app.usageApp else { return nil }
         let (from, to) = Self.weekBounds()
+        if app == .cursor { return cursorCost(from: from, to: to) }
+        guard let usageApp = app.usageApp else { return nil }
         let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
+        return totals.costUSD
+    }
+
+    /// Cursor 没有本地日志费用；只有远端完整覆盖区间且费用字段完整时，
+    /// 才复用现有 today / this week 展示位，避免把部分金额当成完整合计。
+    private func cursorCost(from: Date, to: Date) -> Decimal? {
+        guard appState.usageService.isCursorRemoteUsageCovered(from..<to) else { return nil }
+        let totals = appState.usageService.aggregator.totals(app: .cursor, from: from, to: to)
+        guard !totals.costIncomplete else { return nil }
         return totals.costUSD
     }
 
@@ -222,8 +238,13 @@ struct PopoverRootView: View {
         switch app {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
-        case .cursor: nil
+        case .cursor: cursorTodayCost
         }
+    }
+
+    private var cursorTodayCost: Decimal? {
+        let (from, to) = Self.todayBounds()
+        return cursorCost(from: from, to: to)
     }
 
     private func serviceStatus(for app: QuotaApp) -> ServiceStatus? {
@@ -285,6 +306,13 @@ struct PopoverRootView: View {
     }
 
     // MARK: Helpers
+
+    private static func todayBounds(now: Date = Date()) -> (Date, Date) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let start = cal.startOfDay(for: now)
+        return (start, cal.date(byAdding: .day, value: 1, to: start) ?? start)
+    }
 
     private static func weekBounds(now: Date = Date()) -> (Date, Date) {
         var cal = Calendar(identifier: .gregorian)

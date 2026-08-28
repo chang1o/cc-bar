@@ -21,8 +21,8 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
     let vendor: String
     let logoName: String
     let fallback: String
-    /// Popover 是否展示今日 / 本周花费。Cursor 只展示额度 Provider 数据，
-    /// 不向既有卡片增加远端计量口径。
+    /// Popover 是否展示今日 / 本周花费。Codex 与 Claude 是本机日志估算，
+    /// Cursor 是账号远端计量；三者复用同一组既有费用展示位。
     let showsCost: Bool
 
     var id: QuotaApp { app }
@@ -50,7 +50,7 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "Cursor",
             logoName: "cursor",
             fallback: "C",
-            showsCost: false
+            showsCost: true
         ),
     ]
 }

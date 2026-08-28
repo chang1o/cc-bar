@@ -6,7 +6,7 @@
 
 在 cc-bar 中新增 Cursor 支持，展示形态对齐现有 Provider，但明确区分“远端账户数据”和“本机日志数据”：
 
-- **Popover**：展示 Cursor 的 Total / Auto / API 剩余额度、计费周期与重置时间、套餐名。
+- **Popover**：展示 Cursor 的 Total / Auto / API 剩余额度、计费周期、重置时间、套餐名，并复用现有今日 / 本周费用展示位。
 - **主窗口统计页**：展示 Cursor 账户级 Token 和服务端计量消耗，支持现有日 / 周 / 月等时间范围。
 - **设置**：Cursor Provider 总开关、菜单栏、悬浮窗、统计服务各有独立入口。含义与既有 Provider 一致——菜单栏与悬浮窗彼此独立，统计服务独立于额度 Provider（可以只看 Cursor 统计而不显示额度卡片）；但菜单栏 / 悬浮窗是 Provider 总开关的子开关，总开关关闭时不会绕过它单独显示。完整层级见 [界面布局.md](界面布局.md) §4.5 Accounts「开关层级语义」。
 
@@ -192,8 +192,8 @@ Cookie: WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
 
 1. 首次成功：从 `billingCycleStart` 所在的本地自然日 0 点开始拉取，确保今天 / 本周 / 本月尽快可用，同时避免首日只有半个日桶。
 2. 周期刷新：从“当前本地自然日往前两天的 0 点”重拉到现在，以修正迟到事件；完整成功后按自然日替换这三个受影响日桶。不能用未对齐日界线的 48 小时区间直接覆盖日聚合桶。
-3. 用户选择尚未覆盖的更早范围：按月分片懒加载缺失区间；加载完成前显示 loading，不先发布部分总计。
-4. “全部”范围：按月向前懒加载，并显示明确的已覆盖起止时间；尚未完成全部回溯时标记 Partial，不能把当前缓存误称为全部历史。
+3. 用户选择尚未覆盖的更早有限范围：按月分片静默懒加载缺失区间；加载完成前不先发布部分总计，也不新增 loading 状态行。
+4. “全部”范围：只使用现有缓存，不发起无界回溯；不能把当前缓存误称为完整历史，也不显示覆盖起止时间或 Partial 文案。
 5. 缓存记录 `accountID`、完整覆盖区间、各分片状态、`fetchedAt` 与聚合桶。账号变化时先隔离旧缓存，不能显示“新账号 + 旧账号用量”。
 
 网络失败、401、429、解析失败或分页不完整时，保留上一份完整快照，不覆盖为半截或空数据。
@@ -209,7 +209,7 @@ Cookie: WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
   - `snapshot()` / `totals(...)`：合并本地与远端分区，仅供 UI 展示。
 - 本地 full rebuild、价格指纹变化或 scan cache 失效只能重建本地分区，不得清空 Cursor 远端分区。
 - Cursor 使用服务端费用，不参与本地 Pricing Catalog 指纹和价格重算。
-- `publishTotals` / `todayCost(for: .cursor)` 若走合并快照，其语义是“全设备今日计量消耗”，与 Popover“Cursor 不显示本机 today/week cost”的口径要对齐；不得把它当作本机成本喂给任何现有 today cost 展示位。
+- `publishTotals` / `todayCost(for: .cursor)` 若走合并快照，其语义是“全设备今日计量消耗”；Popover 复用既有 today/week cost 展示位，但不得把它标成或回退为本机成本。
 
 远端缓存不与本地 conversation / cycle rollup 共用 generation，也不进入对话统计；Cursor Dashboard 事件没有本机会话 ID，不能伪造 conversationKey。
 
@@ -292,7 +292,7 @@ WorkosCursorSessionToken=<userID>%3A%3A<accessToken>
 | `Core/Storage/ScanCache.swift` | 仍只保存本地扫描状态；确认 Cursor 不进入本地 generation / pricing fingerprint |
 | `Core/Storage/Settings.swift` | `providerDisplaySettings` 和 `usageServiceVisibility` 自动补默认值；可增加 `showCursor` 语义入口，但不新增三组平行存储 key |
 | `Main/DesignSystem.swift` | `QuotaApp` / `UsageApp` 的 Cursor 名称与识别色 |
-| `MenuBar/PopoverRootView.swift` | Cursor 账号副标题、三条额度与 Unlimited；不增加费用、服务状态或错误文案分支 |
+| `MenuBar/PopoverRootView.swift` | Cursor 账号副标题、三条额度与 Unlimited；复用既有今日 / 本周费用及错误状态样式，不增加 Cursor 专属 tooltip，技术错误只显示通用失败状态 |
 | `MenuBar/MenuBarLabel.swift` | Cursor limit 选择与稳定 ID 去重 |
 | `Floating/` | Cursor Provider 行和 Unlimited / 空态 |
 | `Main/StatsView.swift` | Cursor filter、服务副标题、固定 DailySample 字段或等价通用化；Cursor 单服务及全部服务的费用完整性占位，历史按需静默补拉 |
@@ -317,7 +317,7 @@ Codex → Claude Code → Cursor → Antigravity
 - **On-demand**：`individualUsage.onDemand.used` 是额外按量用量，属于额度 / 账单摘要，不与事件 `chargedCents` 重复相加。
 - **模型标价**：`tokenUsage.totalCents` 可用于诊断或未来单独展示，不写入同一个 `costUSD` 口径。
 - **覆盖范围**：超出已完整拉取区间时静默补拉；不能用局部缓存回答“全部”，也不把覆盖状态显示成页面提示。
-- **来源说明**：数据来源与费用语义只保留在技术文档，不在 Stats 或 Popover 增加 Cursor 专属标签、tooltip 或状态行。
+- **来源说明**：数据来源与费用语义只保留在技术文档；Popover 复用既有费用展示位，但不在 Stats 或 Popover 增加 Cursor 专属标签、tooltip 或状态行。
 
 ## 8. 风险与降级
 
@@ -328,7 +328,7 @@ Codex → Claude Code → Cursor → Antigravity
 | 分页重复或总数变化 | 按服务端总数和相邻页边界严格校验；不发布半截数据 |
 | 单分片超过 20 万事件 | 自动二分日期范围；单日仍超限则报不完整 |
 | 账号切换 | 以 JWT subject 优先、email 回退识别；缓存按 accountID 隔离 |
-| `chargedCents` 缺失 | Token 可展示，费用为 `—` 并标记不完整，不回退到标价成本 |
+| `chargedCents` 缺失 | Token 可展示，统计费用显示 `--`，Popover 费用沿用既有 `—` 占位；不回退到标价成本 |
 | 本地 full rebuild | 只重建本地分区，Cursor 远端快照不丢失 |
 | Cursor 未安装 / 未登录 | 沿用既有 Provider 的未检测到 / 空值状态，不增加操作提示，不清空已有账号的最后完整快照 |
 | 429 | 使用现有退避；手动刷新不绕过 |
@@ -346,7 +346,7 @@ Codex → Claude Code → Cursor → Antigravity
 ## 10. 验收标准
 
 - Cursor 顺序为 Codex → Claude Code → Cursor → Antigravity。
-- Popover 能分别显示 Total / Auto / API；三条 ID 不冲突，缺失字段不伪造 0%，Unlimited 有明确文本。
+- Popover 能分别显示 Total / Auto / API，并在既有今日 / 本周费用位置展示完整的 Cursor 远端计量金额；三条 ID 不冲突，缺失字段不伪造 0%，Unlimited 有明确文本。
 - Pro / Pro+ / Ultra、Team / Enterprise 的 `plan`、`overall`、`pooled` 形态都有解析测试。
 - Cursor.app 登录有效时可只读拉取；token 过期或 401 时不调用 OAuth、不写 SQLite / Keychain，并保留旧快照。
 - 同一完整用量窗口连续刷新两次，Token、requestCount 和费用不会翻倍。
