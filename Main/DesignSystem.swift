@@ -12,6 +12,7 @@ extension QuotaApp {
         switch self {
         case .codex: .codexAccent
         case .claude: .claudeAccent
+        case .cursor: .gray
         }
     }
 }
@@ -23,6 +24,7 @@ extension UsageApp {
         switch self {
         case .codex: .codexAccent
         case .claude: .claudeAccent
+        case .cursor: .gray
         case .pi: .piAccent
         case .opencode: .opencodeAccent
         }
@@ -32,6 +34,7 @@ extension UsageApp {
         switch self {
         case .codex: "Codex"
         case .claude: "Claude Code"
+        case .cursor: "Cursor"
         case .pi: "Pi"
         case .opencode: "OpenCode"
         }

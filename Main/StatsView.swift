@@ -110,6 +110,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
     case all
     case codex
     case claude
+    case cursor
     case pi
     case opencode
 
@@ -118,6 +119,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return "All"
         case .codex: return "Codex"
         case .claude: return "Claude Code"
+        case .cursor: return "Cursor"
         case .pi: return "Pi"
         case .opencode: return "OpenCode"
         }
@@ -128,6 +130,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return "全部"
         case .codex: return "Codex"
         case .claude: return "Claude Code"
+        case .cursor: return "Cursor"
         case .pi: return "Pi"
         case .opencode: return "OpenCode"
         }
@@ -138,6 +141,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return nil
         case .codex: return .codexAccent
         case .claude: return .claudeAccent
+        case .cursor: return .gray
         case .pi: return .piAccent
         case .opencode: return .opencodeAccent
         }
@@ -148,6 +152,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return nil
         case .codex: return .codex
         case .claude: return .claude
+        case .cursor: return .cursor
         case .pi: return .pi
         case .opencode: return .opencode
         }
@@ -159,6 +164,23 @@ enum StatsViewMode: Hashable {
     case conversations
     case cycles
     case timeline
+}
+
+private struct CursorHistoryRequest: Hashable {
+    let accountID: String
+    let from: Date
+    let to: Date
+
+    var range: Range<Date> { from..<to }
+}
+
+private enum CursorUsageCoverageState {
+    case hidden
+    case unavailable
+    /// 已登录但远端用量拉取失败。必须和"未登录"分开，否则会提示用户去做已经做过的事。
+    case failed(String)
+    case loading
+    case partial
 }
 
 /// 「按提供商」面板的排序键；`other` 组在任何排序下都固定排最后。
@@ -195,8 +217,8 @@ struct StatsView: View {
     @State private var customTo: Date = Calendar.current.startOfDay(for: Date())
     @State private var providerSort: ProviderSort = .cost
     @State private var expandedProvider: ModelProvider?
-    /// 时间线窗口视角：nil = 跟随各账号当前主额度，否则固定看 5H / 每周。
-    @State private var timelineWindow: QuotaLimitKind?
+    /// 时间线窗口视角全局统一，避免 Codex 与 Claude 默认落在不同口径。
+    @State private var timelineWindow: QuotaLimitKind = .fiveHour
 
     var body: some View {
         HStack(spacing: 0) {
@@ -237,6 +259,10 @@ struct StatsView: View {
         }
         .onChange(of: range) { _, _ in expandedProvider = nil }
         .onChange(of: serviceFilter) { _, _ in expandedProvider = nil }
+        .task(id: cursorHistoryRequest) {
+            guard let request = cursorHistoryRequest else { return }
+            await appState.loadCursorUsageHistory(for: request.range)
+        }
     }
 
     /// 本地日志读取或聚合持久化失败时必须在统计页可见，并给出直接恢复入口。
@@ -290,6 +316,7 @@ struct StatsView: View {
         VStack(alignment: .leading, spacing: 12) {
             topBar
             if range == .custom { customRangeRow }
+            cursorUsageCoveragePanel
 
             kpiRow.padding(.top, 6)
 
@@ -342,6 +369,7 @@ struct StatsView: View {
         switch app {
         case .codex: return .codex
         case .claude: return .claude
+        case .cursor: return .cursor
         case .pi: return .pi
         case .opencode: return .opencode
         }
@@ -349,8 +377,13 @@ struct StatsView: View {
 
     /// 设置里被关闭的服务,其 sidebar 项不再显示;若当前选中了被关闭的服务则回退到全部。
     private func reconcileServiceFilter() {
+        // Cursor Dashboard 没有本机会话 ID；对话页不能伪造或查询 Cursor 对话。
+        if viewMode == .conversations, serviceFilter == .cursor {
+            serviceFilter = .all
+            return
+        }
         if case .all = serviceFilter { return }
-        if let app = serviceFilter.usageApp, !SettingsStore.shared.isUsageServiceVisible(app) {
+        if let app = serviceFilter.usageApp, !SettingsStore.shared.isUsageServiceEffectivelyVisible(app) {
             serviceFilter = .all
         }
     }
@@ -536,7 +569,8 @@ struct StatsView: View {
             chinese: "总花费",
             value: StatsFormatter.tierCost(
                 currentTotalsAll.costUSD,
-                hasUnpricedUsage: currentTotalsAll.hasUnpricedUsage
+                hasUnpricedUsage: currentTotalsAll.hasUnpricedUsage,
+                costIncomplete: currentTotalsAll.costIncomplete
             ),
             delta: costDelta(current: currentTotalsAll, previous: previousTotalsAll),
             tint: nil,
@@ -553,12 +587,14 @@ struct StatsView: View {
                 ? "—"
                 : StatsFormatter.tierCost(
                     currentTotals(app).costUSD,
-                    hasUnpricedUsage: currentTotals(app).hasUnpricedUsage
+                    hasUnpricedUsage: currentTotals(app).hasUnpricedUsage,
+                    costIncomplete: currentTotals(app).costIncomplete
                 ),
             delta: isDimmed ? nil : costDelta(current: currentTotals(app), previous: previousTotals(app)),
             tint: app.tintColor,
             dimmed: isDimmed
         )
+        .help(app == .cursor ? cursorMeteringHint : "")
     }
 
     // MARK: Token breakdown panel
@@ -692,12 +728,14 @@ struct StatsView: View {
             speed: currentSpeedBreakdown(app)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
+        .help(app == .cursor ? cursorMeteringHint : "")
     }
 
     private func serviceSubtitle(_ app: UsageApp) -> String {
         switch app {
         case .codex: return "OpenAI"
         case .claude: return "Anthropic"
+        case .cursor: return "Cursor"
         case .pi: return "pi.dev"
         case .opencode: return "opencode.ai"
         }
@@ -755,7 +793,8 @@ struct StatsView: View {
                         .foregroundStyle(.primary)
                     Text(StatsFormatter.tierCost(
                         group.totals.costUSD,
-                        hasUnpricedUsage: group.totals.hasUnpricedUsage
+                        hasUnpricedUsage: group.totals.hasUnpricedUsage,
+                        costIncomplete: group.totals.costIncomplete
                     ))
                         .font(.system(size: 12.5, weight: .semibold))
                         .monospacedDigit()
@@ -830,7 +869,8 @@ struct StatsView: View {
                     .monospacedDigit()
                 Text(StatsFormatter.tierCost(
                     row.totals.costUSD,
-                    hasUnpricedUsage: row.totals.hasUnpricedUsage
+                    hasUnpricedUsage: row.totals.hasUnpricedUsage,
+                    costIncomplete: row.totals.costIncomplete
                 ))
                     .font(.system(size: 12, weight: .semibold))
                     .monospacedDigit()
@@ -950,14 +990,14 @@ struct StatsView: View {
                 Text(tr("Quota Timeline", "额度时间线"))
                     .font(.system(size: 18, weight: .semibold))
                 Text(tr(
-                    "Only quota changes are shown. Each window follows quota resets; the last 15 days are kept.",
-                    "仅展示额度发生变化的时间点；窗口沿额度重置时刻滚动，保留最近 15 天数据。"
+                    "5H shows today. Weekly shows the current and previous quota cycles.",
+                    "5小时展示今天；周视图展示当前和上一额度周期。"
                 ))
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Picker(tr("Quota window", "额度窗口"), selection: timelineWindowBinding) {
+            Picker(tr("Quota window", "额度窗口"), selection: $timelineWindow) {
                 ForEach(QuotaTimelineWindowKind.pickable, id: \.self) { item in
                     Text(item.label).tag(item.kind)
                 }
@@ -971,31 +1011,9 @@ struct StatsView: View {
         }
     }
 
-    /// 用户未手动选择窗口视角时：未固定选择跟随各账号主额度，Picker 显示首个账号的主额度档。
-    private var defaultTimelineWindowKind: QuotaLimitKind {
-        if let primary = appState.codexQuota?.primaryLimit?.kind,
-           primary == .fiveHour || primary == .weekly
-        {
-            return primary
-        }
-        if let primary = appState.claudeQuota?.primaryLimit?.kind,
-           primary == .fiveHour || primary == .weekly
-        {
-            return primary
-        }
-        return .fiveHour
-    }
-
-    private var timelineWindowBinding: Binding<QuotaLimitKind> {
-        Binding(
-            get: { timelineWindow ?? defaultTimelineWindowKind },
-            set: { timelineWindow = $0 }
-        )
-    }
-
     private var timelineSections: [QuotaTimelineSection] {
-        // pi / opencode 无订阅额度，时间线仅展示 codex / claude 的额度变化。
-        guard serviceFilter != .pi, serviceFilter != .opencode else { return [] }
+        // Cursor / Pi / OpenCode 没有本地可绘制的额度时间线。
+        guard serviceFilter != .cursor, serviceFilter != .pi, serviceFilter != .opencode else { return [] }
         var sections: [QuotaTimelineSection] = []
 
         if serviceFilter != .claude {
@@ -1056,7 +1074,6 @@ struct StatsView: View {
             accountKey: accountKey,
             title: title,
             tint: tint,
-            preferredKind: snapshot?.primaryLimit?.kind,
             windows: windows,
             isLoading: isLoading
         )
@@ -1075,15 +1092,15 @@ struct StatsView: View {
         let snapshotWindow = window(of: kind, in: snapshot)
         guard sample != nil || !events.isEmpty || snapshotWindow != nil else { return nil }
 
-        let bounds = windowBounds(events: events, sample: sample, kind: kind)
         return QuotaTimelineWindow(
             kind: kind,
             currentRemaining: sample?.remainingPercent ?? roundedRemaining(snapshotWindow),
-            totalDelta: windowDelta(events: events, windowStart: bounds?.start),
-            latestEventAt: events.last?.sampledAt,
-            windowStart: bounds?.start,
-            windowEnd: bounds?.end,
-            events: events
+            latestSampleAt: sample?.sampledAt,
+            periods: QuotaHistoryStore.timelinePeriods(
+                payload: appState.quotaHistory,
+                accountKey: accountKey,
+                limitKind: kind
+            )
         )
     }
 
@@ -1098,41 +1115,6 @@ struct StatsView: View {
         case .fiveHour: return snapshot.fiveHourLimit?.window
         case .weekly: return snapshot.weeklyLimit?.window
         case .modelWeekly, .unknown: return nil
-        }
-    }
-
-    /// 窗口边界取自该系列最新样本的重置时刻：终点 = resetsAt，起点 = resetsAt − 窗口长度。
-    private func windowBounds(
-        events: [QuotaChangeEvent],
-        sample: QuotaHistorySample?,
-        kind: QuotaLimitKind
-    ) -> (start: Date, end: Date)? {
-        let resetsAt = events.last?.resetsAt ?? sample?.resetsAt
-        guard let resetsAt, let seconds = windowSeconds(for: kind) else { return nil }
-        return (resetsAt.addingTimeInterval(-TimeInterval(seconds)), resetsAt)
-    }
-
-    private func windowSeconds(for kind: QuotaLimitKind) -> Int? {
-        switch kind {
-        case .fiveHour: return 5 * 60 * 60
-        case .weekly: return 7 * 24 * 60 * 60
-        case .modelWeekly, .unknown: return nil
-        }
-    }
-
-    /// 本窗口消耗：窗口起点（含）之后的变动事件 delta 之和；跨窗重置造成的剩余大幅回升
-    /// （Δ ≥ 20）不是消耗，不计入，避免把「旧窗口归零」误算成用掉额度。
-    private func windowDelta(events: [QuotaChangeEvent], windowStart: Date?) -> Int {
-        let inWindow: [QuotaChangeEvent]
-        if let windowStart {
-            inWindow = events.filter { $0.sampledAt >= windowStart }
-        } else {
-            inWindow = events
-        }
-        return inWindow.reduce(0) { acc, event in
-            let rebound = event.afterRemainingPercent - event.beforeRemainingPercent
-            guard rebound < 20 else { return acc }
-            return acc + event.deltaPercent
         }
     }
 
@@ -1189,7 +1171,8 @@ struct StatsView: View {
                                 .monospacedDigit()
                             Text(StatsFormatter.tierCost(
                                 row.totals.costUSD,
-                                hasUnpricedUsage: row.totals.hasUnpricedUsage
+                                hasUnpricedUsage: row.totals.hasUnpricedUsage,
+                                costIncomplete: row.totals.costIncomplete
                             ))
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .monospacedDigit()
@@ -1223,7 +1206,7 @@ struct StatsView: View {
     private func filteredBuckets(from: Date, to: Date) -> [UsageBucket] {
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.day >= from && $0.day < to }
-            .filter { SettingsStore.shared.isUsageServiceVisible($0.app) }
+            .filter { SettingsStore.shared.isUsageServiceEffectivelyVisible($0.app) }
         switch serviceFilter {
         case .all:
             return buckets
@@ -1231,6 +1214,8 @@ struct StatsView: View {
             return buckets.filter { $0.app == .codex }
         case .claude:
             return buckets.filter { $0.app == .claude }
+        case .cursor:
+            return buckets.filter { $0.app == .cursor }
         case .pi:
             return buckets.filter { $0.app == .pi }
         case .opencode:
@@ -1282,11 +1267,12 @@ struct StatsView: View {
         guard let bounds = previousRangeBounds else { return .zero }
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.day >= bounds.from && $0.day < bounds.to }
-            .filter { SettingsStore.shared.isUsageServiceVisible($0.app) }
+            .filter { SettingsStore.shared.isUsageServiceEffectivelyVisible($0.app) }
         var t = UsageTotals.zero
         for b in buckets {
             if serviceFilter == .codex && b.app != .codex { continue }
             if serviceFilter == .claude && b.app != .claude { continue }
+            if serviceFilter == .cursor && b.app != .cursor { continue }
             if serviceFilter == .pi && b.app != .pi { continue }
             if serviceFilter == .opencode && b.app != .opencode { continue }
             t.add(b)
@@ -1295,7 +1281,7 @@ struct StatsView: View {
     }
 
     private func previousTotals(_ app: UsageApp) -> UsageTotals {
-        guard SettingsStore.shared.isUsageServiceVisible(app) else { return .zero }
+        guard SettingsStore.shared.isUsageServiceEffectivelyVisible(app) else { return .zero }
         guard let bounds = previousRangeBounds else { return .zero }
         let buckets = appState.usageService.aggregator.snapshot()
             .filter { $0.app == app && $0.day >= bounds.from && $0.day < bounds.to }
@@ -1307,21 +1293,25 @@ struct StatsView: View {
     private func deltaPercent(current: Double, previous: Double) -> Double? {
         guard previousRangeBounds != nil else { return nil }
         guard previous > 0 else { return nil }
+        // 当前值为 0 时固定是 ↓100%,对没有用量的服务没有信息量,直接不渲染。
+        guard current > 0 else { return nil }
         return ((current - previous) / previous) * 100
     }
 
     private func costDelta(current: UsageTotals, previous: UsageTotals) -> Double? {
+        guard !current.costIncomplete, !previous.costIncomplete else { return nil }
         return deltaPercent(current: current.costUSD.doubleValue, previous: previous.costUSD.doubleValue)
     }
 
     private var dailySamples: [DailySample] {
         let (from, to) = chartBounds
-        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, pi: UsageTotals, opencode: UsageTotals)] = [:]
+        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, cursor: UsageTotals, pi: UsageTotals, opencode: UsageTotals)] = [:]
         for b in filteredBuckets(from: from, to: to) {
-            var pair = byDay[b.day] ?? (.zero, .zero, .zero, .zero)
+            var pair = byDay[b.day] ?? (.zero, .zero, .zero, .zero, .zero)
             switch b.app {
             case .codex: pair.codex.add(b)
             case .claude: pair.claude.add(b)
+            case .cursor: pair.cursor.add(b)
             case .pi: pair.pi.add(b)
             case .opencode: pair.opencode.add(b)
             }
@@ -1333,6 +1323,7 @@ struct StatsView: View {
                     day: $0.key,
                     codex: $0.value.codex,
                     claude: $0.value.claude,
+                    cursor: $0.value.cursor,
                     pi: $0.value.pi,
                     opencode: $0.value.opencode
                 )
@@ -1407,6 +1398,129 @@ struct StatsView: View {
         .frame(maxWidth: .infinity)
         .frame(height: height)
     }
+
+    private var cursorUsageIsInCurrentScope: Bool {
+        SettingsStore.shared.isUsageServiceEffectivelyVisible(.cursor)
+            && (serviceFilter == .all || serviceFilter == .cursor)
+    }
+
+    /// 当前范围外的历史由 Stats 选择时按月补拉；All 没有可靠的远端起点，
+    /// 所以只展示已覆盖范围，绝不偷偷发起无界回溯。
+    private var cursorHistoryRequest: CursorHistoryRequest? {
+        guard viewMode == .overview,
+              cursorUsageIsInCurrentScope,
+              range != .all,
+              let accountID = appState.cursorAccount?.userID
+        else { return nil }
+
+        let current = rangeBounds
+        let requested = previousRangeBounds.map { $0.from..<current.to } ?? current.from..<current.to
+        guard !appState.usageService.isCursorRemoteUsageCovered(requested) else { return nil }
+        return CursorHistoryRequest(accountID: accountID, from: requested.lowerBound, to: requested.upperBound)
+    }
+
+    private var cursorUsageCoverageState: CursorUsageCoverageState {
+        guard cursorUsageIsInCurrentScope else { return .hidden }
+        if appState.usageService.isRefreshingCursorRemoteUsage { return .loading }
+        let coverage = appState.usageService.cursorUsageCoveredDayRanges
+        guard !coverage.isEmpty else {
+            // 一次都没拉成功时，能给出真实原因就别再让用户去检查登录态。
+            if let error = appState.usageService.cursorRemoteUsageError { return .failed(error) }
+            return .unavailable
+        }
+        // 已完整覆盖当前范围就是正常态，不占版面说「一切正常」；
+        // 数据口径说明改挂在 Cursor 的 KPI 卡与「按服务」行 tooltip 上。
+        guard range != .all,
+              appState.usageService.isCursorRemoteUsageCovered(rangeBounds.from..<rangeBounds.to)
+        else { return .partial }
+        return .hidden
+    }
+
+    @ViewBuilder
+    private var cursorUsageCoveragePanel: some View {
+        switch cursorUsageCoverageState {
+        case .hidden:
+            EmptyView()
+        case .loading:
+            cursorUsageStatusRow(
+                icon: "arrow.triangle.2.circlepath",
+                title: tr("Loading Cursor history", "正在加载 Cursor 历史用量"),
+                detail: tr("Cursor metering · all devices", "Cursor 计量 · 全设备"),
+                showsProgress: true
+            )
+        case .partial:
+            cursorUsageStatusRow(
+                icon: "exclamationmark.triangle",
+                title: tr("Cursor history is partial", "Cursor 历史用量不完整"),
+                detail: tr("\(cursorCoverageDescription) · Partial", "\(cursorCoverageDescription) · 不完整"),
+                tint: .orange
+            )
+        case .unavailable:
+            cursorUsageStatusRow(
+                icon: "cursorarrow.rays",
+                title: tr("Cursor usage is not available yet", "Cursor 用量暂不可用"),
+                detail: tr("Open Cursor and sign in to load account-wide metering.", "请打开并登录 Cursor 以加载全设备计量用量。"),
+                tint: .secondary
+            )
+        case .failed(let message):
+            cursorUsageStatusRow(
+                icon: "exclamationmark.triangle",
+                title: tr("Cursor usage refresh failed", "Cursor 用量拉取失败"),
+                detail: message,
+                tint: .orange
+            )
+        }
+    }
+
+    private var cursorCoverageDescription: String {
+        let ranges = appState.usageService.cursorUsageCoveredDayRanges
+        guard !ranges.isEmpty else { return tr("No complete days cached", "暂无完整缓存日期") }
+        let text = ranges.prefix(2).map { item -> String in
+            let lastDay = Calendar.current.date(byAdding: .day, value: -1, to: item.endDay) ?? item.endDay
+            return "\(StatsFormatter.day(item.startDay))–\(StatsFormatter.day(lastDay))"
+        }.joined(separator: ", ")
+        let suffix = ranges.count > 2 ? " +\(ranges.count - 2)" : ""
+        return tr("Covered: \(text)\(suffix)", "已覆盖：\(text)\(suffix)")
+    }
+
+    private func cursorUsageStatusRow(
+        icon: String,
+        title: String,
+        detail: String,
+        tint: Color = .secondary,
+        showsProgress: Bool = false
+    ) -> some View {
+        HStack(spacing: 8) {
+            if showsProgress {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium))
+                Text(detail)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .help(cursorMeteringHint)
+    }
+
+    /// Cursor 唯一真正独有的口径：数据来自远端账号而非本机日志。
+    /// 只在 tooltip 里说明，不额外占用界面空间。
+    private var cursorMeteringHint: String {
+        tr(
+            "Cursor metering comes from the signed-in account across devices. It is not a local estimate or necessarily an extra charge.",
+            "Cursor 计量来自已登录账号的所有设备；它不是本机估算，也不一定代表额外扣费。"
+        )
+    }
 }
 
 // MARK: - Panel container
@@ -1463,7 +1577,8 @@ private struct DailyTooltip: View {
             ForEach(visibleApps, id: \.self) { app in
                 serviceRow(color: app.tintColor, label: app.displayName, value: StatsFormatter.tierCost(
                     sample.cost(for: app),
-                    hasUnpricedUsage: sample.totals(for: app).hasUnpricedUsage
+                    hasUnpricedUsage: sample.totals(for: app).hasUnpricedUsage,
+                    costIncomplete: sample.totals(for: app).costIncomplete
                 ))
             }
 
@@ -1471,7 +1586,8 @@ private struct DailyTooltip: View {
 
             totalRow(label: tr("Total", "合计"), value: StatsFormatter.tierCost(
                 sample.totalCost,
-                hasUnpricedUsage: sample.totalUsage.hasUnpricedUsage
+                hasUnpricedUsage: sample.totalUsage.hasUnpricedUsage,
+                costIncomplete: sample.totalUsage.costIncomplete
             ), emphasized: true)
             totalRow(label: "Tokens", value: StatsFormatter.compactToken(sample.totalTokens), emphasized: true)
 
@@ -1531,6 +1647,8 @@ private struct KPICard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // delta 放在 Label 行右侧:利用标题行原有留白,让 22pt 主值独占整行,
+            // 服务变多、卡片被压窄时主值不再被 delta 挤掉。
             HStack(spacing: 4) {
                 if let tint {
                     ServiceMark(color: tint, size: 6, cornerRadius: 1.5)
@@ -1538,20 +1656,22 @@ private struct KPICard: View {
                 Text(tr(english, chinese))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(value)
-                    .font(.system(size: 22, weight: .semibold))
-                    .kerning(-0.5)
-                    .monospacedDigit()
-                    .foregroundStyle(tint ?? .primary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
                 if let delta, delta != 0 {
                     Text(formatDelta(delta))
                         .font(.system(size: 11, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(delta >= 0 ? Color.red : Color.green)
+                        .lineLimit(1)
                 }
             }
+            Text(value)
+                .font(.system(size: 22, weight: .semibold))
+                .kerning(-0.5)
+                .monospacedDigit()
+                .foregroundStyle(tint ?? .primary)
+                .lineLimit(1)
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 14)
@@ -1563,7 +1683,7 @@ private struct KPICard: View {
     private func formatDelta(_ value: Double) -> String {
         let arrow = value >= 0 ? "↑" : "↓"
         let abs = Swift.abs(value)
-        return "\(arrow) \(String(format: "%.1f", abs))%"
+        return "\(arrow)\(String(format: "%.1f", abs))%"
     }
 }
 
@@ -1729,7 +1849,8 @@ private struct FastUsageSummaryView: View {
             item(tr("Fast multiplier", "Fast 倍率"), StatsFormatter.fastMultiplier(breakdown))
             item(tr("Fast estimated cost", "Fast 估算费用"), StatsFormatter.tierCost(
                 breakdown.fast.costUSD,
-                hasUnpricedUsage: breakdown.fastHasUnpricedCost
+                hasUnpricedUsage: breakdown.fastHasUnpricedCost,
+                costIncomplete: breakdown.fast.costIncomplete
             ))
             item(tr("Fast share", "Fast 占比"), fastShare)
         }
@@ -1769,7 +1890,8 @@ private struct FastUsageInlineRow: View {
             Text("·")
             Text(StatsFormatter.tierCost(
                 breakdown.fast.costUSD,
-                hasUnpricedUsage: breakdown.fastHasUnpricedCost
+                hasUnpricedUsage: breakdown.fastHasUnpricedCost,
+                costIncomplete: breakdown.fast.costIncomplete
             ))
             Spacer(minLength: 0)
         }
@@ -1837,51 +1959,23 @@ private struct ByServiceRow: View {
 
 private struct QuotaTimelineAccountPanel: View {
     let section: QuotaTimelineSection
-    /// 全局选定的窗口视角；nil = 跟随该账号主额度档。
-    let selectedKind: QuotaLimitKind?
+    /// 全局选定的窗口视角，所有账号使用同一口径。
+    let selectedKind: QuotaLimitKind
     var isWide: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if let window = activeWindow {
-                windowBoundsLabel(window)
-                if window.events.isEmpty {
-                    if section.isLoading {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text(tr("Loading…", "加载中…"))
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        Text(tr("No changes in this window", "该窗口暂无变动"))
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else if isWide {
-                    // 图表与表格是同一数据的两个视角,宽画布下左图右表;
-                    // 两者等高撑满面板剩余高度(表格行少时边框拉满、行顶对齐)。
-                    HStack(alignment: .top, spacing: 14) {
-                        QuotaTimelineChart(events: window.events, tint: section.tint, spansDays: spansDays(window))
-                            .frame(minHeight: 140, maxHeight: .infinity)
-                            .frame(maxWidth: .infinity)
-                        QuotaTimelineTable(events: window.events, spansDays: spansDays(window))
-                            .frame(width: 384)
-                            .frame(maxHeight: .infinity)
-                    }
+                if window.periods.isEmpty {
+                    loadingOrEmpty(message: tr("No data for this window", "该窗口暂无数据"))
                 } else {
-                    QuotaTimelineChart(events: window.events, tint: section.tint, spansDays: spansDays(window))
-                        .frame(minHeight: 140, maxHeight: .infinity)
-                    QuotaTimelineTable(events: window.events, spansDays: spansDays(window))
+                    ForEach(window.periods) { period in
+                        periodContent(period, window: window)
+                    }
                 }
             } else {
-                Text(tr("No data for this window", "该窗口暂无数据"))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                loadingOrEmpty(message: tr("No data for this window", "该窗口暂无数据"))
             }
         }
         .padding(16)
@@ -1889,27 +1983,9 @@ private struct QuotaTimelineAccountPanel: View {
         .ccPanel(cornerRadius: 12)
     }
 
-    /// 选中视角优先；未手动选择时跟随该账号主额度档；该账号没有选中窗口数据时取第一个可用窗口。
+    /// 当前 Picker 是全局语义；无对应数据时保留空态，不能悄悄回退到另一种窗口。
     private var activeWindow: QuotaTimelineWindow? {
-        let kind = selectedKind ?? section.preferredKind ?? .fiveHour
-        return section.windows.first { $0.kind == kind } ?? section.windows.first
-    }
-
-    /// 事件跨天（滚动周窗口 / 跨午夜的 5H）时图表与表格自动切换为含日期的格式。
-    private func spansDays(_ window: QuotaTimelineWindow) -> Bool {
-        guard let first = window.events.first?.sampledAt,
-              let last = window.events.last?.sampledAt
-        else { return false }
-        return !Calendar.current.isDate(first, inSameDayAs: last)
-    }
-
-    @ViewBuilder
-    private func windowBoundsLabel(_ window: QuotaTimelineWindow) -> some View {
-        if let start = window.windowStart, let end = window.windowEnd {
-            Text("\(StatsFormatter.timelineTime(start, spansDays: true)) → \(StatsFormatter.timelineTime(end, spansDays: true))")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.tertiary)
-        }
+        section.windows.first { $0.kind == selectedKind }
     }
 
     private var header: some View {
@@ -1918,7 +1994,7 @@ private struct QuotaTimelineAccountPanel: View {
                 ServiceMark(color: section.tint, size: 8)
                 Text(section.title)
                     .font(.system(size: 13, weight: .semibold))
-                if let kind = activeWindow?.kind ?? section.preferredKind {
+                if let kind = activeWindow?.kind {
                     Text(limitKindLabel(kind))
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -1931,10 +2007,10 @@ private struct QuotaTimelineAccountPanel: View {
             if let window = activeWindow {
                 timelineMetric(label: tr("Current", "当前"), value: currentText(window))
                 timelineMetric(
-                    label: tr("Window", "本窗口"),
-                    value: StatsFormatter.quotaDelta(window.totalDelta)
+                    label: deltaLabel(window.kind),
+                    value: StatsFormatter.quotaDelta(window.periods.first?.totalDelta ?? 0)
                 )
-                timelineMetric(label: tr("Latest", "最近"), value: latestText(window))
+                timelineMetric(label: tr("Updated", "更新"), value: latestText(window))
             }
         }
     }
@@ -1964,9 +2040,93 @@ private struct QuotaTimelineAccountPanel: View {
         return "\(value)%"
     }
 
+    private func deltaLabel(_ kind: QuotaLimitKind) -> String {
+        switch kind {
+        case .fiveHour: return tr("Today", "今天")
+        case .weekly: return tr("Current cycle", "当前周期")
+        case .modelWeekly, .unknown: return tr("Change", "变动")
+        }
+    }
+
+    /// 5H 视图只画今天，但最新采样可能停在昨天（今天还没刷新成功）；这时必须带日期，
+    /// 否则纯 `HH:mm` 会被读成今天的时间。
     private func latestText(_ window: QuotaTimelineWindow) -> String {
-        guard let date = window.latestEventAt else { return "--" }
-        return StatsFormatter.timelineTime(date, spansDays: spansDays(window))
+        guard let date = window.latestSampleAt else { return "--" }
+        let spansDays = window.kind == .weekly || !Calendar.current.isDateInToday(date)
+        return StatsFormatter.timelineTime(date, spansDays: spansDays)
+    }
+
+    @ViewBuilder
+    private func periodContent(_ period: QuotaTimelinePeriod, window: QuotaTimelineWindow) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(periodLabel(period.kind))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("\(StatsFormatter.timelineTime(period.start, spansDays: window.kind == .weekly)) → \(StatsFormatter.timelineTime(period.end, spansDays: window.kind == .weekly))")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Text(StatsFormatter.quotaDelta(period.totalDelta))
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            if period.entries.isEmpty {
+                // 固定高度：空周期若跟着 maxHeight .infinity 一起等分，会把另一个有数据
+                // 的周期压到图表最小高度。
+                loadingOrEmpty(message: tr("No data in this period", "该周期暂无数据"))
+                    .frame(height: 80)
+            } else if isWide {
+                HStack(alignment: .top, spacing: 14) {
+                    timelineChart(period, isWeekly: window.kind == .weekly)
+                        .frame(minHeight: 140, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity)
+                    QuotaTimelineTable(entries: period.entries, spansDays: window.kind == .weekly)
+                        .frame(width: 384)
+                        .frame(maxHeight: .infinity)
+                }
+            } else {
+                timelineChart(period, isWeekly: window.kind == .weekly)
+                    .frame(minHeight: 140, maxHeight: .infinity)
+                QuotaTimelineTable(entries: period.entries, spansDays: window.kind == .weekly)
+            }
+        }
+    }
+
+    private func timelineChart(_ period: QuotaTimelinePeriod, isWeekly: Bool) -> some View {
+        QuotaTimelineChart(
+            entries: period.entries,
+            tint: section.tint,
+            spansDays: isWeekly,
+            domain: period.start...period.end
+        )
+    }
+
+    private func periodLabel(_ kind: QuotaTimelinePeriodKind) -> String {
+        switch kind {
+        case .today: return tr("Today", "今天")
+        case .currentCycle: return tr("Current cycle", "当前周期")
+        case .previousCycle: return tr("Previous cycle", "上一周期")
+        }
+    }
+
+    @ViewBuilder
+    private func loadingOrEmpty(message: String) -> some View {
+        if section.isLoading {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(tr("Loading…", "加载中…"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
@@ -1994,27 +2154,43 @@ private enum QuotaTimelineWindowKind: Hashable {
 }
 
 private struct QuotaTimelineChart: View {
-    let events: [QuotaChangeEvent]
+    let entries: [QuotaTimelineEntry]
     let tint: Color
     var spansDays: Bool = false
+    let domain: ClosedRange<Date>
+
+    /// X 轴按实际数据范围自适应，不再固定成整段周期：一天/一周里只有少数几次变动时，
+    /// 固定域会把所有点挤在很窄的一段。两端各留一点余量，避免首尾点贴着轴；
+    /// 单点或零跨度时退回固定余量，防止退化成零宽度域。
+    private var xDomain: ClosedRange<Date> {
+        let times = entries.map(\.sampledAt)
+        guard let first = times.min(), let last = times.max() else { return domain }
+        let span = last.timeIntervalSince(first)
+        let padding = span > 0 ? span * 0.04 : (spansDays ? 1_800 : 900)
+        return first.addingTimeInterval(-padding)...last.addingTimeInterval(padding)
+    }
 
     var body: some View {
-        Chart(events) { event in
+        Chart(entries) { entry in
+            // series 按额度窗口分段：跨窗重置不产生变动事件，不分段会把上一窗口的低点
+            // 和新窗口的高点直连成一条「额度自己涨回去」的假斜线。
             LineMark(
-                x: .value("Time", event.sampledAt),
-                y: .value("Remaining", event.afterRemainingPercent)
+                x: .value("Time", entry.sampledAt),
+                y: .value("Remaining", entry.remainingPercent),
+                series: .value("Window", entry.windowIndex)
             )
             .foregroundStyle(tint)
             .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
 
             PointMark(
-                x: .value("Time", event.sampledAt),
-                y: .value("Remaining", event.afterRemainingPercent)
+                x: .value("Time", entry.sampledAt),
+                y: .value("Remaining", entry.remainingPercent)
             )
-            .foregroundStyle(chartPointColor(remainingPercent: Double(event.afterRemainingPercent)))
+            .foregroundStyle(chartPointColor(remainingPercent: Double(entry.remainingPercent)))
             .symbolSize(40)
         }
         .chartYScale(domain: 0...100)
+        .chartXScale(domain: xDomain)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine()
@@ -2071,7 +2247,7 @@ private struct QuotaTimelineChart: View {
 }
 
 private struct QuotaTimelineTable: View {
-    let events: [QuotaChangeEvent]
+    let entries: [QuotaTimelineEntry]
     var spansDays: Bool = false
 
     /// 行数超过该值时,表体固定高度内部滚动(表头固定),保证面板高度稳定。
@@ -2079,8 +2255,8 @@ private struct QuotaTimelineTable: View {
     /// 单行高度估算:11.5pt 行文本(~14pt)+ 上下 7pt padding + Divider。
     private static let rowHeight: CGFloat = 29
 
-    private var rows: [QuotaChangeEvent] {
-        events.sorted { $0.sampledAt > $1.sampledAt }
+    private var rows: [QuotaTimelineEntry] {
+        entries.sorted { $0.sampledAt > $1.sampledAt }
     }
 
     var body: some View {
@@ -2106,9 +2282,9 @@ private struct QuotaTimelineTable: View {
 
     @ViewBuilder
     private var rowsBody: some View {
-        ForEach(rows) { event in
+        ForEach(rows) { entry in
             Divider()
-            row(event)
+            row(entry)
         }
     }
 
@@ -2125,18 +2301,23 @@ private struct QuotaTimelineTable: View {
         .background(Color.secondary.opacity(0.06))
     }
 
-    private func row(_ event: QuotaChangeEvent) -> some View {
+    private func row(_ entry: QuotaTimelineEntry) -> some View {
         HStack {
-            tableText(StatsFormatter.timelineTime(event.sampledAt, spansDays: spansDays), width: 82, alignment: .leading)
-            tableText(StatsFormatter.quotaDelta(event.deltaPercent), width: 82, alignment: .trailing)
-                .foregroundStyle(event.deltaPercent < 0 ? Color.red : Color.green)
-            tableText("\(event.afterRemainingPercent)%", width: 104, alignment: .trailing)
-                .foregroundStyle(statusColor(remainingPercent: Double(event.afterRemainingPercent), tint: .secondary))
-            tableText(StatsFormatter.resetTime(event.resetsAt, spansDays: spansDays), width: 96, alignment: .trailing)
+            tableText(StatsFormatter.timelineTime(entry.sampledAt, spansDays: spansDays), width: 82, alignment: .leading)
+            tableText(entry.deltaPercent.map { StatsFormatter.quotaDelta($0) } ?? "—", width: 82, alignment: .trailing)
+                .foregroundStyle(deltaColor(entry.deltaPercent))
+            tableText("\(entry.remainingPercent)%", width: 104, alignment: .trailing)
+                .foregroundStyle(statusColor(remainingPercent: Double(entry.remainingPercent), tint: .secondary))
+            tableText(StatsFormatter.resetTime(entry.resetsAt, spansDays: spansDays), width: 96, alignment: .trailing)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
+    }
+
+    private func deltaColor(_ value: Int?) -> Color {
+        guard let value else { return .secondary }
+        return value < 0 ? .red : .green
     }
 
     private func tableHeader(
@@ -2166,20 +2347,23 @@ private struct DailySample: Identifiable {
     let day: Date
     let codex: UsageTotals
     let claude: UsageTotals
+    let cursor: UsageTotals
     let pi: UsageTotals
     let opencode: UsageTotals
 
     var codexCost: Decimal { codex.costUSD }
     var claudeCost: Decimal { claude.costUSD }
+    var cursorCost: Decimal { cursor.costUSD }
     var piCost: Decimal { pi.costUSD }
     var opencodeCost: Decimal { opencode.costUSD }
-    var totalCost: Decimal { codexCost + claudeCost + piCost + opencodeCost }
+    var totalCost: Decimal { totalUsage.costUSD }
     var totalTokens: Int { totalUsage.totalTokens }
 
     func totals(for app: UsageApp) -> UsageTotals {
         switch app {
         case .codex: return codex
         case .claude: return claude
+        case .cursor: return cursor
         case .pi: return pi
         case .opencode: return opencode
         }
@@ -2189,20 +2373,18 @@ private struct DailySample: Identifiable {
         switch app {
         case .codex: return codexCost
         case .claude: return claudeCost
+        case .cursor: return cursorCost
         case .pi: return piCost
         case .opencode: return opencodeCost
         }
     }
 
-    /// codex + claude + pi + opencode 合并后的口径,供每日悬浮明细展示 token 拆分 + 命中率。
+    /// 所有统计服务合并后的口径，供每日悬浮明细展示 token 拆分 + 命中率。
     var totalUsage: UsageTotals {
         var t = UsageTotals.zero
-        t.inputTokens = codex.inputTokens + claude.inputTokens + pi.inputTokens + opencode.inputTokens
-        t.outputTokens = codex.outputTokens + claude.outputTokens + pi.outputTokens + opencode.outputTokens
-        t.cacheReadTokens = codex.cacheReadTokens + claude.cacheReadTokens + pi.cacheReadTokens + opencode.cacheReadTokens
-        t.cacheCreationTokens = codex.cacheCreationTokens + claude.cacheCreationTokens + pi.cacheCreationTokens + opencode.cacheCreationTokens
-        t.costUSD = totalCost
-        t.hasUnpricedUsage = codex.hasUnpricedUsage || claude.hasUnpricedUsage || pi.hasUnpricedUsage || opencode.hasUnpricedUsage
+        for totals in [codex, claude, cursor, pi, opencode] {
+            t.add(totals)
+        }
         return t
     }
 }
@@ -2238,22 +2420,17 @@ private struct QuotaTimelineSection: Identifiable {
     let accountKey: String
     let title: String
     let tint: Color
-    /// 账号当前主额度窗口类型；用户未手动选择窗口视角时作为默认档。
-    let preferredKind: QuotaLimitKind?
     let windows: [QuotaTimelineWindow]
     var isLoading: Bool = false
 }
 
-/// 单个标准窗口（5H / 每周）的时间线数据：最新样本、窗口边界与变动事件。
+/// 单个标准窗口（5H / 每周）的时间线数据。5H 仅含今天；周窗口含当前和上一额度周期。
 private struct QuotaTimelineWindow: Identifiable {
     var id: QuotaLimitKind { kind }
     let kind: QuotaLimitKind
     let currentRemaining: Int?
-    let totalDelta: Int
-    let latestEventAt: Date?
-    let windowStart: Date?
-    let windowEnd: Date?
-    let events: [QuotaChangeEvent]
+    let latestSampleAt: Date?
+    let periods: [QuotaTimelinePeriod]
 }
 
 // MARK: - Formatter
@@ -2316,7 +2493,12 @@ enum StatsFormatter {
     }
 
     @MainActor
-    static func tierCost(_ value: Decimal, hasUnpricedUsage _: Bool) -> String {
+    static func tierCost(
+        _ value: Decimal,
+        hasUnpricedUsage _: Bool,
+        costIncomplete: Bool = false
+    ) -> String {
+        guard !costIncomplete else { return tr("— / Partial", "— / 不完整") }
         return cost(value)
     }
 

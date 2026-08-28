@@ -7,59 +7,87 @@ final class QuotaRefreshPlanTests: XCTestCase {
 
     func testAllProvidersEnabled() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: true, hasVisibleImported: true
+            showCodex: true, showClaude: true, showCursor: true, hasVisibleImported: true
         )
         XCTAssertTrue(plan.refreshCodex)
         XCTAssertTrue(plan.refreshClaude)
+        XCTAssertTrue(plan.refreshCursor)
         XCTAssertTrue(plan.refreshImported)
         XCTAssertTrue(plan.canMirrorPrimary)
     }
 
     func testAllProvidersDisabled() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: false, hasVisibleImported: false
+            showCodex: false, showClaude: false, showCursor: false, hasVisibleImported: false
         )
         XCTAssertFalse(plan.refreshCodex)
         XCTAssertFalse(plan.refreshClaude)
+        XCTAssertFalse(plan.refreshCursor)
         XCTAssertFalse(plan.refreshImported)
         XCTAssertFalse(plan.canMirrorPrimary)
     }
 
     func testCodexOnly() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: false, hasVisibleImported: false
+            showCodex: true, showClaude: false, showCursor: false, hasVisibleImported: false
         )
         XCTAssertTrue(plan.refreshCodex)
         XCTAssertFalse(plan.refreshClaude)
+        XCTAssertFalse(plan.refreshCursor)
         XCTAssertTrue(plan.canMirrorPrimary)
     }
 
     func testClaudeOnly() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: true, hasVisibleImported: false
+            showCodex: false, showClaude: true, showCursor: false, hasVisibleImported: false
         )
         XCTAssertFalse(plan.refreshCodex)
         XCTAssertTrue(plan.refreshClaude)
+        XCTAssertFalse(plan.refreshCursor)
         XCTAssertFalse(plan.canMirrorPrimary)
     }
 
     func testCodexPlusClaude() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: true, hasVisibleImported: false
+            showCodex: true, showClaude: true, showCursor: false, hasVisibleImported: false
         )
         XCTAssertTrue(plan.refreshCodex)
         XCTAssertTrue(plan.refreshClaude)
+        XCTAssertFalse(plan.refreshCursor)
         XCTAssertTrue(plan.canMirrorPrimary)
     }
 
     /// hasVisibleImported 只影响导入调度标志，不影响主 Provider 与镜像能力。
     func testVisibleImportedIndependentFromProviders() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: false, hasVisibleImported: true
+            showCodex: false, showClaude: false, showCursor: false, hasVisibleImported: true
         )
         XCTAssertFalse(plan.refreshCodex)
         XCTAssertFalse(plan.canMirrorPrimary)
         XCTAssertTrue(plan.refreshImported)
+    }
+
+    func testCursorOnly() {
+        let plan = QuotaRefreshPlan.make(
+            showCodex: false,
+            showClaude: false,
+            showCursor: true,
+            hasVisibleImported: false
+        )
+
+        XCTAssertFalse(plan.refreshCodex)
+        XCTAssertFalse(plan.refreshClaude)
+        XCTAssertTrue(plan.refreshCursor)
+        XCTAssertFalse(plan.refreshImported)
+        XCTAssertFalse(plan.canMirrorPrimary)
+    }
+
+    func testCursorDisplayDefaultsStayDisabledUntilItsUIIsReleased() {
+        let defaults = ProviderDisplaySettings.defaults(for: .cursor)
+
+        XCTAssertFalse(defaults.enabled)
+        XCTAssertFalse(defaults.menuBar)
+        XCTAssertFalse(defaults.floatingHUD)
     }
 
     // MARK: - 镜像判定矩阵（AppState 展示层）

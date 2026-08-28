@@ -42,6 +42,7 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
         switch app {
         case .codex: return .openAI
         case .claude: return .anthropic
+        case .cursor: return .other
         case .pi, .opencode: return .other
         }
     }

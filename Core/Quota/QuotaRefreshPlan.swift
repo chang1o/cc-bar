@@ -6,6 +6,7 @@ import Foundation
 struct QuotaRefreshPlan: Equatable, Sendable {
     var refreshCodex: Bool
     var refreshClaude: Bool
+    var refreshCursor: Bool
     /// 有可见导入 Codex 账号时需要调度导入刷新（是否真正刷新仍按各账号
     /// 自身 `visibleInPopover` 过滤；此处只表达"存在可见项"）。
     var refreshImported: Bool
@@ -17,11 +18,13 @@ struct QuotaRefreshPlan: Equatable, Sendable {
     static func make(
         showCodex: Bool,
         showClaude: Bool,
+        showCursor: Bool,
         hasVisibleImported: Bool
     ) -> QuotaRefreshPlan {
         QuotaRefreshPlan(
             refreshCodex: showCodex,
             refreshClaude: showClaude,
+            refreshCursor: showCursor,
             refreshImported: hasVisibleImported,
             canMirrorPrimary: showCodex
         )

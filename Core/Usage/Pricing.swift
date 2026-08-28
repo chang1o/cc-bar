@@ -253,6 +253,7 @@ nonisolated enum Pricing {
                 switch app {
                 case .codex: return codexFastPrices[key]
                 case .claude: return claudeFastPrices[key]
+                case .cursor: return nil
                 case .pi: return nil
                 case .opencode: return nil
                 }
@@ -266,6 +267,9 @@ nonisolated enum Pricing {
             case .claude:
                 return PricingCatalogStore.shared.rate(for: key, app: app, speed: .fast)
                     ?? claudeFastPrices[key]
+            case .cursor:
+                // Cursor 使用服务端 chargedCents，不走本地模型定价。
+                return nil
             case .pi:
                 // pi 没有 Fast 档位概念。
                 return nil
@@ -510,6 +514,8 @@ nonisolated enum Pricing {
                 return codexFastMultipliers[key]
             case .claude:
                 return claudeFastMultipliers[key] ?? derivedClaudeFastMultiplier(for: key)
+            case .cursor:
+                return nil
             case .pi:
                 // pi 无 Fast 档位概念。
                 return nil

@@ -32,6 +32,49 @@ nonisolated struct QuotaChangeEvent: Sendable, Equatable, Codable, Identifiable 
     var resetsAt: Date?
 }
 
+/// 时间线的展示点。变动事件与最新采样分开建模：额度跨周期重置时不应伪造消耗事件，
+/// 但最新采样仍必须出现在时间线上，避免界面停在上一周期的最后一次变动。
+nonisolated struct QuotaTimelineEntry: Sendable, Equatable, Identifiable {
+    enum Source: Sendable, Equatable {
+        case change
+        case sample
+    }
+
+    var id: String
+    var source: Source
+    var sampledAt: Date
+    var remainingPercent: Int
+    /// 仅真实变动事件有差值；普通刷新采样显示为「—」。
+    var deltaPercent: Int?
+    var resetsAt: Date?
+    /// 同一段时间线内的额度窗口序号（5H 的一天横跨约 5 个窗口）。跨窗重置不产生变动
+    /// 事件，折线必须按此分段断开，否则会画出「额度自己涨回去」的假斜线。
+    var windowIndex: Int = 0
+}
+
+nonisolated enum QuotaTimelinePeriodKind: String, Sendable, Equatable, Hashable {
+    case today
+    case currentCycle
+    case previousCycle
+}
+
+/// 固定自然日或一个真实额度周期的投影。历史文件仍只保存原始样本和变动事件，
+/// 此类型仅在读取时生成，不改变持久化格式。
+nonisolated struct QuotaTimelinePeriod: Sendable, Equatable, Identifiable {
+    var id: String
+    var kind: QuotaTimelinePeriodKind
+    var start: Date
+    var end: Date
+    var entries: [QuotaTimelineEntry]
+
+    var totalDelta: Int {
+        entries.reduce(0) { result, entry in
+            guard let delta = entry.deltaPercent, delta < 20 else { return result }
+            return result + delta
+        }
+    }
+}
+
 nonisolated struct QuotaHistoryPayload: Sendable, Equatable, Codable {
     static let currentVersion = 3
 
@@ -81,9 +124,174 @@ enum QuotaHistoryStore {
     /// 必须视为窗口已滚动（跨周 / 制式换档）。与 `QuotaCycleStore`
     /// 的 `windowAlignmentTolerance` 语义一致。
     nonisolated private static let windowAlignmentTolerance: TimeInterval = 30 * 60
+    /// 周额度窗口长度，用于由 `resets_at` 反推周期起点。
+    nonisolated private static let weeklyWindowSeconds: TimeInterval = 7 * 24 * 60 * 60
 
     nonisolated static func seriesKey(accountKey: String, limitKind: QuotaLimitKind) -> String {
         "\(accountKey)|\(limitKind.rawValue)"
+    }
+
+    /// 将持久化的变动事件与该系列最新采样投影为时间线。
+    ///
+    /// - 5H：始终为本地自然日的 00:00–24:00，坐标轴不会跟随额度重置时间漂移。
+    /// - 周：用服务返回的 `resetsAt` 划分当前额度周期与上一额度周期；这不是自然周。
+    nonisolated static func timelinePeriods(
+        payload: QuotaHistoryPayload,
+        accountKey: String,
+        limitKind: QuotaLimitKind,
+        now: Date = Date()
+    ) -> [QuotaTimelinePeriod] {
+        let events = payload.events
+            .filter { $0.accountKey == accountKey && $0.limitKind == limitKind }
+            .sorted { $0.sampledAt < $1.sampledAt }
+        let sample = payload.lastSamples[seriesKey(accountKey: accountKey, limitKind: limitKind)]
+
+        switch limitKind {
+        case .fiveHour:
+            let start = todayStart(now: now)
+            let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+            let todayEvents = events.filter { $0.sampledAt >= start && $0.sampledAt < end }
+            return [QuotaTimelinePeriod(
+                id: "\(accountKey)|fiveHour|today|\(Int(start.timeIntervalSinceReferenceDate))",
+                kind: .today,
+                start: start,
+                end: end,
+                entries: timelineEntries(
+                    events: todayEvents,
+                    latestSample: sample,
+                    includesSample: { $0.sampledAt >= start && $0.sampledAt < end }
+                )
+            )]
+
+        case .weekly:
+            guard let currentEnd = sample?.resetsAt ?? events.last?.resetsAt else { return [] }
+            let currentStart = currentEnd.addingTimeInterval(-weeklyWindowSeconds)
+            let currentEvents = events.filter {
+                belongsToWindow(
+                    sampledAt: $0.sampledAt,
+                    resetsAt: $0.resetsAt,
+                    windowStart: currentStart,
+                    windowEnd: currentEnd
+                )
+            }
+            // 上一周期的边界取事件自己的 resets_at：窗口重新起算（长时间停用、套餐变更、
+            // 服务端调整重置点）后新旧周期不一定正好相差 7 天，硬按 currentStart 推导会把
+            // 整段真实数据判成空态。旧窗口本就落在 currentStart 附近（秒级抖动）时归一化为
+            // currentStart，两段严格衔接；没有可用旧窗口时同样退回 7 天推导。
+            let observedPreviousEnd = events
+                .compactMap(\.resetsAt)
+                .filter { $0 < currentEnd && !isSameWindow($0, currentEnd) }
+                .max()
+            let previousEnd = observedPreviousEnd.flatMap {
+                isSameWindow($0, currentStart) ? currentStart : $0
+            } ?? currentStart
+            let previousStart = previousEnd.addingTimeInterval(-weeklyWindowSeconds)
+            // 当前周期先认领；resets_at 缺失的老事件只能按时间判定，认领后不再重复计入上一周期。
+            let claimed = Set(currentEvents.map(\.id))
+            let previousEvents = events.filter {
+                !claimed.contains($0.id)
+                    && belongsToWindow(
+                        sampledAt: $0.sampledAt,
+                        resetsAt: $0.resetsAt,
+                        windowStart: previousStart,
+                        windowEnd: previousEnd
+                    )
+            }
+            return [
+                QuotaTimelinePeriod(
+                    id: "\(accountKey)|weekly|current|\(Int(currentEnd.timeIntervalSinceReferenceDate))",
+                    kind: .currentCycle,
+                    start: currentStart,
+                    end: currentEnd,
+                    entries: timelineEntries(
+                        events: currentEvents,
+                        latestSample: sample,
+                        includesSample: {
+                            belongsToWindow(
+                                sampledAt: $0.sampledAt,
+                                resetsAt: $0.resetsAt,
+                                windowStart: currentStart,
+                                windowEnd: currentEnd
+                            )
+                        }
+                    )
+                ),
+                QuotaTimelinePeriod(
+                    id: "\(accountKey)|weekly|previous|\(Int(previousEnd.timeIntervalSinceReferenceDate))",
+                    kind: .previousCycle,
+                    start: previousStart,
+                    end: previousEnd,
+                    entries: timelineEntries(events: previousEvents, latestSample: nil, includesSample: { _ in false })
+                ),
+            ]
+
+        case .modelWeekly, .unknown:
+            return []
+        }
+    }
+
+    nonisolated private static func timelineEntries(
+        events: [QuotaChangeEvent],
+        latestSample: QuotaHistorySample?,
+        includesSample: (QuotaHistorySample) -> Bool
+    ) -> [QuotaTimelineEntry] {
+        var entries = events.map {
+            QuotaTimelineEntry(
+                id: "event|\($0.id)",
+                source: .change,
+                sampledAt: $0.sampledAt,
+                remainingPercent: $0.afterRemainingPercent,
+                deltaPercent: $0.deltaPercent,
+                resetsAt: $0.resetsAt
+            )
+        }
+        if let latestSample, includesSample(latestSample), !entries.contains(where: {
+            $0.sampledAt == latestSample.sampledAt
+                && $0.remainingPercent == latestSample.remainingPercent
+                && isSameWindow($0.resetsAt, latestSample.resetsAt)
+        }) {
+            entries.append(QuotaTimelineEntry(
+                id: "sample|\(latestSample.accountKey)|\(latestSample.limitKind.rawValue)|\(Int(latestSample.sampledAt.timeIntervalSinceReferenceDate))|\(latestSample.remainingPercent)",
+                source: .sample,
+                sampledAt: latestSample.sampledAt,
+                remainingPercent: latestSample.remainingPercent,
+                deltaPercent: nil,
+                resetsAt: latestSample.resetsAt
+            ))
+        }
+        return assignWindowIndexes(entries.sorted { $0.sampledAt < $1.sampledAt })
+    }
+
+    /// 周期归属：`resets_at` 存在时按窗口对齐判定，跨周期的采样绝不混进相邻周期；
+    /// 缺失时无从判定窗口，只能退回时间范围，并用半开区间避免边界样本同时落进两个周期。
+    nonisolated private static func belongsToWindow(
+        sampledAt: Date,
+        resetsAt: Date?,
+        windowStart: Date,
+        windowEnd: Date
+    ) -> Bool {
+        guard sampledAt >= windowStart, sampledAt <= windowEnd else { return false }
+        guard let resetsAt else { return sampledAt < windowEnd }
+        return isSameWindow(resetsAt, windowEnd)
+    }
+
+    /// 按 `resets_at` 给相邻点分段：跨窗重置不产生变动事件，折线若把两个窗口直连，
+    /// 就会画出一条「额度自己涨回去」的假斜线。`resets_at` 缺失时无从判定，延续当前段。
+    nonisolated private static func assignWindowIndexes(_ entries: [QuotaTimelineEntry]) -> [QuotaTimelineEntry] {
+        var result: [QuotaTimelineEntry] = []
+        result.reserveCapacity(entries.count)
+        var index = 0
+        var windowEnd: Date?
+        for entry in entries {
+            if let resetsAt = entry.resetsAt {
+                if let windowEnd, !isSameWindow(windowEnd, resetsAt) { index += 1 }
+                windowEnd = resetsAt
+            }
+            var next = entry
+            next.windowIndex = index
+            result.append(next)
+        }
+        return result
     }
 
     nonisolated static func load(now: Date = Date()) -> QuotaHistoryPayload {
@@ -323,10 +531,23 @@ enum QuotaHistoryStore {
         var cleaned: [QuotaChangeEvent] = []
         for event in payload.events {
             let series = "\(event.accountKey)|\(event.limitKind.rawValue)"
-            let keep = keptBySeries[series].map { prev in
-                isSameWindow(prev.resetsAt, event.resetsAt)
-                    && prev.afterRemainingPercent == event.beforeRemainingPercent
-            } ?? true
+            let keep: Bool
+            if let prev = keptBySeries[series] {
+                if isSameWindow(prev.resetsAt, event.resetsAt) {
+                    // 同窗：必须与前一保留事件数值衔接，否则是被污染基线产生的假差值。
+                    keep = prev.afterRemainingPercent == event.beforeRemainingPercent
+                } else {
+                    // 跨窗：判据与同窗相反。`before` 恰好衔接上一窗口链尾，说明这条 delta
+                    // 是拿旧窗口的剩余值跨窗求差得来的（周期滚动时额度跳回满额），属虚假变动，删除。
+                    // 不衔接则说明新窗口已由 recordingSeries 的跨窗闸建立了自己的基线，
+                    // 这是新链的链首，必须保留——额度周期滚动（5H 一天约 5 个窗口、周窗每 7 天
+                    // 一轮）是常态，若在此删掉，keptBySeries 会永远停在旧窗口链尾，新周期的
+                    // 每个事件都会被逐个删光，时间线的「当前周期」只剩一个采样点。
+                    keep = prev.afterRemainingPercent != event.beforeRemainingPercent
+                }
+            } else {
+                keep = true
+            }
             if keep {
                 cleaned.append(event)
                 keptBySeries[series] = event

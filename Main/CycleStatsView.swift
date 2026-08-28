@@ -211,6 +211,8 @@ struct CycleStatsView: View {
         case .claude:
             guard appState.claudeAccount != nil else { return nil }
             return QuotaHistoryAccountKey.claudePrimary(email: appState.claudeAccount?.email)
+        case .cursor:
+            return nil
         case .pi, .opencode:
             return nil
         }

@@ -72,6 +72,8 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                 case .claude:
                     return catalog.active.modelsDev.claudeFastRates[normalizedKey]
                         ?? catalog.active.liteLLM.claudeFastRates[normalizedKey]
+                case .cursor:
+                    return nil
                 case .pi:
                     return nil
                 case .opencode:

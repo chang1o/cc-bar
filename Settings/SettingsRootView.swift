@@ -19,6 +19,7 @@ struct SettingsRootView: View {
         switch progress.app {
         case .codex: appName = "Codex"
         case .claude: appName = "Claude Code"
+        case .cursor: appName = "Cursor"
         case .pi: appName = "Pi"
         case .opencode: appName = "OpenCode"
         }
@@ -113,6 +114,23 @@ struct SettingsRootView: View {
                         set: { settings.showClaude = $0 }
                     )
                 )
+                AccountRow(
+                    title: "Cursor",
+                    subtitle: "Cursor",
+                    tint: .gray,
+                    logoName: "cursor",
+                    fallback: "C",
+                    email: appState.cursorAccount?.email,
+                    plan: appState.cursorQuota?.planType,
+                    availability: appState.cursorAccount == nil ? .notDetected : .connected,
+                    canToggle: appState.cursorAccount != nil,
+                    isOn: Binding(
+                        get: {
+                            appState.cursorAccount != nil && settings.isProviderEnabled(.cursor)
+                        },
+                        set: { setCursorProviderEnabled($0, settings: settings) }
+                    )
+                )
             }
 
             // 其他 Codex 账号（手动导入）
@@ -124,6 +142,14 @@ struct SettingsRootView: View {
             ) {
                 ImportedCodexAccountsView()
             }
+        }
+    }
+
+    private func setCursorProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
+        settings.setProviderEnabled(enabled, for: .cursor)
+        guard enabled else { return }
+        Task {
+            await appState.refreshQuotas(reason: .userInitiated)
         }
     }
 
@@ -170,6 +196,10 @@ struct SettingsRootView: View {
             desc: "Choose which services count in usage statistics.",
             chineseDesc: "勾选要计入用量统计的服务,关闭后从统计中隐藏"
         ) {
+            // Cursor 没有本地日志，但它的 Dashboard 日桶在统计页有独立入口；默认仍关闭。
+            // Stats 与额度卡片可独立显示，用户开启任一入口后才进入远端刷新链路。
+            // 账号未登录时不额外提示或置灰，与 Pi / OpenCode 保持同一套渲染规则；
+            // 统计页由 SettingsStore.isUsageServiceEffectivelyVisible 兜底不渲染空服务行。
             ForEach(UsageApp.allCases, id: \.self) { app in
                 PrefsRow(
                     label: app.displayName,
@@ -178,7 +208,15 @@ struct SettingsRootView: View {
                 ) {
                     Toggle("", isOn: Binding(
                         get: { settings.isUsageServiceVisible(app) },
-                        set: { settings.setUsageServiceVisible($0, for: app) }
+                        set: { visible in
+                            settings.setUsageServiceVisible(visible, for: app)
+                            guard app == .cursor else { return }
+                            if visible {
+                                Task {
+                                    await appState.refreshQuotas(reason: .userInitiated)
+                                }
+                            }
+                        }
                     ))
                         .labelsHidden()
                         .toggleStyle(.switch)

@@ -246,6 +246,7 @@ struct ConversationStatsView: View {
         case .all: return nil
         case .codex: return .codex
         case .claude: return .claude
+        case .cursor: return nil
         case .pi: return .pi
         case .opencode: return .opencode
         }

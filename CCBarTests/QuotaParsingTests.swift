@@ -36,6 +36,250 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertNil(fetched.snapshot.weekly)
     }
 
+    func testCursorSummaryMapsStableTotalAutoAndAPILimits() throws {
+        let data = Data("""
+        {
+          "billingCycleStart": "2026-08-01T00:00:00Z",
+          "billingCycleEnd": "2026-09-01T00:00:00Z",
+          "membershipType": "pro_plus",
+          "limitType": "individual",
+          "isUnlimited": false,
+          "individualUsage": {
+            "plan": {
+              "used": 2500,
+              "limit": 20000,
+              "totalPercentUsed": 12.5,
+              "autoPercentUsed": 4.25,
+              "apiPercentUsed": 8.25
+            }
+          }
+        }
+        """.utf8)
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_000)
+        let snapshot = try CursorQuotaClient.parse(data: data, fetchedAt: fetchedAt)
+
+        XCTAssertEqual(snapshot.app, .cursor)
+        XCTAssertEqual(snapshot.primaryLimit?.id, "cursor-total")
+        XCTAssertEqual(snapshot.secondaryLimit?.id, "cursor-auto")
+        XCTAssertEqual(snapshot.auxiliaryLimits.map(\.id), ["cursor-api"])
+        XCTAssertEqual(snapshot.primaryLimit?.window.usedPercent, 12.5)
+        XCTAssertEqual(snapshot.secondaryLimit?.window.usedPercent, 4.25)
+        XCTAssertEqual(snapshot.auxiliaryLimits.first?.window.usedPercent, 8.25)
+        XCTAssertEqual(snapshot.primaryLimit?.window.windowSeconds, 31 * 24 * 60 * 60)
+        XCTAssertEqual(snapshot.planType, "Pro Plus")
+        XCTAssertEqual(snapshot.isUnlimited, false)
+        XCTAssertEqual(snapshot.fetchedAt, fetchedAt)
+    }
+
+    func testCursorTeamPooledLimitTakesPrecedenceOverPlanTotal() throws {
+        let data = Data("""
+        {
+          "limitType": "team",
+          "individualUsage": {
+            "plan": {"totalPercentUsed": 12}
+          },
+          "teamUsage": {
+            "pooled": {"enabled": true, "used": 250, "limit": 1000, "remaining": 750}
+          }
+        }
+        """.utf8)
+
+        let snapshot = try CursorQuotaClient.parse(data: data)
+
+        XCTAssertEqual(snapshot.primaryLimit?.window.usedPercent, 25)
+    }
+
+    func testCursorPlanRatioFallsBackWhenTotalPercentIsMissing() throws {
+        let data = Data("""
+        {
+          "individualUsage": {
+            "plan": {"used": "375", "limit": "1500"}
+          }
+        }
+        """.utf8)
+
+        let snapshot = try CursorQuotaClient.parse(data: data)
+
+        XCTAssertEqual(snapshot.primaryLimit?.window.usedPercent, 25)
+    }
+
+    func testCursorDoesNotInferTotalFromAutoAndAPI() throws {
+        let data = Data("""
+        {
+          "individualUsage": {
+            "plan": {"autoPercentUsed": 10, "apiPercentUsed": 30}
+          }
+        }
+        """.utf8)
+
+        let snapshot = try CursorQuotaClient.parse(data: data)
+
+        XCTAssertNil(snapshot.primaryLimit)
+        XCTAssertEqual(snapshot.secondaryLimit?.id, "cursor-auto")
+        XCTAssertEqual(snapshot.auxiliaryLimits.first?.id, "cursor-api")
+    }
+
+    /// Free 账号的真实响应里 totalPercentUsed 是 1、apiPercentUsed 是 0。
+    /// JSON 数字 0 / 1 解析出的 NSNumber 会命中 `is Bool` 桥接，早期实现把这两档整个丢掉，
+    /// Popover 只剩 AUTO，Total 位退化成 "--" / "CURRENT"。
+    func testCursorFreePlanKeepsZeroAndOnePercentLimits() throws {
+        let data = Data("""
+        {
+          "billingCycleStart": "2026-08-22T07:26:49.214Z",
+          "billingCycleEnd": "2026-09-22T07:26:49.214Z",
+          "membershipType": "free",
+          "limitType": "user",
+          "isUnlimited": false,
+          "individualUsage": {
+            "plan": {
+              "enabled": true,
+              "used": 0,
+              "limit": 0,
+              "remaining": 0,
+              "autoPercentUsed": 2,
+              "apiPercentUsed": 0,
+              "totalPercentUsed": 1
+            }
+          },
+          "teamUsage": {}
+        }
+        """.utf8)
+
+        let snapshot = try CursorQuotaClient.parse(data: data)
+
+        XCTAssertEqual(snapshot.primaryLimit?.id, "cursor-total")
+        XCTAssertEqual(snapshot.primaryLimit?.window.usedPercent, 1)
+        XCTAssertEqual(snapshot.secondaryLimit?.window.usedPercent, 2)
+        XCTAssertEqual(snapshot.auxiliaryLimits.map(\.id), ["cursor-api"])
+        XCTAssertEqual(snapshot.auxiliaryLimits.first?.window.usedPercent, 0)
+        XCTAssertEqual(snapshot.planType, "Free")
+        XCTAssertEqual(snapshot.isUnlimited, false)
+    }
+
+    func testCursorUnlimitedDoesNotFabricateZeroPercent() throws {
+        let data = Data("""
+        {
+          "membershipType": "enterprise",
+          "isUnlimited": true
+        }
+        """.utf8)
+
+        let snapshot = try CursorQuotaClient.parse(data: data)
+
+        XCTAssertNil(snapshot.primaryLimit)
+        XCTAssertEqual(snapshot.isUnlimited, true)
+        XCTAssertEqual(snapshot.planType, "Enterprise")
+    }
+
+    func testQuotaSnapshotWithoutCursorFieldsKeepsBackwardCompatibleDefaults() throws {
+        let data = Data("""
+        {
+          "app": "codex",
+          "primaryLimit": null,
+          "secondaryLimit": null,
+          "modelLimits": [],
+          "planType": "plus",
+          "fetchedAt": 0
+        }
+        """.utf8)
+
+        let snapshot = try JSONDecoder().decode(QuotaSnapshot.self, from: data)
+
+        XCTAssertTrue(snapshot.auxiliaryLimits.isEmpty)
+        XCTAssertNil(snapshot.isUnlimited)
+    }
+
+    func testCursorQuotaCacheRoundTripsAccountBinding() throws {
+        let snapshot = QuotaSnapshot(
+            app: .cursor,
+            primaryLimit: nil,
+            secondaryLimit: nil,
+            planType: "Pro",
+            fetchedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let payload = QuotaCachePayload(providers: [
+            .cursor: QuotaCacheRecord(
+                snapshot: snapshot,
+                source: .api,
+                updatedAt: Date(timeIntervalSince1970: 1_000),
+                accountID: "cursor-user"
+            ),
+        ])
+
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(QuotaCachePayload.self, from: data)
+
+        XCTAssertEqual(decoded.version, QuotaCachePayload.currentVersion)
+        XCTAssertEqual(decoded.cursor?.accountID, "cursor-user")
+        XCTAssertEqual(decoded.cursor?.snapshot, snapshot)
+    }
+
+    func testLegacyCursorQuotaCacheWithoutAccountBindingStillDecodes() throws {
+        let data = Data("""
+        {
+          "version": 3,
+          "providers": {
+            "cursor": {
+              "snapshot": {
+                "app": "cursor",
+                "primaryLimit": null,
+                "secondaryLimit": null,
+                "modelLimits": [],
+                "planType": "Pro",
+                "fetchedAt": 0
+              },
+              "source": "api",
+              "updatedAt": 0
+            }
+          }
+        }
+        """.utf8)
+
+        let payload = try JSONDecoder().decode(QuotaCachePayload.self, from: data)
+
+        XCTAssertEqual(payload.version, QuotaCachePayload.currentVersion)
+        XCTAssertEqual(payload.cursor?.snapshot.app, .cursor)
+        XCTAssertNil(payload.cursor?.accountID)
+    }
+
+    func testCursorAuxiliaryLimitCarriesForwardFutureReset() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let reset = Date(timeIntervalSince1970: 2_000)
+        let previous = QuotaSnapshot(
+            app: .cursor,
+            primaryLimit: nil,
+            secondaryLimit: nil,
+            auxiliaryLimits: [QuotaLimit(
+                id: "cursor-api",
+                kind: .unknown,
+                displayName: "API",
+                window: QuotaWindow(usedPercent: 1, resetsAt: reset, windowSeconds: 1000),
+                isActive: nil
+            )],
+            planType: "Pro",
+            fetchedAt: now
+        )
+        let current = QuotaSnapshot(
+            app: .cursor,
+            primaryLimit: nil,
+            secondaryLimit: nil,
+            auxiliaryLimits: [QuotaLimit(
+                id: "cursor-api",
+                kind: .unknown,
+                displayName: "API",
+                window: QuotaWindow(usedPercent: 2, resetsAt: nil, windowSeconds: 1000),
+                isActive: nil
+            )],
+            planType: "Pro",
+            fetchedAt: now
+        )
+
+        let preserved = current.preservingFutureResetDates(from: previous, now: now)
+
+        XCTAssertEqual(preserved.auxiliaryLimits.first?.window.resetsAt, reset)
+    }
+
     func testClaudeMergesLegacyWindowsAndDynamicFableLimit() {
         let root: [String: Any] = [
             "five_hour": ["utilization": 2.0, "resets_at": "2026-07-13T02:30:00.424333+00:00"],
@@ -127,6 +371,45 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(MenuBarQuotaSelection.limits(in: weeklyOnly, choice: .both).count, 1)
     }
 
+    func testMenuBarCursorUsesOnlyTotalForEveryDisplayChoice() {
+        let total = QuotaLimit(
+            id: "cursor-total",
+            kind: .unknown,
+            displayName: "Total",
+            window: QuotaWindow(usedPercent: 12, resetsAt: nil, windowSeconds: nil),
+            isActive: nil
+        )
+        let auto = QuotaLimit(
+            id: "cursor-auto",
+            kind: .unknown,
+            displayName: "Auto",
+            window: QuotaWindow(usedPercent: 34, resetsAt: nil, windowSeconds: nil),
+            isActive: nil
+        )
+        let api = QuotaLimit(
+            id: "cursor-api",
+            kind: .unknown,
+            displayName: "API",
+            window: QuotaWindow(usedPercent: 56, resetsAt: nil, windowSeconds: nil),
+            isActive: nil
+        )
+        let cursor = QuotaSnapshot(
+            app: .cursor,
+            primaryLimit: total,
+            secondaryLimit: auto,
+            auxiliaryLimits: [api],
+            planType: "Pro",
+            fetchedAt: .now
+        )
+
+        for choice in MenuBarWindowChoice.allCases {
+            XCTAssertEqual(
+                MenuBarQuotaSelection.limits(in: cursor, choice: choice).map(\.id),
+                ["cursor-total"]
+            )
+        }
+    }
+
     func testHistoryKeepsSeriesSeparatelyWhenPrimaryKindChanges() {
         let start = Date(timeIntervalSince1970: 1_000)
         var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
@@ -206,6 +489,222 @@ final class QuotaParsingTests: XCTestCase {
         // 样本记录的是剩余比例（remaining = 100 − used）。
         XCTAssertEqual(payload.lastSamples[fiveHourKey]?.remainingPercent, 20)
         XCTAssertEqual(payload.lastSamples[weeklyKey]?.remainingPercent, 38)
+    }
+
+    func testFiveHourTimelineUsesTodayFixedAxisAndKeepsLatestSampleAfterReset() {
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let todayStart = QuotaHistoryStore.todayStart(now: now)
+        let yesterdaySample = todayStart.addingTimeInterval(-60 * 60)
+        let todaySample = todayStart.addingTimeInterval(60 * 60)
+        let key = "codex:primary"
+        var payload = QuotaHistoryPayload(dayStart: todayStart)
+
+        // 重置前的 0% 留在昨天；重置后的 70% 是今天的新基线，不应制造伪消耗事件。
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 100, reset: todayStart),
+            sampledAt: yesterdaySample
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .codex,
+            kind: .codexPrimary,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 30, reset: todayStart.addingTimeInterval(5 * 60 * 60)),
+            sampledAt: todaySample
+        )
+
+        let periods = QuotaHistoryStore.timelinePeriods(
+            payload: payload,
+            accountKey: key,
+            limitKind: .fiveHour,
+            now: now
+        )
+
+        XCTAssertEqual(periods.count, 1)
+        XCTAssertEqual(periods[0].kind, .today)
+        XCTAssertEqual(periods[0].start, todayStart)
+        XCTAssertEqual(
+            Calendar.current.dateComponents([.day], from: periods[0].start, to: periods[0].end).day,
+            1
+        )
+        XCTAssertEqual(periods[0].entries.count, 1)
+        XCTAssertEqual(periods[0].entries[0].source, .sample)
+        XCTAssertEqual(periods[0].entries[0].sampledAt, todaySample)
+        XCTAssertEqual(periods[0].entries[0].remainingPercent, 70)
+        XCTAssertNil(periods[0].entries[0].deltaPercent)
+    }
+
+    func testFiveHourTimelineSplitsLineSeriesAtEachQuotaWindow() {
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let todayStart = QuotaHistoryStore.todayStart(now: now)
+        let firstReset = todayStart.addingTimeInterval(5 * 60 * 60)
+        let secondReset = firstReset.addingTimeInterval(5 * 60 * 60)
+        let key = "codex:primary"
+        var payload = QuotaHistoryPayload(dayStart: todayStart)
+
+        // 第一个 5H 窗口：80% → 10%。
+        for (used, offset) in [(20.0, 30.0), (90.0, 120.0)] {
+            payload = QuotaHistoryStore.record(
+                payload: payload,
+                accountKey: key,
+                app: .codex,
+                kind: .codexPrimary,
+                snapshot: snapshot(kind: .fiveHour, usedPercent: used, reset: firstReset),
+                sampledAt: todayStart.addingTimeInterval(offset * 60)
+            )
+        }
+        // 第二个 5H 窗口：重置回 100%，随后消耗到 60%。跨窗不产生变动事件。
+        for (used, offset) in [(0.0, 310.0), (40.0, 360.0)] {
+            payload = QuotaHistoryStore.record(
+                payload: payload,
+                accountKey: key,
+                app: .codex,
+                kind: .codexPrimary,
+                snapshot: snapshot(kind: .fiveHour, usedPercent: used, reset: secondReset),
+                sampledAt: todayStart.addingTimeInterval(offset * 60)
+            )
+        }
+
+        let periods = QuotaHistoryStore.timelinePeriods(
+            payload: payload,
+            accountKey: key,
+            limitKind: .fiveHour,
+            now: now
+        )
+
+        XCTAssertEqual(periods.count, 1)
+        let entries = periods[0].entries
+        // 两个窗口必须落在不同的折线 series，否则图上会出现 10% → 100% 的假回升斜线。
+        let indexesByReset = Dictionary(grouping: entries) { $0.windowIndex }
+            .mapValues { Set($0.compactMap(\.resetsAt)) }
+        XCTAssertEqual(indexesByReset.count, 2)
+        XCTAssertEqual(entries.first?.windowIndex, 0)
+        XCTAssertEqual(entries.last?.windowIndex, 1)
+        XCTAssertTrue(entries.filter { $0.windowIndex == 0 }.allSatisfy { $0.resetsAt == firstReset })
+        XCTAssertTrue(entries.filter { $0.windowIndex == 1 }.allSatisfy { $0.resetsAt == secondReset })
+    }
+
+    func testWeeklyTimelineKeepsPreviousCycleWhenResetPointShifted() {
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let currentEnd = now.addingTimeInterval(3 * 24 * 60 * 60)
+        let currentStart = currentEnd.addingTimeInterval(-7 * 24 * 60 * 60)
+        // 上一周期的重置点比「currentEnd − 7 天」早 2 天：停用一段时间后窗口重新起算。
+        let previousEnd = currentStart.addingTimeInterval(-2 * 24 * 60 * 60)
+        let key = "claude:primary"
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: now))
+
+        for (used, offset) in [(30.0, -6.0), (45.0, -5.0)] {
+            payload = QuotaHistoryStore.record(
+                payload: payload,
+                accountKey: key,
+                app: .claude,
+                kind: .claudePrimary,
+                snapshot: snapshot(kind: .weekly, usedPercent: used, reset: previousEnd),
+                sampledAt: previousEnd.addingTimeInterval(offset * 24 * 60 * 60)
+            )
+        }
+        for (used, offset) in [(10.0, 1.0), (25.0, 2.0)] {
+            payload = QuotaHistoryStore.record(
+                payload: payload,
+                accountKey: key,
+                app: .claude,
+                kind: .claudePrimary,
+                snapshot: snapshot(kind: .weekly, usedPercent: used, reset: currentEnd),
+                sampledAt: currentStart.addingTimeInterval(offset * 24 * 60 * 60)
+            )
+        }
+
+        let periods = QuotaHistoryStore.timelinePeriods(
+            payload: payload,
+            accountKey: key,
+            limitKind: .weekly,
+            now: now
+        )
+
+        XCTAssertEqual(periods.map(\.kind), [.currentCycle, .previousCycle])
+        // 上一周期的边界跟随事件自身的 resets_at，而不是「当前周期起点」硬推。
+        XCTAssertEqual(periods[1].end, previousEnd)
+        XCTAssertEqual(periods[1].start, previousEnd.addingTimeInterval(-7 * 24 * 60 * 60))
+        XCTAssertTrue(periods[1].entries.contains { $0.source == .change && $0.deltaPercent == -15 })
+        XCTAssertTrue(periods[0].entries.contains { $0.source == .change && $0.deltaPercent == -15 })
+        // 两个周期不共享事件。
+        let currentIDs = Set(periods[0].entries.map(\.id))
+        let previousIDs = Set(periods[1].entries.map(\.id))
+        XCTAssertTrue(currentIDs.isDisjoint(with: previousIDs))
+    }
+
+    func testWeeklyTimelineSeparatesCurrentAndPreviousQuotaCycles() {
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let currentEnd = now.addingTimeInterval(3 * 24 * 60 * 60)
+        let currentStart = currentEnd.addingTimeInterval(-7 * 24 * 60 * 60)
+        let previousStart = currentStart.addingTimeInterval(-7 * 24 * 60 * 60)
+        let key = "claude:primary"
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: now))
+
+        // 上一额度周期：50% → 40%。
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .claude,
+            kind: .claudePrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 50, reset: currentStart),
+            sampledAt: previousStart.addingTimeInterval(60 * 60)
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .claude,
+            kind: .claudePrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 60, reset: currentStart.addingTimeInterval(1)),
+            sampledAt: previousStart.addingTimeInterval(2 * 60 * 60)
+        )
+
+        // 当前额度周期：75% → 65%，首个样本是跨周期新基线。
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .claude,
+            kind: .claudePrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 25, reset: currentEnd),
+            sampledAt: currentStart.addingTimeInterval(60 * 60)
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .claude,
+            kind: .claudePrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 35, reset: currentEnd.addingTimeInterval(1)),
+            sampledAt: currentStart.addingTimeInterval(2 * 60 * 60)
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload,
+            accountKey: key,
+            app: .claude,
+            kind: .claudePrimary,
+            snapshot: snapshot(kind: .weekly, usedPercent: 35, reset: currentEnd.addingTimeInterval(1)),
+            sampledAt: now
+        )
+
+        let periods = QuotaHistoryStore.timelinePeriods(
+            payload: payload,
+            accountKey: key,
+            limitKind: .weekly,
+            now: now
+        )
+
+        XCTAssertEqual(periods.map(\.kind), [.currentCycle, .previousCycle])
+        // 周期边界跟随最新采样的 resets_at，含服务端的秒级抖动，按同窗语义做容差比较。
+        XCTAssertEqual(periods[0].start.timeIntervalSince(currentStart), 0, accuracy: 60)
+        XCTAssertEqual(periods[0].end.timeIntervalSince(currentEnd), 0, accuracy: 60)
+        XCTAssertEqual(periods[1].start.timeIntervalSince(previousStart), 0, accuracy: 60)
+        XCTAssertEqual(periods[1].end.timeIntervalSince(currentStart), 0, accuracy: 60)
+        XCTAssertTrue(periods[0].entries.contains { $0.source == .sample && $0.remainingPercent == 65 })
+        XCTAssertTrue(periods[0].entries.contains { $0.source == .change && $0.deltaPercent == -10 })
+        XCTAssertTrue(periods[1].entries.contains { $0.source == .change && $0.deltaPercent == -10 })
     }
 
     func testHistoryPrunesSamplesOlderThanRetentionWindow() {

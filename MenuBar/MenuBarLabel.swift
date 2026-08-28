@@ -110,8 +110,11 @@ enum MenuBarBadgeImage {
         snapshots: [QuotaApp: QuotaSnapshot],
         window: MenuBarWindowChoice
     ) -> String {
-        let parts = providers.map {
-            "\($0.title) \(pctText(snapshots[$0.app], window: window))"
+        let parts = providers.map { provider in
+            if snapshots[provider.app]?.isUnlimited == true {
+                return "\(provider.title) Unlimited"
+            }
+            return "\(provider.title) \(pctText(snapshots[provider.app], window: window))"
         }
         return parts.isEmpty ? "CCBar" : parts.joined(separator: ", ")
     }
@@ -125,6 +128,7 @@ enum MenuBarBadgeImage {
 
     private static func pctText(_ snap: QuotaSnapshot?, window: MenuBarWindowChoice) -> String {
         guard let snap else { return "--" }
+        if snap.isUnlimited == true { return "∞" }
         let limits = MenuBarQuotaSelection.limits(in: snap, choice: window)
         guard !limits.isEmpty else { return "--" }
         return limits.map { pctOrPlaceholder($0.window) }.joined(separator: "/")
@@ -178,6 +182,12 @@ enum MenuBarQuotaSelection {
         in snapshot: QuotaSnapshot,
         choice: MenuBarWindowChoice
     ) -> [QuotaLimit] {
+        // Cursor 的 Total / Auto / API 是同一计费周期下的不同额度维度，
+        // 不是主 / 周窗口。菜单栏只显示 Total，避免把 Auto 伪装成 Weekly，
+        // 也避免三段数字挤占菜单栏空间；明细始终在 Popover 展示。
+        if snapshot.app == .cursor {
+            return [snapshot.primaryLimit].compactMap { $0 }
+        }
         switch choice {
         case .primary:
             return [snapshot.primaryLimit].compactMap { $0 }

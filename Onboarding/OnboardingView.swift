@@ -178,6 +178,17 @@ private struct DetectAccountsStep: View {
                     fallback: "K",
                     isDetected: appState.claudeAccount != nil
                 )
+                DetectedAccountRow(
+                    title: "Cursor",
+                    subtitle: "Cursor",
+                    plan: appState.cursorQuota?.planType,
+                    email: appState.cursorAccount?.email,
+                    source: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+                    tint: .gray,
+                    logoName: "cursor",
+                    fallback: "C",
+                    isDetected: appState.cursorAccount != nil
+                )
             }
             .padding(.top, 18)
 
@@ -209,7 +220,7 @@ private struct DetectAccountsStep: View {
     }
 
     private var anyDetected: Bool {
-        appState.codexAccount != nil || appState.claudeAccount != nil
+        appState.codexAccount != nil || appState.claudeAccount != nil || appState.cursorAccount != nil
     }
 }
 
@@ -303,6 +314,7 @@ private struct ReadOnlyInfoCard: View {
 // MARK: - Step 3: Configure menu bar + HUD
 
 private struct ConfigureStep: View {
+    @Environment(AppState.self) private var appState
     let onBack: () -> Void
     let onContinue: () -> Void
 
@@ -326,6 +338,20 @@ private struct ConfigureStep: View {
                         Toggle("Claude Code", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
                             .toggleStyle(.switch)
                             .tint(.green)
+                        Toggle("Cursor", isOn: Binding(
+                            get: { settings.isProviderShownInMenuBar(.cursor) },
+                            set: { shown in
+                                settings.setProviderShownInMenuBar(shown, for: .cursor)
+                                if shown {
+                                    settings.setProviderEnabled(true, for: .cursor)
+                                    Task {
+                                        await appState.refreshQuotas(reason: .userInitiated)
+                                    }
+                                }
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .tint(.green)
                     }
                 }
 

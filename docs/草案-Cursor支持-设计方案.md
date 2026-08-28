@@ -1,6 +1,6 @@
 # 草案 · Cursor 支持（额度 + 用量统计）
 
-> 状态：设计方案。本文是后续实现的约束来源；落地后并入《产品需求》《技术实现》《界面布局》三份常驻文档，本草案移入 `历史参考/`。
+> 状态：开发实现已完成，待使用真实已登录的 Cursor.app 做端到端验收。额度基础模型、`usage-summary` 离线解析、只读 SQLite/JWT/Cookie 认证、刷新调度、账号隔离缓存，远端用量分页与主窗口统计均已落地；Popover、菜单栏、悬浮窗、设置、Onboarding、图标和双语文案也已接入。Cursor 的额度 Provider 与统计可独立开启，默认关闭时不会产生远端刷新；`All` 仍仅标示现有缓存覆盖范围，不会无界回溯。产品、技术、布局和设计风格文档已同步（设计风格 §4.2 / §4.2.1 补 Cursor 识别色与 Unlimited、计量消耗规范；界面布局补开关层级语义与 Cursor 统计的账号态守卫）。真实接口字段与登录态验证完成后再移入 `历史参考/`。
 
 ## 1. 背景、目标与范围
 
@@ -8,7 +8,7 @@
 
 - **Popover**：展示 Cursor 的 Total / Auto / API 剩余额度、计费周期与重置时间、套餐名。
 - **主窗口统计页**：展示 Cursor 账户级 Token 和服务端计量消耗，支持现有日 / 周 / 月等时间范围。
-- **设置**：可独立控制 Cursor Provider、菜单栏、悬浮窗和统计服务的显示。
+- **设置**：Cursor Provider 总开关、菜单栏、悬浮窗、统计服务各有独立入口。含义与既有 Provider 一致——菜单栏与悬浮窗彼此独立，统计服务独立于额度 Provider（可以只看 Cursor 统计而不显示额度卡片）；但菜单栏 / 悬浮窗是 Provider 总开关的子开关，总开关关闭时不会绕过它单独显示。完整层级见 [界面布局.md](界面布局.md) §4.5 Accounts「开关层级语义」。
 
 第一版明确不做：
 
@@ -339,9 +339,9 @@ Codex → Claude Code → Cursor → Antigravity
 2. **只读认证**：SQLite WAL / immutable 边界、JWT、账号切换、401 单次重读。
 3. **额度**：`CursorQuotaClient`、AppState 调度、独立错误和 cache 行为。
 4. **远端用量**：严格分页、自然日对齐的日期分片、费用完整性、远端独立 cache 与按日 replacement。
-5. **统计 UI**：Cursor service、覆盖范围、Partial / Loading、计量消耗文案。
-6. **Quota UI**：Popover、菜单栏、悬浮窗、设置、Onboarding、图标和 L10n。
-7. **文档同步**：并入《产品需求》《技术实现》《界面布局》《设计风格》。
+5. **统计 UI**：Cursor service、按月补拉有限历史、覆盖范围、Partial / Loading、计量消耗文案。（已完成）
+6. **Quota UI**：Popover、菜单栏、悬浮窗、设置、Onboarding、图标和 L10n。（已完成）
+7. **文档同步**：并入《产品需求》《技术实现》《界面布局》《设计风格》。（已完成，待真实验收后归档本草案）
 
 ## 10. 验收标准
 

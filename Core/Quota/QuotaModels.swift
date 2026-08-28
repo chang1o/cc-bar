@@ -3,12 +3,14 @@ import Foundation
 nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
+    case cursor
 
     /// 对应的本地用量数据源；`nil` = 该服务没有可解析的本地日志。
     var usageApp: UsageApp? {
         switch self {
         case .codex: return .codex
         case .claude: return .claude
+        case .cursor: return nil
         }
     }
 }
@@ -19,7 +21,9 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
     let vendor: String
     let logoName: String
     let fallback: String
-    let supportsLocalCost: Bool
+    /// Popover 是否展示今日 / 本周花费。Codex 与 Claude 是本机日志估算，
+    /// Cursor 是账号全设备的服务端计量——两者都不是账单金额，展示口径一致。
+    let showsCost: Bool
 
     var id: QuotaApp { app }
 
@@ -30,7 +34,7 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "OpenAI",
             logoName: "codex",
             fallback: "C",
-            supportsLocalCost: true
+            showsCost: true
         ),
         QuotaProviderDescriptor(
             app: .claude,
@@ -38,7 +42,15 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "Anthropic",
             logoName: "claude",
             fallback: "K",
-            supportsLocalCost: true
+            showsCost: true
+        ),
+        QuotaProviderDescriptor(
+            app: .cursor,
+            title: "Cursor",
+            vendor: "Cursor",
+            logoName: "cursor",
+            fallback: "C",
+            showsCost: true
         ),
     ]
 }
@@ -162,7 +174,9 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     var app: QuotaApp
     var primaryLimit: QuotaLimit?
     var secondaryLimit: QuotaLimit?
+    var auxiliaryLimits: [QuotaLimit]
     var modelLimits: [QuotaLimit]
+    var isUnlimited: Bool?
     var planType: String?
     var fetchedAt: Date
 
@@ -170,14 +184,18 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         app: QuotaApp,
         primaryLimit: QuotaLimit?,
         secondaryLimit: QuotaLimit?,
+        auxiliaryLimits: [QuotaLimit] = [],
         modelLimits: [QuotaLimit] = [],
+        isUnlimited: Bool? = nil,
         planType: String?,
         fetchedAt: Date
     ) {
         self.app = app
         self.primaryLimit = primaryLimit
         self.secondaryLimit = secondaryLimit
+        self.auxiliaryLimits = auxiliaryLimits
         self.modelLimits = modelLimits
+        self.isUnlimited = isUnlimited
         self.planType = planType
         self.fetchedAt = fetchedAt
     }
@@ -205,7 +223,7 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     }
 
     var allLimits: [QuotaLimit] {
-        [primaryLimit, secondaryLimit].compactMap { $0 } + modelLimits
+        [primaryLimit, secondaryLimit].compactMap { $0 } + auxiliaryLimits + modelLimits
     }
 
     func preservingFutureResetDates(
@@ -220,6 +238,9 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         var next = self
         next.primaryLimit = carryingReset(for: primaryLimit, previousByID: previousByID, now: now)
         next.secondaryLimit = carryingReset(for: secondaryLimit, previousByID: previousByID, now: now)
+        next.auxiliaryLimits = auxiliaryLimits.map {
+            carryingReset(for: $0, previousByID: previousByID, now: now) ?? $0
+        }
         next.modelLimits = modelLimits.map {
             carryingReset(for: $0, previousByID: previousByID, now: now) ?? $0
         }
@@ -251,7 +272,9 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         case app
         case primaryLimit
         case secondaryLimit
+        case auxiliaryLimits
         case modelLimits
+        case isUnlimited
         case planType
         case fetchedAt
         // v2 及更早缓存字段。
@@ -264,12 +287,18 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         app = try container.decode(QuotaApp.self, forKey: .app)
+        isUnlimited = try container.decodeIfPresent(Bool.self, forKey: .isUnlimited)
         planType = try container.decodeIfPresent(String.self, forKey: .planType)
         fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
 
-        if container.contains(.primaryLimit) || container.contains(.secondaryLimit) || container.contains(.modelLimits) {
+        if container.contains(.primaryLimit)
+            || container.contains(.secondaryLimit)
+            || container.contains(.auxiliaryLimits)
+            || container.contains(.modelLimits)
+        {
             primaryLimit = try container.decodeIfPresent(QuotaLimit.self, forKey: .primaryLimit)
             secondaryLimit = try container.decodeIfPresent(QuotaLimit.self, forKey: .secondaryLimit)
+            auxiliaryLimits = try container.decodeIfPresent([QuotaLimit].self, forKey: .auxiliaryLimits) ?? []
             modelLimits = try container.decodeIfPresent([QuotaLimit].self, forKey: .modelLimits) ?? []
             return
         }
@@ -288,6 +317,7 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
             self.secondaryLimit = nil
         }
 
+        auxiliaryLimits = []
         modelLimits = []
         if let opus = try container.decodeIfPresent(QuotaWindow.self, forKey: .weeklyOpus) {
             modelLimits.append(.model(id: nil, displayName: "Opus", window: opus, isActive: nil))
@@ -302,7 +332,9 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         try container.encode(app, forKey: .app)
         try container.encodeIfPresent(primaryLimit, forKey: .primaryLimit)
         try container.encodeIfPresent(secondaryLimit, forKey: .secondaryLimit)
+        try container.encode(auxiliaryLimits, forKey: .auxiliaryLimits)
         try container.encode(modelLimits, forKey: .modelLimits)
+        try container.encodeIfPresent(isUnlimited, forKey: .isUnlimited)
         try container.encodeIfPresent(planType, forKey: .planType)
         try container.encode(fetchedAt, forKey: .fetchedAt)
     }

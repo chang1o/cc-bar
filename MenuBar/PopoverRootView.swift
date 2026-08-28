@@ -180,6 +180,10 @@ struct PopoverRootView: View {
             email = appState.claudeAccount?.email
             plan = appState.claudeAccount?.subscriptionType?.capitalized
             fallback = "Anthropic"
+        case .cursor:
+            email = appState.cursorAccount?.email
+            plan = appState.quotaSnapshot(for: .cursor)?.planType
+            fallback = "Cursor"
         }
         if !privacy, let email, !email.isEmpty { parts.append(email) }
         if let plan, !plan.isEmpty { parts.append(plan) }
@@ -202,18 +206,26 @@ struct PopoverRootView: View {
             error: appState.quotaError(for: provider.app),
             weekSpend: weekSpend(for: provider.app),
             todayCost: todayCost(for: provider.app),
-            serviceStatus: serviceStatus(for: provider.app)
+            serviceStatus: serviceStatus(for: provider.app),
+            showsCost: provider.showsCost
         )
     }
 
     private func weekSpend(for app: QuotaApp) -> Decimal? {
-        let usageApp: UsageApp
-        switch app {
-        case .codex: usageApp = .codex
-        case .claude: usageApp = .claude
-        }
+        guard let usageApp = app.usageApp else { return nil }
         let (from, to) = Self.weekBounds()
+        if app == .cursor { return cursorCost(from: from, to: to) }
         let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
+        return totals.costUSD
+    }
+
+    /// Cursor 的费用来自远端服务端计量，没有本地日志兜底：远端尚未覆盖该区间，
+    /// 或区间内有事件缺 chargedCents 时必须返回 nil 让 UI 显示"—"，
+    /// 不能把"没拉到"或"拉了一半"显示成一个偏小的金额。
+    private func cursorCost(from: Date, to: Date) -> Decimal? {
+        guard appState.usageService.isCursorRemoteUsageCovered(from..<to) else { return nil }
+        let totals = appState.usageService.aggregator.totals(app: .cursor, from: from, to: to)
+        guard !totals.costIncomplete else { return nil }
         return totals.costUSD
     }
 
@@ -221,7 +233,13 @@ struct PopoverRootView: View {
         switch app {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
+        case .cursor: cursorTodayMeteredCost
         }
+    }
+
+    private var cursorTodayMeteredCost: Decimal? {
+        let (from, to) = Self.todayBounds()
+        return cursorCost(from: from, to: to)
     }
 
     private func serviceStatus(for app: QuotaApp) -> ServiceStatus? {
@@ -229,6 +247,7 @@ struct PopoverRootView: View {
         return switch app {
         case .codex: appState.codexServiceStatus
         case .claude: appState.claudeServiceStatus
+        case .cursor: nil
         }
     }
 
@@ -283,6 +302,13 @@ struct PopoverRootView: View {
 
     // MARK: Helpers
 
+    private static func todayBounds(now: Date = Date()) -> (Date, Date) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let start = cal.startOfDay(for: now)
+        return (start, cal.date(byAdding: .day, value: 1, to: start) ?? start)
+    }
+
     private static func weekBounds(now: Date = Date()) -> (Date, Date) {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = .current
@@ -321,15 +347,13 @@ private struct ServiceBlockView: View {
     let weekSpend: Decimal?
     let todayCost: Decimal?
     let serviceStatus: ServiceStatus?
+    let showsCost: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
             bodyRow
-            if let secondary = visibleSecondaryLimit {
-                compactLimitRow(secondary)
-            }
-            ForEach(snapshot?.modelLimits ?? []) { limit in
+            ForEach(compactLimits) { limit in
                 compactLimitRow(limit)
             }
             if let message = shortError(error) {
@@ -388,18 +412,30 @@ private struct ServiceBlockView: View {
         HStack(alignment: .center, spacing: 16) {
             // 左:主要额度大百分比 + 动态窗口标签
             VStack(alignment: .center, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text(primaryValueText)
+                // 与 Codex / Claude 的「数值 + 窗口标签」同构：这里放值，下面的
+                // UNLIMITED 才是标签，不把同一个词写两遍。∞ 与菜单栏、悬浮窗一致。
+                if isUnlimited {
+                    Text("∞")
                         .font(.system(size: 32, weight: .semibold))
-                        .monospacedDigit()
                         .kerning(-0.8)
-                        .foregroundStyle(primaryColor)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Text("%")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(primaryColor.opacity(0.75))
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Text(primaryValueText)
+                            .font(.system(size: 32, weight: .semibold))
+                            .monospacedDigit()
+                            .kerning(-0.8)
+                            .foregroundStyle(primaryColor)
+                            .lineLimit(1)
+                        if hasPrimaryLimit {
+                            Text("%")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(primaryColor.opacity(0.75))
+                        }
+                    }
+                    .fixedSize()
                 }
-                .fixedSize()
 
                 Text(primaryLimitTitle)
                     .font(.system(size: 9, weight: .semibold))
@@ -409,7 +445,11 @@ private struct ServiceBlockView: View {
 
             // 右:主要额度进度条 + 两行(数值 / label)
             VStack(alignment: .leading, spacing: 8) {
-                ProgressBar(value: primaryRemaining / 100, tint: primaryColor, height: 7)
+                // Unlimited 没有可填充的比例，进度条会被读成「已用满」；左栏已经写了
+                // 「不限额度」，这里不再重复第二遍，只保留计费周期重置时间。
+                if !isUnlimited {
+                    ProgressBar(value: primaryRemaining / 100, tint: primaryColor, height: 7)
+                }
 
                 VStack(spacing: 1) {
                     HStack(spacing: 0) {
@@ -425,6 +465,7 @@ private struct ServiceBlockView: View {
                                 statInline(value: formatCostInt(todayCost), english: "today", chinese: "今日")
                                 statInline(value: formatCostInt(weekSpend), english: "this week", chinese: "本周")
                             }
+                            .help(costTooltip)
                         }
                     }
 
@@ -433,9 +474,11 @@ private struct ServiceBlockView: View {
                             .font(.system(size: 9.5))
                             .foregroundStyle(.quaternary)
 
-                        if showsCost {
-                            Spacer(minLength: 0)
+                        // Spacer 必须在 showsCost 之外：showsCost 为 false 时这行只剩
+                        // 一个子视图，HStack 会把它居中，"重置"会跑到行中间。
+                        Spacer(minLength: 0)
 
+                        if showsCost {
                             BilingualInline(english: "cost", chinese: "花费")
                                 .font(.system(size: 9.5))
                                 .foregroundStyle(.quaternary)
@@ -490,6 +533,9 @@ private struct ServiceBlockView: View {
     }
 
     private func compactLimitLabel(_ limit: QuotaLimit) -> String {
+        if app == .cursor, let name = normalizedModelLabel(limit.displayName) {
+            return name.uppercased()
+        }
         switch limit.kind {
         case .fiveHour:
             return "5HOUR"
@@ -528,7 +574,7 @@ private struct ServiceBlockView: View {
     }
 
     private var primaryColor: Color {
-        guard snapshot?.primaryLimit != nil else { return .secondary }
+        guard hasPrimaryLimit, !isUnlimited else { return .secondary }
         return statusColor(remainingPercent: primaryRemaining, tint: tint)
     }
 
@@ -539,23 +585,56 @@ private struct ServiceBlockView: View {
         return secondary
     }
 
+    private var compactLimits: [QuotaLimit] {
+        let candidates = [visibleSecondaryLimit].compactMap { $0 }
+            + (snapshot?.auxiliaryLimits ?? [])
+            + (snapshot?.modelLimits ?? [])
+        return candidates.reduce(into: [QuotaLimit]()) { result, limit in
+            if !result.contains(where: { $0.id == limit.id }) {
+                result.append(limit)
+            }
+        }
+    }
+
+    private var hasPrimaryLimit: Bool {
+        snapshot?.primaryLimit != nil
+    }
+
+    private var isUnlimited: Bool {
+        snapshot?.isUnlimited == true
+    }
+
     private var primaryValueText: String {
         guard let window = snapshot?.primaryWindow else { return "--" }
         return "\(Int(window.remainingPercent.rounded()))"
     }
 
     private var primaryLimitTitle: String {
+        if isUnlimited { return "UNLIMITED" }
         guard let limit = snapshot?.primaryLimit else { return "CURRENT" }
         switch limit.kind {
         case .fiveHour: return "5HOUR"
         case .weekly: return app == .claude ? "ALL" : "WEEKLY"
         case .modelWeekly: return normalizedModelLabel(limit.displayName) ?? "MODEL"
-        case .unknown: return normalizedModelLabel(limit.displayName) ?? "CURRENT"
+        case .unknown:
+            if app == .cursor, let name = normalizedModelLabel(limit.displayName) {
+                return name.uppercased()
+            }
+            return normalizedModelLabel(limit.displayName) ?? "CURRENT"
         }
     }
 
-    private var showsCost: Bool {
-        weekSpend != nil
+    /// 两个口径都不是账单金额，但来源不同，需要在 tooltip 里说清楚。
+    private var costTooltip: String {
+        app == .cursor
+            ? tr(
+                "Cursor server-side metering for this account across all devices.",
+                "Cursor 服务端计量，涵盖该账号的全部设备。"
+            )
+            : tr(
+                "Estimated from this Mac's local logs at API list prices.",
+                "按 API 标价从本机日志估算。"
+            )
     }
 
     /// 取整美元金额:`<$1` 用于 0 ~ 0.99,`$0` 仅在 nil/0 时显示。

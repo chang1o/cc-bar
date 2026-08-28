@@ -22,7 +22,7 @@ struct FloatingContentView: View {
                     logoName: provider.logoName,
                     fallback: provider.fallback,
                     tint: provider.app.tintColor,
-                    window: appState.quotaSnapshot(for: provider.app)?.primaryWindow
+                    snapshot: appState.quotaSnapshot(for: provider.app)
                 )
             }
             if providers.isEmpty {
@@ -59,7 +59,7 @@ private struct FloatingRow: View {
     let logoName: String
     let fallback: String
     let tint: Color
-    let window: QuotaWindow?
+    let snapshot: QuotaSnapshot?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -72,29 +72,44 @@ private struct FloatingRow: View {
                 cornerRadius: 5
             )
 
-            ProgressBar(value: barValue, tint: barColor, height: 4)
-                .frame(minWidth: 56)
+            // Unlimited 没有可填充的比例；留空 bar 位保持各行 tile / 数值三段对齐，
+            // 右侧只用一个 ∞ 表达，不再另起一行文字重复同一件事。
+            if isUnlimited {
+                Spacer(minLength: 56)
 
-            Text(percentText)
-                .font(.system(size: 13, weight: .semibold))
-                .kerning(-0.3)
-                .monospacedDigit()
-                .foregroundStyle(barColor)
-                .frame(minWidth: 34, alignment: .trailing)
+                Text("∞")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 34, alignment: .trailing)
+            } else {
+                ProgressBar(value: barValue, tint: barColor, height: 4)
+                    .frame(minWidth: 56)
+
+                Text(percentText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .kerning(-0.3)
+                    .monospacedDigit()
+                    .foregroundStyle(barColor)
+                    .frame(minWidth: 34, alignment: .trailing)
+            }
         }
     }
 
     private var barValue: Double {
-        guard let window else { return 0 }
+        guard let window = snapshot?.primaryWindow else { return 0 }
         return window.remainingPercent / 100
     }
 
     private var percentText: String {
-        guard let window else { return "--%" }
+        guard let window = snapshot?.primaryWindow else { return "--%" }
         return "\(Int(window.remainingPercent.rounded()))%"
     }
 
     private var barColor: Color {
-        statusColor(remainingPercent: window?.remainingPercent, tint: tint)
+        statusColor(remainingPercent: snapshot?.primaryWindow?.remainingPercent, tint: tint)
+    }
+
+    private var isUnlimited: Bool {
+        snapshot?.isUnlimited == true
     }
 }

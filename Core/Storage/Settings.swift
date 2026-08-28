@@ -96,6 +96,17 @@ struct ProviderDisplaySettings: Sendable, Codable, Equatable {
         menuBar: true,
         floatingHUD: true
     )
+
+    /// Cursor 首次出现时保持关闭；只有用户启用额度展示或远端统计后，
+    /// 才会进入远端刷新链路，避免未安装 Cursor 的机器产生后台失败状态。
+    static func defaults(for app: QuotaApp) -> ProviderDisplaySettings {
+        switch app {
+        case .codex, .claude:
+            enabledByDefault
+        case .cursor:
+            ProviderDisplaySettings(enabled: false, menuBar: false, floatingHUD: false)
+        }
+    }
 }
 
 @Observable
@@ -111,10 +122,14 @@ final class SettingsStore {
         didSet { saveProviderDisplaySettings() }
     }
 
-    // 统计页按服务统计的显示配置(Codex / Claude Code / Pi / OpenCode),默认全开。
+    // 统计页按服务统计的显示配置；本地服务默认全开，Cursor 远端服务默认关闭。
     var usageServiceVisibility: [UsageApp: Bool] {
         didSet { saveUsageServiceVisibility() }
     }
+
+    // 运行时 Cursor 账号可用性，由 AppState 的账号检测同步，不持久化。
+    // 乐观初值 true：启动瞬间 loadCursor 还没跑完，先按上次偏好渲染，避免统计页闪一下空白。
+    var cursorAccountDetected: Bool = true
 
     // 兼容现有调用方的语义化入口。
     var showCodex: Bool {
@@ -210,31 +225,31 @@ final class SettingsStore {
     }
 
     func isProviderEnabled(_ app: QuotaApp) -> Bool {
-        providerDisplaySettings[app, default: .enabledByDefault].enabled
+        providerDisplaySettings[app, default: .defaults(for: app)].enabled
     }
 
     func setProviderEnabled(_ enabled: Bool, for app: QuotaApp) {
-        var settings = providerDisplaySettings[app, default: .enabledByDefault]
+        var settings = providerDisplaySettings[app, default: .defaults(for: app)]
         settings.enabled = enabled
         providerDisplaySettings[app] = settings
     }
 
     func isProviderShownInMenuBar(_ app: QuotaApp) -> Bool {
-        providerDisplaySettings[app, default: .enabledByDefault].menuBar
+        providerDisplaySettings[app, default: .defaults(for: app)].menuBar
     }
 
     func setProviderShownInMenuBar(_ shown: Bool, for app: QuotaApp) {
-        var settings = providerDisplaySettings[app, default: .enabledByDefault]
+        var settings = providerDisplaySettings[app, default: .defaults(for: app)]
         settings.menuBar = shown
         providerDisplaySettings[app] = settings
     }
 
     func isProviderShownInFloatingHUD(_ app: QuotaApp) -> Bool {
-        providerDisplaySettings[app, default: .enabledByDefault].floatingHUD
+        providerDisplaySettings[app, default: .defaults(for: app)].floatingHUD
     }
 
     func setProviderShownInFloatingHUD(_ shown: Bool, for app: QuotaApp) {
-        var settings = providerDisplaySettings[app, default: .enabledByDefault]
+        var settings = providerDisplaySettings[app, default: .defaults(for: app)]
         settings.floatingHUD = shown
         providerDisplaySettings[app] = settings
     }
@@ -260,7 +275,7 @@ final class SettingsStore {
                 }
             }
             for app in QuotaApp.allCases where result[app] == nil {
-                result[app] = .enabledByDefault
+                result[app] = .defaults(for: app)
             }
             return result
         }
@@ -277,6 +292,7 @@ final class SettingsStore {
                 menuBar: defaults.object(forKey: Keys.menuBarShowClaude) as? Bool ?? true,
                 floatingHUD: defaults.object(forKey: Keys.floatingShowClaude) as? Bool ?? true
             ),
+            .cursor: .defaults(for: .cursor),
         ]
     }
 
@@ -292,17 +308,27 @@ final class SettingsStore {
     // MARK: - Usage service visibility (Stats by-service)
 
     /// 该服务是否计入统计页(全站过滤:KPI / Token 拆分 / 按服务 / 按模型 / 每日用量 / 对话页)。
+    /// 这里只反映用户偏好；设置页开关读它，保证卸载 / 退出 Cursor 后偏好不被静默改写。
     func isUsageServiceVisible(_ app: UsageApp) -> Bool {
-        usageServiceVisibility[app, default: true]
+        usageServiceVisibility[app, default: app == .cursor ? false : true]
+    }
+
+    /// 统计页实际采用的可见性：在用户偏好之上叠加运行时账号可用性。
+    /// Cursor 没有本地日志，账号消失后远端缓存不会再更新，继续展示只会留下一条空服务行；
+    /// 但偏好本身保留，用户重新登录 Cursor 后自动恢复，不需要再去设置页打开一次。
+    func isUsageServiceEffectivelyVisible(_ app: UsageApp) -> Bool {
+        guard isUsageServiceVisible(app) else { return false }
+        return app == .cursor ? cursorAccountDetected : true
     }
 
     func setUsageServiceVisible(_ visible: Bool, for app: UsageApp) {
         usageServiceVisibility[app] = visible
     }
 
-    /// 按固定顺序(Codex → Claude → Pi → OpenCode)返回可见服务。
+    /// 按固定顺序返回可见统计服务。Cursor 默认关闭；用户主动开启后才会读取其
+    /// 独立远端缓存并进入统计页，但不要求同时展示 Cursor 额度卡片。
     var visibleUsageApps: [UsageApp] {
-        UsageApp.allCases.filter { isUsageServiceVisible($0) }
+        UsageApp.allCases.filter { isUsageServiceEffectivelyVisible($0) }
     }
 
     private static func loadUsageServiceVisibility(
@@ -319,7 +345,7 @@ final class SettingsStore {
             }
         }
         for app in UsageApp.allCases where result[app] == nil {
-            result[app] = true
+            result[app] = app == .cursor ? false : true
         }
         return result
     }

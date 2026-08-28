@@ -18,8 +18,14 @@ enum UpdateStatus: Equatable {
 final class AppState {
     var codexAccount: CodexAccount?
     var claudeAccount: ClaudeAccount?
+    // 账号态同步给设置层：Cursor 未安装 / 未登录时统计页不再渲染空的 Cursor 服务行，
+    // 用户的统计开关偏好本身保留，重新登录后自动恢复（见 SettingsStore.cursorAccountDetected）。
+    var cursorAccount: CursorAuthSession? {
+        didSet { SettingsStore.shared.cursorAccountDetected = cursorAccount != nil }
+    }
     var codexError: String?
     var claudeError: String?
+    var cursorError: String?
 
     // MARK: 导入的 Codex 副账号
     //
@@ -74,11 +80,28 @@ final class AppState {
         get { refreshState(for: .claude) }
         set { updatePrimaryState(.claude) { $0.refresh = newValue } }
     }
+    var cursorQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .cursor) }
+        set { updatePrimaryState(.cursor) { $0.snapshot = newValue } }
+    }
+    var cursorQuotaError: String? {
+        get { quotaError(for: .cursor) }
+        set { updatePrimaryState(.cursor) { $0.error = newValue } }
+    }
+    var cursorQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .cursor) }
+        set { updatePrimaryState(.cursor) { $0.source = newValue } }
+    }
+    var cursorRefreshState: QuotaRefreshState {
+        get { refreshState(for: .cursor) }
+        set { updatePrimaryState(.cursor) { $0.refresh = newValue } }
+    }
     var quotaHistory = QuotaHistoryPayload()
     var quotaCycles = QuotaCyclePayload()
 
     var codexTodayCost: Decimal?
     var claudeTodayCost: Decimal?
+    var cursorTodayCost: Decimal?
     var piTodayCost: Decimal?
     var opencodeTodayCost: Decimal?
 
@@ -129,6 +152,9 @@ final class AppState {
         await loadCodex()
         maybeShowKeychainPrompt()
         await loadClaude()
+        // Cursor 只读本机 SQLite，用于账号页和 Onboarding 的登录态检测；
+        // 是否请求其远端额度仍由 Provider / Stats 开关控制。
+        await loadCursor()
         recordCachedQuotaCycleObservations()
         logCredentialSummary()
 
@@ -205,6 +231,11 @@ final class AppState {
         let plan = QuotaRefreshPlan.make(
             showCodex: SettingsStore.shared.showCodex,
             showClaude: SettingsStore.shared.showClaude,
+            // Cursor 额度展示与远端统计可分别启用；任一入口启用后才允许网络刷新。
+            // 这里刻意读用户偏好而不是 isUsageServiceEffectivelyVisible：后者依赖账号检测结果，
+            // 账号一旦丢失就会把刷新链路一起关掉，从而再也检测不回来。
+            showCursor: SettingsStore.shared.isProviderEnabled(.cursor)
+                || SettingsStore.shared.isUsageServiceVisible(.cursor),
             hasVisibleImported: importedCodexAccounts.contains(where: \.visibleInPopover)
         )
         if plan.refreshCodex {
@@ -214,6 +245,14 @@ final class AppState {
         if plan.refreshClaude {
             await loadClaude()
             await loadClaudeQuota(reason: reason)
+        }
+        if plan.refreshCursor {
+            await loadCursor()
+            await loadCursorQuota(reason: reason)
+            // 远端用量与额度是两个独立接口：usage-summary 失败、限流退避或返回空额度时，
+            // get-filtered-usage-events 仍应照常拉取，否则统计页会永远停在"暂不可用"。
+            // 节流由 UsageService 自己的 inFlight / backoff 负责，不复用额度的刷新门禁。
+            await refreshCursorRemoteUsage(snapshot: cursorQuota)
         }
         if plan.refreshImported {
             await loadAllImportedCodexQuotas(
@@ -1052,6 +1091,51 @@ final class AppState {
         saveQuotaCache()
     }
 
+    private func loadCursor() async {
+        do {
+            let next = try await Task.detached(priority: .utility) {
+                try CursorAuth.load()
+            }.value
+            guard let next else {
+                cursorAccount = nil
+                cursorError = "Cursor is not installed or is not signed in"
+                return
+            }
+
+            let changedFromRuntime = cursorAccount.map {
+                !$0.belongsToSameAccount(as: next)
+            } ?? false
+            let changedFromCache: Bool = {
+                guard cursorAccount == nil,
+                      let cachedID = quotaCache.cursor?.accountID?.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                      ),
+                      !cachedID.isEmpty
+                else { return false }
+                return cachedID.caseInsensitiveCompare(next.userID) != .orderedSame
+            }()
+            if changedFromRuntime || changedFromCache {
+                resetCursorQuotaState()
+            }
+
+            cursorAccount = next
+            usageService.activateCursorRemoteUsage(accountID: next.userID)
+            cursorError = nil
+        } catch {
+            cursorAccount = nil
+            cursorError = String(describing: error)
+        }
+    }
+
+    private func resetCursorQuotaState() {
+        cursorQuota = nil
+        cursorQuotaSource = nil
+        cursorQuotaError = nil
+        cursorRefreshState = QuotaRefreshState()
+        quotaCache.cursor = nil
+        saveQuotaCache()
+    }
+
     private func loadCodexQuota(reason: QuotaRefreshReason) async {
         guard beginCodexRefresh(reason: reason) else { return }
         defer { codexRefreshState.inFlight = false }
@@ -1151,6 +1235,90 @@ final class AppState {
         }
     }
 
+    private func loadCursorQuota(reason: QuotaRefreshReason) async {
+        guard beginCursorRefresh(reason: reason) else { return }
+        defer { cursorRefreshState.inFlight = false }
+
+        guard let session = cursorAccount else {
+            markCursorFailure(cursorError ?? "no Cursor account")
+            return
+        }
+
+        let initial = await CursorQuotaClient.fetch(cookieHeader: session.cookieHeader)
+        switch initial {
+        case .success(let snapshot):
+            storeCursor(snapshot: snapshot, source: .api)
+        case .failure(let error) where error.httpStatusCode == 401:
+            // Cursor token 由 Cursor.app 持有。401 后只允许重读一次本地登录态；
+            // 仅当 access token 确实变化时才重试，绝不调用 OAuth refresh。
+            let previousToken = session.accessToken
+            await loadCursor()
+            guard let reloaded = cursorAccount,
+                  reloaded.accessToken != previousToken
+            else {
+                markCursorFailure(cursorError ?? error.description, error: error)
+                return
+            }
+
+            let retried = await CursorQuotaClient.fetch(cookieHeader: reloaded.cookieHeader)
+            switch retried {
+            case .success(let snapshot):
+                storeCursor(snapshot: snapshot, source: .api)
+            case .failure(let retryError):
+                markCursorFailure(retryError.description, error: retryError)
+            }
+        case .failure(let error):
+            markCursorFailure(error.description, error: error)
+        }
+    }
+
+    /// Cursor 用量接口同样使用 Cursor.app 的只读登录态。401 时只重读一次 SQLite，
+    /// 且 token 必须实际变化才重试；不调用 OAuth refresh，也不影响已成功的额度快照。
+    ///
+    /// `snapshot` 只用来推首次拉取的起点，允许为 nil：额度失败时用量仍要刷新，
+    /// 此时退化成"最近三天"窗口。
+    private func refreshCursorRemoteUsage(snapshot: QuotaSnapshot?) async {
+        guard let session = cursorAccount else { return }
+        // 计费周期对 Cursor 的 Total / Auto / API 是同一个，不能只认 primaryLimit：
+        // Free 账号没有可用的 plan used/limit，Total 解析为 nil，周期信息只挂在 Auto 上。
+        let billingWindow: Range<Date>? = snapshot.flatMap { snapshot in
+            snapshot.allLimits.lazy.compactMap { limit -> Range<Date>? in
+                guard let endsAt = limit.window.resetsAt,
+                      let seconds = limit.window.windowSeconds,
+                      seconds > 0
+                else { return nil }
+                let startsAt = endsAt.addingTimeInterval(-Double(seconds))
+                return startsAt < endsAt ? startsAt..<endsAt : nil
+            }.first
+        }
+        let initial = await usageService.refreshCursorRemoteUsage(
+            session: session,
+            billingWindow: billingWindow
+        )
+        guard initial?.httpStatusCode == 401 else { return }
+
+        let previousToken = session.accessToken
+        await loadCursor()
+        guard let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
+        _ = await usageService.refreshCursorRemoteUsage(
+            session: reloaded,
+            billingWindow: billingWindow
+        )
+    }
+
+    /// 统计页选中 Cursor 尚未缓存的有限日期范围时按月补拉。仅重读当前 Cursor.app
+    /// 登录态来处理 401，不触发 OAuth 刷新，也不影响已成功的额度快照。
+    func loadCursorUsageHistory(for range: Range<Date>) async {
+        guard let session = cursorAccount else { return }
+        let initial = await usageService.loadCursorRemoteUsageHistory(session: session, range: range)
+        guard initial?.httpStatusCode == 401 else { return }
+
+        let previousToken = session.accessToken
+        await loadCursor()
+        guard let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
+        _ = await usageService.loadCursorRemoteUsageHistory(session: reloaded, range: range)
+    }
+
     private func loadClaudeCLIFallback(apiError: QuotaError) async {
         let now = Date()
         if let claudeFallbackBackoffUntil, claudeFallbackBackoffUntil > now {
@@ -1204,6 +1372,24 @@ final class AppState {
         return true
     }
 
+    private func beginCursorRefresh(reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        guard !cursorRefreshState.inFlight else { return false }
+        if let backoffUntil = cursorRefreshState.backoffUntil, backoffUntil > now {
+            markCursorFailure(backoffMessage(until: backoffUntil))
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = cursorRefreshState.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        cursorRefreshState.inFlight = true
+        cursorRefreshState.lastAttemptAt = now
+        return true
+    }
+
     private func storeCodex(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
         let updatedAt = Date()
         let mergedSnapshot = snapshot.preservingFutureResetDates(from: codexQuota, now: updatedAt)
@@ -1250,6 +1436,25 @@ final class AppState {
         )
     }
 
+    private func storeCursor(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: cursorQuota, now: updatedAt)
+        cursorQuota = mergedSnapshot
+        cursorQuotaSource = source
+        cursorQuotaError = nil
+        cursorRefreshState.lastSuccessAt = updatedAt
+        cursorRefreshState.lastError = nil
+        cursorRefreshState.backoffUntil = nil
+        cursorRefreshState.source = source
+        quotaCache.cursor = QuotaCacheRecord(
+            snapshot: mergedSnapshot,
+            source: source,
+            updatedAt: updatedAt,
+            accountID: cursorAccount?.userID
+        )
+        saveQuotaCache()
+    }
+
     private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
         codexQuotaError = message
         codexRefreshState.lastError = message
@@ -1263,6 +1468,14 @@ final class AppState {
         claudeRefreshState.lastError = message
         if error?.isRateLimited == true {
             claudeRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+    }
+
+    private func markCursorFailure(_ message: String, error: QuotaError? = nil) {
+        cursorQuotaError = message
+        cursorRefreshState.lastError = message
+        if error?.isRateLimited == true {
+            cursorRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
     }
 
@@ -1281,6 +1494,11 @@ final class AppState {
         } else {
             print("[Credentials 凭据] Claude 未加载: error=\(claudeError ?? "unknown")")
         }
+        if let c = cursorAccount {
+            print("[Credentials 凭据] Cursor: userID=\(c.userID) email=\(c.email ?? "—") expiresAt=\(c.expiresAt) hasAccessToken=true")
+        } else {
+            print("[Credentials 凭据] Cursor 未加载: error=\(cursorError ?? "unknown")")
+        }
     }
 
     private func logQuotaSummary() {
@@ -1297,13 +1515,29 @@ final class AppState {
         } else {
             print("[Quota 额度] Claude 拉取失败: error=\(claudeQuotaError ?? "unknown")")
         }
+        if let q = cursorQuota {
+            print("[Quota 额度] Cursor: source=\(cursorQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
+        } else {
+            print("[Quota 额度] Cursor 拉取失败: error=\(cursorQuotaError ?? cursorError ?? "unknown")")
+        }
+        // 远端用量和额度是两个独立接口，失败原因必须单独可见，
+        // 否则统计页只剩一句"暂不可用"，无法区分未登录和拉取失败。
+        if let error = usageService.cursorRemoteUsageError {
+            print("[Usage 用量] Cursor 远端拉取失败: error=\(error)")
+        } else {
+            let covered = usageService.cursorUsageCoveredDayRanges
+            print("[Usage 用量] Cursor 远端已覆盖 \(covered.count) 段自然日区间")
+        }
     }
 
     private func format(_ q: QuotaSnapshot) -> String {
         let parts = [
             q.primaryLimit.map { "primary[\($0.kind.rawValue)]=\(format(window: $0.window))" },
-            q.secondaryLimit.map { "secondary[\($0.kind.rawValue)]=\(format(window: $0.window))" }
-        ].compactMap { $0 }
+            q.secondaryLimit.map { "secondary[\($0.kind.rawValue)]=\(format(window: $0.window))" },
+            q.isUnlimited == true ? "unlimited" : nil,
+        ].compactMap { $0 } + q.auxiliaryLimits.map {
+            "auxiliary[\($0.id)]=\(format(window: $0.window))"
+        }
         return parts.joined(separator: " ")
     }
 

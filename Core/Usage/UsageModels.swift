@@ -3,8 +3,13 @@ import Foundation
 nonisolated enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
     case codex
     case claude
+    /// Cursor 用量来自远端 Dashboard，不参与本地 JSONL 扫描、定价指纹或周期统计。
+    case cursor
     case pi
     case opencode
+
+    /// 当前本地扫描器实际支持的数据源。Cursor 虽属于 `UsageApp`，但不在此集合中。
+    static let localApps: [UsageApp] = [.codex, .claude, .pi, .opencode]
 }
 
 /// 扫描进度快照，供设置页"重新计算"等耗时操作期间展示。
@@ -65,6 +70,9 @@ nonisolated struct UsageBucket: Sendable, Equatable, Codable {
     var costUSD: Decimal
     var requestCount: Int
     var hasUnpricedUsage: Bool
+    /// Cursor 远端事件缺少/异常 `chargedCents` 时为 true。
+    /// 与本地模型价格缺失（`hasUnpricedUsage`）语义不同，不能互相替代。
+    var costIncomplete: Bool = false
 }
 
 nonisolated struct UsageTotals: Sendable, Equatable {
@@ -75,6 +83,8 @@ nonisolated struct UsageTotals: Sendable, Equatable {
     var costUSD: Decimal = 0
     var requestCount: Int = 0
     var hasUnpricedUsage = false
+    /// 费用是否因 Cursor 服务端计量字段不完整而不能作为完整合计展示。
+    var costIncomplete = false
 
     static let zero = UsageTotals()
 
@@ -86,6 +96,7 @@ nonisolated struct UsageTotals: Sendable, Equatable {
         costUSD += bucket.costUSD
         requestCount += bucket.requestCount
         hasUnpricedUsage = hasUnpricedUsage || bucket.hasUnpricedUsage
+        costIncomplete = costIncomplete || bucket.costIncomplete
     }
 
     mutating func add(_ other: UsageTotals) {
@@ -96,6 +107,7 @@ nonisolated struct UsageTotals: Sendable, Equatable {
         costUSD += other.costUSD
         requestCount += other.requestCount
         hasUnpricedUsage = hasUnpricedUsage || other.hasUnpricedUsage
+        costIncomplete = costIncomplete || other.costIncomplete
     }
 
     /// 含缓存的输入侧 token(input + cache_read + cache_creation)。与 cc-switch / ccusage 的 input 口径一致。
@@ -194,7 +206,7 @@ extension Decimal {
 extension UsageBucket {
     nonisolated enum CodingKeys: String, CodingKey {
         case app, model, speed, day, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, costUSD, requestCount
-        case hasUnpricedUsage
+        case hasUnpricedUsage, costIncomplete
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -211,6 +223,7 @@ extension UsageBucket {
         self.costUSD = Decimal(plainString: costStr) ?? 0
         self.requestCount = try c.decodeIfPresent(Int.self, forKey: .requestCount) ?? 0
         self.hasUnpricedUsage = try c.decode(Bool.self, forKey: .hasUnpricedUsage)
+        self.costIncomplete = try c.decodeIfPresent(Bool.self, forKey: .costIncomplete) ?? false
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -226,6 +239,7 @@ extension UsageBucket {
         try c.encode(costUSD.asPlainString, forKey: .costUSD)
         try c.encode(requestCount, forKey: .requestCount)
         try c.encode(hasUnpricedUsage, forKey: .hasUnpricedUsage)
+        try c.encode(costIncomplete, forKey: .costIncomplete)
     }
 }
 

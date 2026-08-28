@@ -23,6 +23,21 @@ final class UsageService {
     private var loadedCycleGeneration: String?
     private var cycleInitialRebuildCompletedAt: Date?
     private var cycleInitialRebuildCompletedApps: Set<UsageApp> = []
+    /// Cursor 远端日桶独立于本地 scan-state / usage-rollup 的持久化状态。
+    private var cursorUsageCache = CursorUsageCachePayload()
+    private var cursorRemoteAccountID: String?
+    private var cursorRemoteBackoffUntil: Date?
+    private(set) var isRefreshingCursorRemoteUsage = false
+    private(set) var cursorRemoteUsageError: String?
+
+    /// 统计页读取的完整 Cursor 自然日覆盖范围。只有身份匹配的独立远端缓存会进入此集合。
+    var cursorUsageCoveredDayRanges: [CursorUsageDayRange] {
+        cursorUsageCache.coveredDayRanges
+    }
+
+    func isCursorRemoteUsageCovered(_ range: Range<Date>) -> Bool {
+        cursorUsageCache.coveredDayRanges.missingRanges(in: range).isEmpty
+    }
     /// 上一轮成功提交的 ScanState 常驻内存，避免每轮扫描都从磁盘重读重解码
     /// scan-state.json（随文件数和 seen ID 增长，本地实测已近 1MB）。
     /// 冷启动首轮才从磁盘恢复；持久化失败时清空内存副本，
@@ -34,13 +49,15 @@ final class UsageService {
         // 日聚合与对话两份主 rollup 必须同代；周期 rollup 也只在同代、同价格指纹时恢复。
         // rollup 可能较大（conversation-rollup 实测可达数 MB），三个 load 都是磁盘读取 +
         // JSON 解码，统一放到后台线程，避免启动时阻塞主线程、菜单栏图标卡顿。
-        let (payload, conversationPayload, cyclePayload) = await Task.detached(priority: .utility) {
+        let (payload, conversationPayload, cyclePayload, cursorPayload) = await Task.detached(priority: .utility) {
             (
                 UsageRollupCache.load(),
                 ConversationRollupCache.load(),
-                CycleUsageRollupCache.load()
+                CycleUsageRollupCache.load(),
+                CursorUsageCache.load()
             )
         }.value
+        cursorUsageCache = cursorPayload
         let generationsMatch = !payload.generationID.isEmpty
             && payload.generationID == conversationPayload.generationID
         if generationsMatch {
@@ -76,11 +93,204 @@ final class UsageService {
         }
         // 个人历史用量一次性补录：见 ImportedUsageBackfill 注释。这里先合并一次保证扫描前即可展示；
         // runScan 每轮还会按同样规则重新合并，兜底缓存失效清空聚合器的情况。文件不存在时是纯 no-op。
-        let existingClaudeDays = Set(aggregator.snapshot().filter { $0.app == .claude }.map(\.day))
-        aggregator.ingest(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
+        let existingClaudeDays = Set(aggregator.snapshotLocal().filter { $0.app == .claude }.map(\.day))
+        aggregator.ingestLocal(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
         publishTotals()
         // 远端价格目录后台刷新：非阻塞，isDue 内部判断是否真的需要发请求，刷新结果由下次扫描自然拾取。
         PricingCatalogStore.shared.refreshIfNeeded()
+    }
+
+    /// 仅在 Cursor 身份确认后恢复与该身份绑定的远端快照。缓存身份不匹配时，
+    /// 立即从内存隔离旧桶；下一次完整远端拉取才会写入新账号数据。
+    func activateCursorRemoteUsage(accountID: String) {
+        let normalizedID = accountID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty else { return }
+        guard cursorRemoteAccountID?.caseInsensitiveCompare(normalizedID) != .orderedSame else { return }
+
+        cursorRemoteAccountID = normalizedID
+        if cursorUsageCache.accountID?.caseInsensitiveCompare(normalizedID) == .orderedSame {
+            aggregator.loadRemote(from: cursorUsageCache.buckets)
+        } else {
+            aggregator.loadRemote(from: [])
+            cursorUsageCache = CursorUsageCachePayload(accountID: normalizedID)
+        }
+        cursorRemoteUsageError = nil
+        cursorRemoteBackoffUntil = nil
+        publishTotals()
+    }
+
+    /// 拉取 Cursor 最近变动的远端日桶。首次请求可从计费周期起点开始；后续只重拉
+    /// 今天及其前两天，成功后按完整自然日替换，绝不累计重复窗口。
+    ///
+    /// 返回 401 时由 AppState 负责只读重载 Cursor.app 登录态并最多重试一次。
+    @discardableResult
+    func refreshCursorRemoteUsage(
+        session: CursorAuthSession,
+        billingWindow: Range<Date>?,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) async -> CursorUsageError? {
+        activateCursorRemoteUsage(accountID: session.userID)
+        guard !isRefreshingCursorRemoteUsage else { return nil }
+        if let backoffUntil = cursorRemoteBackoffUntil, backoffUntil > now {
+            cursorRemoteUsageError = "Cursor usage rate limited; retry later"
+            return nil
+        }
+
+        let today = calendar.startOfDay(for: now)
+        let recentStart = calendar.date(byAdding: .day, value: -2, to: today) ?? today
+        let hasCoverage = !cursorUsageCache.coveredDayRanges.isEmpty
+        let initialStart = billingWindow.map { calendar.startOfDay(for: $0.lowerBound) }
+        let from = hasCoverage ? recentStart : (initialStart ?? recentStart)
+        guard from < now else { return nil }
+
+        isRefreshingCursorRemoteUsage = true
+        defer { isRefreshingCursorRemoteUsage = false }
+        let result = await CursorUsageFetcher.fetch(
+            cookieHeader: session.cookieHeader,
+            from: from,
+            to: now,
+            calendar: calendar
+        )
+        switch result {
+        case .failure(let error):
+            cursorRemoteUsageError = error.description
+            if error.isRateLimited {
+                cursorRemoteBackoffUntil = now.addingTimeInterval(10 * 60)
+            }
+            return error
+        case .success(let fetched):
+            await storeCursorRemoteUsage(fetched, accountID: session.userID, updatedAt: now)
+            return nil
+        }
+    }
+
+    /// Stats 选择到未覆盖的有限时间范围时，按月补拉缺口。`all` 不会传入这里，
+    /// 以免后台无界回溯；它只展示现有覆盖范围与 Partial。
+    @discardableResult
+    func loadCursorRemoteUsageHistory(
+        session: CursorAuthSession,
+        range: Range<Date>,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) async -> CursorUsageError? {
+        activateCursorRemoteUsage(accountID: session.userID)
+        guard let requestedRange = normalizedCursorHistoryRange(range, now: now, calendar: calendar) else {
+            return nil
+        }
+
+        // 与周期刷新共用一个远端槽，避免相同日桶并发覆盖。这里等待正在进行的短刷新，
+        // 让用户切换历史范围时的请求不会被悄悄丢弃。
+        while isRefreshingCursorRemoteUsage {
+            guard !Task.isCancelled else { return nil }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+
+        let missing = cursorUsageCache.coveredDayRanges.missingRanges(in: requestedRange)
+        guard !missing.isEmpty else { return nil }
+
+        if let backoffUntil = cursorRemoteBackoffUntil, backoffUntil > now {
+            cursorRemoteUsageError = "Cursor usage rate limited; retry later"
+            return nil
+        }
+
+        isRefreshingCursorRemoteUsage = true
+        defer { isRefreshingCursorRemoteUsage = false }
+
+        for chunk in missing.flatMap({ cursorHistoryMonthChunks(for: $0, calendar: calendar) }) {
+            guard !Task.isCancelled else { return nil }
+            let fetchEnd = min(chunk.upperBound, now)
+            guard chunk.lowerBound < fetchEnd else { continue }
+
+            let result = await CursorUsageFetcher.fetch(
+                cookieHeader: session.cookieHeader,
+                from: chunk.lowerBound,
+                to: fetchEnd,
+                calendar: calendar
+            )
+            switch result {
+            case .failure(let error):
+                cursorRemoteUsageError = error.description
+                if error.isRateLimited {
+                    cursorRemoteBackoffUntil = now.addingTimeInterval(10 * 60)
+                }
+                return error
+            case .success(let fetched):
+                await storeCursorRemoteUsage(fetched, accountID: session.userID, updatedAt: now)
+            }
+        }
+        return nil
+    }
+
+    private func storeCursorRemoteUsage(
+        _ fetched: CursorUsageFetchResult,
+        accountID: String,
+        updatedAt: Date
+    ) async {
+        aggregator.replaceRemote(app: .cursor, dayRange: fetched.dayRange, buckets: fetched.buckets)
+        cursorUsageCache.accountID = accountID
+        cursorUsageCache.buckets = aggregator.snapshotRemote(app: .cursor)
+        if let range = CursorUsageDayRange(range: fetched.dayRange) {
+            cursorUsageCache.coveredDayRanges = cursorUsageCache.coveredDayRanges.merged(with: range)
+        }
+        cursorUsageCache.updatedAt = updatedAt
+        cursorRemoteUsageError = nil
+        cursorRemoteBackoffUntil = nil
+        publishTotals()
+
+        let cacheSnapshot = cursorUsageCache
+        do {
+            try await Task.detached(priority: .utility) {
+                try CursorUsageCache.save(cacheSnapshot)
+            }.value
+        } catch {
+            // 远端内存快照仍可展示；下一轮成功刷新会再次尝试原子写缓存。
+            cursorRemoteUsageError = "Cursor usage cache save failed: \(error)"
+        }
+    }
+
+    private func normalizedCursorHistoryRange(
+        _ range: Range<Date>,
+        now: Date,
+        calendar: Calendar
+    ) -> Range<Date>? {
+        guard range.lowerBound != .distantPast, range.upperBound != .distantFuture else {
+            return nil
+        }
+
+        let start = calendar.startOfDay(for: range.lowerBound)
+        let effectiveEnd = min(range.upperBound, now)
+        guard start < effectiveEnd else { return nil }
+
+        let endDay = calendar.startOfDay(for: effectiveEnd)
+        let end: Date
+        if effectiveEnd == endDay {
+            end = endDay
+        } else {
+            end = calendar.date(byAdding: .day, value: 1, to: endDay) ?? effectiveEnd
+        }
+        return start < end ? start..<end : nil
+    }
+
+    private func cursorHistoryMonthChunks(
+        for range: Range<Date>,
+        calendar: Calendar
+    ) -> [Range<Date>] {
+        var chunks: [Range<Date>] = []
+        var cursor = range.lowerBound
+        while cursor < range.upperBound {
+            let month = calendar.dateComponents([.year, .month], from: cursor)
+            guard let monthStart = calendar.date(from: month),
+                  let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart)
+            else {
+                return chunks
+            }
+            let end = min(nextMonth, range.upperBound)
+            guard cursor < end else { return chunks }
+            chunks.append(cursor..<end)
+            cursor = end
+        }
+        return chunks
     }
 
     /// 由 Scheduler / 手动触发；防重入。
@@ -97,7 +307,7 @@ final class UsageService {
             // 借用量扫描的既有节奏当远端价格目录 24h 到期检查的心跳，不新开定时器；非阻塞。
             PricingCatalogStore.shared.refreshIfNeeded()
             PricingCatalogStore.shared.commitPending()
-            let knownUsage = pricingUsageKeys(from: aggregator.snapshot())
+            let knownUsage = pricingUsageKeys(from: aggregator.snapshotLocal())
             let cacheResult = await resolveScanState(knownUsage: knownUsage)
             if case .invalidated = cacheResult {
                 clearUsageAggregatesForFullRebuild()
@@ -293,7 +503,7 @@ final class UsageService {
     /// 受限重建前用主扫描状态做一次常规增量提交，保证窗口重扫后
     /// watermark 不会再返回同一批条目。失效状态沿用常规扫描的全量重建语义。
     private func drainPendingUsageBeforeCycleRebuild() async -> Bool {
-        let knownUsage = pricingUsageKeys(from: aggregator.snapshot())
+        let knownUsage = pricingUsageKeys(from: aggregator.snapshotLocal())
         let cacheResult = await resolveScanState(knownUsage: knownUsage)
         if case .invalidated = cacheResult {
             clearUsageAggregatesForFullRebuild()
@@ -365,7 +575,7 @@ final class UsageService {
             && !requiredApps.isEmpty
             && completedApps.isSuperset(of: requiredApps)
         let generationID = loadedRollupGeneration ?? UUID().uuidString
-        let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: aggregator.snapshot()))
+        let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: aggregator.snapshotLocal()))
         let rollup = CycleUsageRollupPayload(
             generationID: generationID,
             pricingFingerprint: fingerprint,
@@ -598,10 +808,10 @@ final class UsageService {
         let opencode = await opencodeTask
         let failedFileCount = claude.failedFileCount + codex.failedFileCount
 
-        aggregator.ingest(claude.entries)
-        aggregator.ingest(codex.entries)
-        aggregator.ingest(pi.entries)
-        aggregator.ingest(opencode.entries)
+        aggregator.ingestLocal(claude.entries)
+        aggregator.ingestLocal(codex.entries)
+        aggregator.ingestLocal(pi.entries)
+        aggregator.ingestLocal(opencode.entries)
         let cycleEntries = claude.entries + codex.entries
         let conversationChanged = conversationAggregator.ingest(
             entries: claude.entries + codex.entries + pi.entries + opencode.entries,
@@ -611,8 +821,8 @@ final class UsageService {
         // 个人历史用量一次性补录：缓存失效路径会清空聚合器，若只在 bootstrap 合并，
         // 这里落盘的 rollup / 指纹将不含补录模型，下次启动指纹比对再失效、补录被反复冲掉。
         // 每轮扫描都按天去重重新合并，保证快照与指纹始终包含补录数据。
-        let existingClaudeDays = Set(aggregator.snapshot().filter { $0.app == .claude }.map(\.day))
-        aggregator.ingest(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
+        let existingClaudeDays = Set(aggregator.snapshotLocal().filter { $0.app == .claude }.map(\.day))
+        aggregator.ingestLocal(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
 
         let cycles = appState?.quotaCycles.records ?? []
         let cycleChanged: Bool
@@ -658,7 +868,7 @@ final class UsageService {
         }
 
         // 没有真实用量或档案变化时沿用现有代次，只提交轻量 watermark。
-        let buckets = aggregator.snapshot()
+        let buckets = aggregator.snapshotLocal()
         let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: buckets))
         let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty || !pi.entries.isEmpty || !opencode.entries.isEmpty
         let shouldWriteRollups = loadedRollupGeneration == nil || hasNewEntries || conversationChanged
@@ -772,7 +982,7 @@ final class UsageService {
     /// 只把“已有 Standard/Fast 用量但当前所有可靠价格源都未命中”的桶视为刷新候选。
     /// Unknown 档位和已知模型的请求级限制（例如 Codex Fast >272K）不会造成无休止刷新。
     private func refreshMissingPricingIfNeeded() async -> Bool {
-        let buckets = aggregator.snapshot()
+        let buckets = aggregator.snapshotLocal()
         let missing = Set(buckets.compactMap { bucket -> PricingUsageKey? in
             guard bucket.hasUnpricedUsage else { return nil }
             guard Pricing.needsRemotePriceRefresh(
@@ -802,6 +1012,7 @@ final class UsageService {
         guard let appState else { return }
         appState.codexTodayCost = aggregator.todayCost(for: .codex)
         appState.claudeTodayCost = aggregator.todayCost(for: .claude)
+        appState.cursorTodayCost = aggregator.todayCost(for: .cursor)
         appState.piTodayCost = aggregator.todayCost(for: .pi)
         appState.opencodeTodayCost = aggregator.todayCost(for: .opencode)
     }

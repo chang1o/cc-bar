@@ -4,10 +4,24 @@ nonisolated struct QuotaCacheRecord: Sendable, Equatable, Codable {
     var snapshot: QuotaSnapshot
     var source: QuotaSnapshotSource
     var updatedAt: Date
+    /// 仅远端账号型 Provider 使用；Cursor 绑定 JWT userID，防止账号切换串缓存。
+    var accountID: String?
+
+    init(
+        snapshot: QuotaSnapshot,
+        source: QuotaSnapshotSource,
+        updatedAt: Date,
+        accountID: String? = nil
+    ) {
+        self.snapshot = snapshot
+        self.source = source
+        self.updatedAt = updatedAt
+        self.accountID = accountID
+    }
 }
 
 nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var version: Int = Self.currentVersion
     var providers: [QuotaApp: QuotaCacheRecord] = [:]
@@ -23,6 +37,11 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
     var claude: QuotaCacheRecord? {
         get { providers[.claude] }
         set { providers[.claude] = newValue }
+    }
+
+    var cursor: QuotaCacheRecord? {
+        get { providers[.cursor] }
+        set { providers[.cursor] = newValue }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -79,7 +98,14 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(Self.currentVersion, forKey: .version)
-        try container.encode(providers, forKey: .providers)
+        // providers 的 Key 是 enum，直接编码会退化成 JSON array（Swift 只对 String / Int /
+        // CodingKeyRepresentable 键产出 object），而 decode 端按 [String: QuotaCacheRecord]
+        // 读取，两端不对称会让写入的缓存永远解不回来（load() 的 try? 会把错误吞成空 payload，
+        // 表现为每次重启额度快照全丢）。显式转成 String 键保持对称。
+        try container.encode(
+            Dictionary(uniqueKeysWithValues: providers.map { ($0.key.rawValue, $0.value) }),
+            forKey: .providers
+        )
         try container.encodeIfPresent(importedCodex, forKey: .importedCodex)
     }
 }
