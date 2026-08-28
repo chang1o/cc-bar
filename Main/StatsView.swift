@@ -174,15 +174,6 @@ private struct CursorHistoryRequest: Hashable {
     var range: Range<Date> { from..<to }
 }
 
-private enum CursorUsageCoverageState {
-    case hidden
-    case unavailable
-    /// 已登录但远端用量拉取失败。必须和"未登录"分开，否则会提示用户去做已经做过的事。
-    case failed(String)
-    case loading
-    case partial
-}
-
 /// 「按提供商」面板的排序键；`other` 组在任何排序下都固定排最后。
 enum ProviderSort: CaseIterable, Identifiable {
     case cost
@@ -316,7 +307,6 @@ struct StatsView: View {
         VStack(alignment: .leading, spacing: 12) {
             topBar
             if range == .custom { customRangeRow }
-            cursorUsageCoveragePanel
 
             kpiRow.padding(.top, 6)
 
@@ -594,7 +584,6 @@ struct StatsView: View {
             tint: app.tintColor,
             dimmed: isDimmed
         )
-        .help(app == .cursor ? cursorMeteringHint : "")
     }
 
     // MARK: Token breakdown panel
@@ -728,7 +717,6 @@ struct StatsView: View {
             speed: currentSpeedBreakdown(app)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help(app == .cursor ? cursorMeteringHint : "")
     }
 
     private func serviceSubtitle(_ app: UsageApp) -> String {
@@ -1404,8 +1392,8 @@ struct StatsView: View {
             && (serviceFilter == .all || serviceFilter == .cursor)
     }
 
-    /// 当前范围外的历史由 Stats 选择时按月补拉；All 没有可靠的远端起点，
-    /// 所以只展示已覆盖范围，绝不偷偷发起无界回溯。
+    /// 当前范围外的历史由 Stats 选择时按月静默补拉；All 没有可靠的远端起点，
+    /// 所以只使用现有缓存，绝不偷偷发起无界回溯。
     private var cursorHistoryRequest: CursorHistoryRequest? {
         guard viewMode == .overview,
               cursorUsageIsInCurrentScope,
@@ -1419,108 +1407,6 @@ struct StatsView: View {
         return CursorHistoryRequest(accountID: accountID, from: requested.lowerBound, to: requested.upperBound)
     }
 
-    private var cursorUsageCoverageState: CursorUsageCoverageState {
-        guard cursorUsageIsInCurrentScope else { return .hidden }
-        if appState.usageService.isRefreshingCursorRemoteUsage { return .loading }
-        let coverage = appState.usageService.cursorUsageCoveredDayRanges
-        guard !coverage.isEmpty else {
-            // 一次都没拉成功时，能给出真实原因就别再让用户去检查登录态。
-            if let error = appState.usageService.cursorRemoteUsageError { return .failed(error) }
-            return .unavailable
-        }
-        // 已完整覆盖当前范围就是正常态，不占版面说「一切正常」；
-        // 数据口径说明改挂在 Cursor 的 KPI 卡与「按服务」行 tooltip 上。
-        guard range != .all,
-              appState.usageService.isCursorRemoteUsageCovered(rangeBounds.from..<rangeBounds.to)
-        else { return .partial }
-        return .hidden
-    }
-
-    @ViewBuilder
-    private var cursorUsageCoveragePanel: some View {
-        switch cursorUsageCoverageState {
-        case .hidden:
-            EmptyView()
-        case .loading:
-            cursorUsageStatusRow(
-                icon: "arrow.triangle.2.circlepath",
-                title: tr("Loading Cursor history", "正在加载 Cursor 历史用量"),
-                detail: tr("Cursor metering · all devices", "Cursor 计量 · 全设备"),
-                showsProgress: true
-            )
-        case .partial:
-            cursorUsageStatusRow(
-                icon: "exclamationmark.triangle",
-                title: tr("Cursor history is partial", "Cursor 历史用量不完整"),
-                detail: tr("\(cursorCoverageDescription) · Partial", "\(cursorCoverageDescription) · 不完整"),
-                tint: .orange
-            )
-        case .unavailable:
-            cursorUsageStatusRow(
-                icon: "cursorarrow.rays",
-                title: tr("Cursor usage is not available yet", "Cursor 用量暂不可用"),
-                detail: tr("Open Cursor and sign in to load account-wide metering.", "请打开并登录 Cursor 以加载全设备计量用量。"),
-                tint: .secondary
-            )
-        case .failed(let message):
-            cursorUsageStatusRow(
-                icon: "exclamationmark.triangle",
-                title: tr("Cursor usage refresh failed", "Cursor 用量拉取失败"),
-                detail: message,
-                tint: .orange
-            )
-        }
-    }
-
-    private var cursorCoverageDescription: String {
-        let ranges = appState.usageService.cursorUsageCoveredDayRanges
-        guard !ranges.isEmpty else { return tr("No complete days cached", "暂无完整缓存日期") }
-        let text = ranges.prefix(2).map { item -> String in
-            let lastDay = Calendar.current.date(byAdding: .day, value: -1, to: item.endDay) ?? item.endDay
-            return "\(StatsFormatter.day(item.startDay))–\(StatsFormatter.day(lastDay))"
-        }.joined(separator: ", ")
-        let suffix = ranges.count > 2 ? " +\(ranges.count - 2)" : ""
-        return tr("Covered: \(text)\(suffix)", "已覆盖：\(text)\(suffix)")
-    }
-
-    private func cursorUsageStatusRow(
-        icon: String,
-        title: String,
-        detail: String,
-        tint: Color = .secondary,
-        showsProgress: Bool = false
-    ) -> some View {
-        HStack(spacing: 8) {
-            if showsProgress {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 11.5, weight: .medium))
-                Text(detail)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .help(cursorMeteringHint)
-    }
-
-    /// Cursor 唯一真正独有的口径：数据来自远端账号而非本机日志。
-    /// 只在 tooltip 里说明，不额外占用界面空间。
-    private var cursorMeteringHint: String {
-        tr(
-            "Cursor metering comes from the signed-in account across devices. It is not a local estimate or necessarily an extra charge.",
-            "Cursor 计量来自已登录账号的所有设备；它不是本机估算，也不一定代表额外扣费。"
-        )
-    }
 }
 
 // MARK: - Panel container
@@ -1647,8 +1533,6 @@ private struct KPICard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // delta 放在 Label 行右侧:利用标题行原有留白,让 22pt 主值独占整行,
-            // 服务变多、卡片被压窄时主值不再被 delta 挤掉。
             HStack(spacing: 4) {
                 if let tint {
                     ServiceMark(color: tint, size: 6, cornerRadius: 1.5)
@@ -1657,21 +1541,20 @@ private struct KPICard: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Spacer(minLength: 6)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(value)
+                    .font(.system(size: 22, weight: .semibold))
+                    .kerning(-0.5)
+                    .monospacedDigit()
+                    .foregroundStyle(tint ?? .primary)
                 if let delta, delta != 0 {
                     Text(formatDelta(delta))
                         .font(.system(size: 11, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(delta >= 0 ? Color.red : Color.green)
-                        .lineLimit(1)
                 }
             }
-            Text(value)
-                .font(.system(size: 22, weight: .semibold))
-                .kerning(-0.5)
-                .monospacedDigit()
-                .foregroundStyle(tint ?? .primary)
-                .lineLimit(1)
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 14)
@@ -1683,7 +1566,7 @@ private struct KPICard: View {
     private func formatDelta(_ value: Double) -> String {
         let arrow = value >= 0 ? "↑" : "↓"
         let abs = Swift.abs(value)
-        return "\(arrow)\(String(format: "%.1f", abs))%"
+        return "\(arrow) \(String(format: "%.1f", abs))%"
     }
 }
 
@@ -2532,7 +2415,7 @@ enum StatsFormatter {
         hasUnpricedUsage _: Bool,
         costIncomplete: Bool = false
     ) -> String {
-        guard !costIncomplete else { return tr("— / Partial", "— / 不完整") }
+        guard !costIncomplete else { return "--" }
         return cost(value)
     }
 

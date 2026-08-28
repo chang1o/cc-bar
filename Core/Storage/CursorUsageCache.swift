@@ -81,7 +81,7 @@ extension Array where Element == CursorUsageDayRange {
     }
 
     /// 返回目标自然日区间中尚未被完整覆盖的片段。调用方可据此按月补拉，
-    /// 并在所有片段完成前保持统计页的 Loading / Partial 状态。
+    /// 所有片段完成后再整体发布，补拉过程不生成额外页面状态。
     nonisolated func missingRanges(in target: Range<Date>) -> [Range<Date>] {
         guard target.lowerBound < target.upperBound else { return [] }
 

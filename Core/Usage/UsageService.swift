@@ -166,7 +166,7 @@ final class UsageService {
     }
 
     /// Stats 选择到未覆盖的有限时间范围时，按月补拉缺口。`all` 不会传入这里，
-    /// 以免后台无界回溯；它只展示现有覆盖范围与 Partial。
+    /// 以免后台无界回溯；界面只消费现有缓存，不展示覆盖状态。
     @discardableResult
     func loadCursorRemoteUsageHistory(
         session: CursorAuthSession,

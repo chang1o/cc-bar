@@ -203,7 +203,7 @@ struct PopoverRootView: View {
             logoName: provider.logoName,
             fallback: provider.fallback,
             snapshot: snap,
-            error: appState.quotaError(for: provider.app),
+            error: provider.app == .cursor ? nil : appState.quotaError(for: provider.app),
             weekSpend: weekSpend(for: provider.app),
             todayCost: todayCost(for: provider.app),
             serviceStatus: serviceStatus(for: provider.app),
@@ -214,18 +214,7 @@ struct PopoverRootView: View {
     private func weekSpend(for app: QuotaApp) -> Decimal? {
         guard let usageApp = app.usageApp else { return nil }
         let (from, to) = Self.weekBounds()
-        if app == .cursor { return cursorCost(from: from, to: to) }
         let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
-        return totals.costUSD
-    }
-
-    /// Cursor 的费用来自远端服务端计量，没有本地日志兜底：远端尚未覆盖该区间，
-    /// 或区间内有事件缺 chargedCents 时必须返回 nil 让 UI 显示"—"，
-    /// 不能把"没拉到"或"拉了一半"显示成一个偏小的金额。
-    private func cursorCost(from: Date, to: Date) -> Decimal? {
-        guard appState.usageService.isCursorRemoteUsageCovered(from..<to) else { return nil }
-        let totals = appState.usageService.aggregator.totals(app: .cursor, from: from, to: to)
-        guard !totals.costIncomplete else { return nil }
         return totals.costUSD
     }
 
@@ -233,13 +222,8 @@ struct PopoverRootView: View {
         switch app {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
-        case .cursor: cursorTodayMeteredCost
+        case .cursor: nil
         }
-    }
-
-    private var cursorTodayMeteredCost: Decimal? {
-        let (from, to) = Self.todayBounds()
-        return cursorCost(from: from, to: to)
     }
 
     private func serviceStatus(for app: QuotaApp) -> ServiceStatus? {
@@ -301,13 +285,6 @@ struct PopoverRootView: View {
     }
 
     // MARK: Helpers
-
-    private static func todayBounds(now: Date = Date()) -> (Date, Date) {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = .current
-        let start = cal.startOfDay(for: now)
-        return (start, cal.date(byAdding: .day, value: 1, to: start) ?? start)
-    }
 
     private static func weekBounds(now: Date = Date()) -> (Date, Date) {
         var cal = Calendar(identifier: .gregorian)
@@ -465,7 +442,6 @@ private struct ServiceBlockView: View {
                                 statInline(value: formatCostInt(todayCost), english: "today", chinese: "今日")
                                 statInline(value: formatCostInt(weekSpend), english: "this week", chinese: "本周")
                             }
-                            .help(costTooltip)
                         }
                     }
 
@@ -622,19 +598,6 @@ private struct ServiceBlockView: View {
             }
             return normalizedModelLabel(limit.displayName) ?? "CURRENT"
         }
-    }
-
-    /// 两个口径都不是账单金额，但来源不同，需要在 tooltip 里说清楚。
-    private var costTooltip: String {
-        app == .cursor
-            ? tr(
-                "Cursor server-side metering for this account across all devices.",
-                "Cursor 服务端计量，涵盖该账号的全部设备。"
-            )
-            : tr(
-                "Estimated from this Mac's local logs at API list prices.",
-                "按 API 标价从本机日志估算。"
-            )
     }
 
     /// 取整美元金额:`<$1` 用于 0 ~ 0.99,`$0` 仅在 nil/0 时显示。
