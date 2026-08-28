@@ -89,7 +89,7 @@ nonisolated enum CursorUsageFetcher {
     }
 
     /// 用于离线夹具测试：缺失/负数/无效 `chargedCents` 会保留 token 与请求数，
-    /// 同时标记对应日桶 `costIncomplete`，不会混入本地缺价语义。
+    /// 同时标记对应日桶 `costIncomplete` 供诊断，已知费用仍可展示，不会混入本地缺价语义。
     static func makeBuckets(
         events: [CursorUsageEvent],
         calendar: Calendar = .current

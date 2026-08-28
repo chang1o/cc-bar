@@ -83,7 +83,7 @@ nonisolated struct UsageTotals: Sendable, Equatable {
     var costUSD: Decimal = 0
     var requestCount: Int = 0
     var hasUnpricedUsage = false
-    /// 费用是否因 Cursor 服务端计量字段不完整而不能作为完整合计展示。
+    /// Cursor 服务端计量字段是否不完整，仅供诊断；界面仍显示已知 `chargedCents` 合计。
     var costIncomplete = false
 
     static let zero = UsageTotals()

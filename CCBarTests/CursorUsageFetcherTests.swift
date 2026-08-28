@@ -55,6 +55,18 @@ final class CursorUsageFetcherTests: XCTestCase {
         XCTAssertFalse(bucket.hasUnpricedUsage)
     }
 
+    @MainActor
+    func testCursorIncompleteMeteringStillFormatsKnownCost() {
+        XCTAssertEqual(
+            StatsFormatter.tierCost(
+                Decimal(string: "0.255")!,
+                hasUnpricedUsage: false,
+                costIncomplete: true
+            ),
+            "$0.26"
+        )
+    }
+
     /// Free 账号常见形态：整页只有 1 条事件、chargedCents 为 0、token 计数出现 1。
     /// 这些 0 / 1 会命中 NSNumber→Bool 桥接，早期实现下 totalUsageEventsCount 被判成
     /// 布尔导致整页解析失败，用量永远拉不下来；chargedCents 则被错标成费用不完整。
@@ -191,6 +203,39 @@ final class CursorUsageFetcherTests: XCTestCase {
         XCTAssertEqual(missing[0].upperBound, day3)
         XCTAssertEqual(missing[1].lowerBound, day4)
         XCTAssertEqual(missing[1].upperBound, day5)
+    }
+
+    func testCursorRefreshRangesBackfillCurrentWeekGapBeforeRecentWindow() throws {
+        let monday = Date(timeIntervalSince1970: 1_725_840_000) // 2024-09-09 00:00 UTC
+        let now = monday.addingTimeInterval(4 * 24 * 60 * 60 + 12 * 60 * 60) // Friday noon
+        let wednesday = monday.addingTimeInterval(2 * 24 * 60 * 60)
+        let saturday = monday.addingTimeInterval(5 * 24 * 60 * 60)
+        let covered = try XCTUnwrap(CursorUsageDayRange(range: wednesday..<saturday))
+
+        let ranges = UsageService.cursorRefreshRanges(
+            now: now,
+            billingWindow: nil,
+            coveredDayRanges: [covered],
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(ranges, [monday..<now])
+    }
+
+    func testCursorInitialRefreshStartsAtWeekStartWhenBillingCycleStartsMidweek() {
+        let monday = Date(timeIntervalSince1970: 1_725_840_000) // 2024-09-09 00:00 UTC
+        let now = monday.addingTimeInterval(4 * 24 * 60 * 60 + 12 * 60 * 60) // Friday noon
+        let wednesday = monday.addingTimeInterval(2 * 24 * 60 * 60)
+        let nextWednesday = wednesday.addingTimeInterval(7 * 24 * 60 * 60)
+
+        let ranges = UsageService.cursorRefreshRanges(
+            now: now,
+            billingWindow: wednesday..<nextWednesday,
+            coveredDayRanges: [],
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(ranges, [monday..<now])
     }
 
     func testLegacyUsageBucketDefaultsCostIncompleteToFalse() throws {

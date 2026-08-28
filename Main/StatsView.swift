@@ -1287,7 +1287,6 @@ struct StatsView: View {
     }
 
     private func costDelta(current: UsageTotals, previous: UsageTotals) -> Double? {
-        guard !current.costIncomplete, !previous.costIncomplete else { return nil }
         return deltaPercent(current: current.costUSD.doubleValue, previous: previous.costUSD.doubleValue)
     }
 
@@ -2416,9 +2415,8 @@ enum StatsFormatter {
     static func tierCost(
         _ value: Decimal,
         hasUnpricedUsage _: Bool,
-        costIncomplete: Bool = false
+        costIncomplete _: Bool = false
     ) -> String {
-        guard !costIncomplete else { return "--" }
         return cost(value)
     }
 

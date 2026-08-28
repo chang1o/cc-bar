@@ -38,6 +38,15 @@ final class UsageService {
     func isCursorRemoteUsageCovered(_ range: Range<Date>) -> Bool {
         cursorUsageCache.coveredDayRanges.missingRanges(in: range).isEmpty
     }
+
+    /// 只要当前账号已有与目标区间相交的 Cursor 远端快照，界面就可先展示已知金额；
+    /// 完整覆盖只用于安排后台补拉，不能把已有数据变成空值。
+    func hasCursorRemoteUsage(in range: Range<Date>) -> Bool {
+        guard cursorRemoteAccountID != nil, range.lowerBound < range.upperBound else { return false }
+        return cursorUsageCache.coveredDayRanges.contains {
+            $0.startDay < range.upperBound && range.lowerBound < $0.endDay
+        }
+    }
     /// 上一轮成功提交的 ScanState 常驻内存，避免每轮扫描都从磁盘重读重解码
     /// scan-state.json（随文件数和 seen ID 增长，本地实测已近 1MB）。
     /// 冷启动首轮才从磁盘恢复；持久化失败时清空内存副本，
@@ -119,8 +128,9 @@ final class UsageService {
         publishTotals()
     }
 
-    /// 拉取 Cursor 最近变动的远端日桶。首次请求可从计费周期起点开始；后续只重拉
-    /// 今天及其前两天，成功后按完整自然日替换，绝不累计重复窗口。
+    /// 拉取 Cursor 最近变动的远端日桶。首次请求覆盖计费周期起点、当前自然周与最近修正窗口的较早者；
+    /// 后续重拉今天及其前两天，并补齐当前自然周的覆盖缺口。所有结果都按完整自然日替换，
+    /// 绝不累计重复窗口。
     ///
     /// 返回 401 时由 AppState 负责只读重载 Cursor.app 登录态并最多重试一次。
     @discardableResult
@@ -137,32 +147,83 @@ final class UsageService {
             return nil
         }
 
-        let today = calendar.startOfDay(for: now)
-        let recentStart = calendar.date(byAdding: .day, value: -2, to: today) ?? today
-        let hasCoverage = !cursorUsageCache.coveredDayRanges.isEmpty
-        let initialStart = billingWindow.map { calendar.startOfDay(for: $0.lowerBound) }
-        let from = hasCoverage ? recentStart : (initialStart ?? recentStart)
-        guard from < now else { return nil }
+        let ranges = Self.cursorRefreshRanges(
+            now: now,
+            billingWindow: billingWindow,
+            coveredDayRanges: cursorUsageCache.coveredDayRanges,
+            calendar: calendar
+        )
+        guard !ranges.isEmpty else { return nil }
 
         isRefreshingCursorRemoteUsage = true
         defer { isRefreshingCursorRemoteUsage = false }
-        let result = await CursorUsageFetcher.fetch(
-            cookieHeader: session.cookieHeader,
-            from: from,
-            to: now,
-            calendar: calendar
-        )
-        switch result {
-        case .failure(let error):
-            cursorRemoteUsageError = error.description
-            if error.isRateLimited {
-                cursorRemoteBackoffUntil = now.addingTimeInterval(10 * 60)
+        for range in ranges {
+            let result = await CursorUsageFetcher.fetch(
+                cookieHeader: session.cookieHeader,
+                from: range.lowerBound,
+                to: range.upperBound,
+                calendar: calendar
+            )
+            switch result {
+            case .failure(let error):
+                cursorRemoteUsageError = error.description
+                if error.isRateLimited {
+                    cursorRemoteBackoffUntil = now.addingTimeInterval(10 * 60)
+                }
+                return error
+            case .success(let fetched):
+                await storeCursorRemoteUsage(fetched, accountID: session.userID, updatedAt: now)
             }
-            return error
-        case .success(let fetched):
-            await storeCursorRemoteUsage(fetched, accountID: session.userID, updatedAt: now)
-            return nil
         }
+        return nil
+    }
+
+    /// Popover 固定展示自然周，刷新不能因已有任意缓存就遗忘本周前半段。
+    /// 近期窗口负责修正迟到事件；周内缺口单独补拉，重叠或相邻时合并成一次请求。
+    nonisolated static func cursorRefreshRanges(
+        now: Date,
+        billingWindow: Range<Date>?,
+        coveredDayRanges: [CursorUsageDayRange],
+        calendar: Calendar = .current
+    ) -> [Range<Date>] {
+        let today = calendar.startOfDay(for: now)
+        let recentStart = calendar.date(byAdding: .day, value: -2, to: today) ?? today
+        guard !coveredDayRanges.isEmpty else {
+            var weekCalendar = calendar
+            weekCalendar.firstWeekday = 2
+            let weekComponents = weekCalendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+            let weekStart = weekCalendar.date(from: weekComponents) ?? today
+            let billingStart = billingWindow.map { calendar.startOfDay(for: $0.lowerBound) }
+            let initialStart = min(min(billingStart ?? weekStart, weekStart), recentStart)
+            return initialStart < now ? [initialStart..<now] : []
+        }
+
+        var weekCalendar = calendar
+        weekCalendar.firstWeekday = 2
+        let weekComponents = weekCalendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+        let weekStart = weekCalendar.date(from: weekComponents) ?? today
+        let weekGaps = coveredDayRanges.missingRanges(in: weekStart..<now)
+        let ranges = weekGaps + [recentStart..<now]
+        return mergeCursorRefreshRanges(ranges)
+    }
+
+    nonisolated private static func mergeCursorRefreshRanges(_ ranges: [Range<Date>]) -> [Range<Date>] {
+        let sorted = ranges
+            .filter { $0.lowerBound < $0.upperBound }
+            .sorted { $0.lowerBound < $1.lowerBound }
+        var result: [Range<Date>] = []
+        for range in sorted {
+            guard let previous = result.last else {
+                result.append(range)
+                continue
+            }
+            if range.lowerBound <= previous.upperBound {
+                result[result.count - 1] = previous.lowerBound..<max(previous.upperBound, range.upperBound)
+            } else {
+                result.append(range)
+            }
+        }
+        return result
     }
 
     /// Stats 选择到未覆盖的有限时间范围时，按月补拉缺口。`all` 不会传入这里，

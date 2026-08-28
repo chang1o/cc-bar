@@ -225,13 +225,11 @@ struct PopoverRootView: View {
         return totals.costUSD
     }
 
-    /// Cursor 没有本地日志费用；只有远端完整覆盖区间且费用字段完整时，
-    /// 才复用现有 today / this week 展示位，避免把部分金额当成完整合计。
+    /// Cursor 没有本地日志费用。只要远端缓存已有相交日桶，就展示已知 `chargedCents`
+    /// 汇总；完整覆盖由刷新链路在后台补齐，不能让一个缺口抹掉已有金额。
     private func cursorCost(from: Date, to: Date) -> Decimal? {
-        guard appState.usageService.isCursorRemoteUsageCovered(from..<to) else { return nil }
-        let totals = appState.usageService.aggregator.totals(app: .cursor, from: from, to: to)
-        guard !totals.costIncomplete else { return nil }
-        return totals.costUSD
+        guard appState.usageService.hasCursorRemoteUsage(in: from..<to) else { return nil }
+        return appState.usageService.aggregator.totals(app: .cursor, from: from, to: to).costUSD
     }
 
     private func todayCost(for app: QuotaApp) -> Decimal? {
