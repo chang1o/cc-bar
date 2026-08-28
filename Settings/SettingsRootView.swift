@@ -588,7 +588,7 @@ struct SettingsRootView: View {
     }
 
     private var updateStatusIsError: Bool {
-        appState.updateStatus == .failed
+        appState.updateStatus == .failed || appState.updateStatus == .rateLimited
     }
 
     private var updateStatusText: String? {
@@ -601,6 +601,8 @@ struct SettingsRootView: View {
             return tr("Version \(version) is available", "发现新版本 \(version)")
         case .failed:
             return tr("Check failed", "检查失败")
+        case .rateLimited:
+            return tr("GitHub rate limit reached, try again later", "GitHub 暂时限流，请稍后再试")
         }
     }
 

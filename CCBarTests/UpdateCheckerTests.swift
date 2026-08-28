@@ -40,4 +40,28 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertFalse(UpdateChecker.isNewer(tag: "invalid", than: "1.0.1"))
         XCTAssertFalse(UpdateChecker.isNewer(tag: "", than: "1.0.1"))
     }
+
+    // MARK: - isRateLimited
+
+    private func response(status: Int, headers: [String: String] = [:]) -> HTTPURLResponse {
+        HTTPURLResponse(
+            url: UpdateChecker.latestReleaseAPIURL,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        )!
+    }
+
+    func testRateLimitedWhenQuotaExhausted() {
+        XCTAssertTrue(UpdateChecker.isRateLimited(response(status: 403, headers: ["x-ratelimit-remaining": "0"])))
+        XCTAssertTrue(UpdateChecker.isRateLimited(response(status: 429)))
+    }
+
+    func testNotRateLimitedForOtherFailures() {
+        // 403 但仍有余额:属于权限/其他问题,不能报成限流。
+        XCTAssertFalse(UpdateChecker.isRateLimited(response(status: 403, headers: ["x-ratelimit-remaining": "42"])))
+        XCTAssertFalse(UpdateChecker.isRateLimited(response(status: 403)))
+        XCTAssertFalse(UpdateChecker.isRateLimited(response(status: 404)))
+        XCTAssertFalse(UpdateChecker.isRateLimited(response(status: 500)))
+    }
 }

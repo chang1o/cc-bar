@@ -11,6 +11,8 @@ enum UpdateStatus: Equatable {
     case upToDate(latest: String)
     case updateAvailable(version: String)
     case failed
+    /// GitHub 匿名 API 额度被当前出口 IP 用尽,与普通失败区分展示,提示用户稍后重试。
+    case rateLimited
 }
 
 @Observable
@@ -300,6 +302,9 @@ final class AppState {
             } else {
                 updateStatus = .upToDate(latest: info.tag)
             }
+        } catch UpdateChecker.CheckError.rateLimited {
+            print("[update-check] rate limited by GitHub")
+            updateStatus = .rateLimited
         } catch {
             print("[update-check] fetch failed: \(error)")
             updateStatus = .failed
