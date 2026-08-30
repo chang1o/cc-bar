@@ -1,15 +1,17 @@
 import Foundation
 
-/// 模型提供商（厂商归并 + opencode-go 单列）分组键。
+/// 模型提供商（厂商归并 + opencode-go / command code 单列）分组键。
 ///
 /// 从 `UsageBucket.model` 字符串推导：前缀优先（`openai/`、`openai-codex/`、
-/// `anthropic/`、`deepseek/`、`opencode-go/`），无前缀时按 app / 模型名关键词兜底。
+/// `anthropic/`、`deepseek/`、`opencode-go/`、`commandcode/`、`command-code/`），
+/// 无前缀时按 app / 模型名关键词兜底。
 /// 纯展示层用途，不参与定价与存储；价格仍由 `Pricing` 按模型名单独解析。
 nonisolated enum ModelProvider: String, Sendable, CaseIterable {
     case openAI
     case anthropic
     case deepseek
     case opencodeGo
+    case commandCode
     case other
 
     /// 推导提供商。
@@ -26,7 +28,9 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
             ("openai/", .openAI),
             ("anthropic/", .anthropic),
             ("deepseek/", .deepseek),
-            ("opencode-go/", .opencodeGo)
+            ("opencode-go/", .opencodeGo),
+            ("commandcode/", .commandCode),
+            ("command-code/", .commandCode)
         ]
         for (prefix, provider) in prefixes where m.hasPrefix(prefix) {
             return provider
@@ -55,6 +59,7 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
         case .anthropic: return tr("Anthropic", "Anthropic")
         case .deepseek: return tr("DeepSeek", "DeepSeek")
         case .opencodeGo: return tr("OpenCode-Go", "OpenCode-Go")
+        case .commandCode: return tr("Command Code", "Command Code")
         case .other: return tr("Other", "其他")
         }
     }

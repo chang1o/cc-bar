@@ -40,9 +40,9 @@ nonisolated private struct PricedPeriod: Sendable {
 
 nonisolated enum Pricing {
     /// 价格表与 cc-switch `seed_model_pricing` / CodexBar `CostUsagePricing` 对齐（2026 上半年价位）。
-    /// 命中不到时返回 nil。键为归一化后的模型名（剥 provider 前缀 `openai-codex/` / `openai/` /
-    /// `anthropic/` / `deepseek/` / `opencode-go/` 和末尾
-    /// `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
+    /// 命中不到时返回 nil。键为归一化后的模型名（循环剥 provider 前缀 `openai-codex/` / `openai/` /
+    /// `anthropic/` / `deepseek/` / `opencode-go/` / `commandcode/` / `command-code/`
+    /// 和末尾 `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
     static let table: [String: ModelPrice] = [
         // —— Claude 4.x 系（input 已不含 cache_read）——
         "claude-fable-5":    .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
@@ -280,18 +280,24 @@ nonisolated enum Pricing {
         }
     }
 
-    /// 归一化模型名：去支持的 provider 前缀；剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；
-    /// 兼容 Vertex AI 的 `@日期` 写法。
+    /// 归一化模型名：循环去支持的 provider 前缀（含嵌套两层，如 `commandcode/deepseek/...`）；
+    /// 剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；兼容 Vertex AI 的 `@日期` 写法。
     nonisolated static func normalize(model: String) -> String {
         var m = model
-        let providerPrefixes = ["openai-codex/", "openai/", "anthropic/", "deepseek/"]
-        for prefix in providerPrefixes where m.hasPrefix(prefix) {
-            m.removeFirst(prefix.count)
-            break
-        }
-        // OpenCode 的模型标签形如 `opencode-go/deepseek-v4-flash`，剥 provider 前缀后与本地表/远端目录对齐。
-        if m.hasPrefix("opencode-go/") {
-            m.removeFirst("opencode-go/".count)
+        // 循环剥除：Pi / OpenCode 日志里 provider 网关标签可能是 `commandcode/deepseek/...` 双层，
+        // 剥掉外层后还要继续剥内层才能与本地表 / 远端目录对齐。
+        let providerPrefixes = [
+            "openai-codex/", "openai/", "anthropic/", "deepseek/",
+            "opencode-go/", "commandcode/", "command-code/"
+        ]
+        var removed = true
+        while removed {
+            removed = false
+            for prefix in providerPrefixes where m.hasPrefix(prefix) {
+                m.removeFirst(prefix.count)
+                removed = true
+                break
+            }
         }
         // Vertex 风格：`name@YYYYMMDD`
         if let at = m.firstIndex(of: "@") {
