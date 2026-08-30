@@ -81,6 +81,8 @@ cc-bar 是为个人需求开发的开源小工具。为了查询额度,它会读
 
 用量统计基于扫描本机会话日志得出:Codex(`~/.codex/sessions` 与 `~/.codex/archived_sessions`)、Claude Code(`~/.claude/projects`)与 Pi(pi coding agent,日志位于 `~/.pi/agent/sessions`)的 JSONL 日志,以及 OpenCode 的 SQLite 会话库(`~/.local/share/opencode/opencode.db`,只读打开)。
 
+对话页的项目归组只基于日志里记录的工作目录路径:家目录内普通位置(如 `~/Code/...`)会检查目录是否存在、并向上寻找 Git 仓库根以便归组;桌面、文稿、下载、音乐、图片、影片等系统保护目录下的路径**不做任何文件系统访问**,只按路径字符串归组——所以 cc-bar 不会触发「访问文稿/音乐文件夹」的系统授权弹窗。cc-bar 只读取会话日志本身,不读取这些文件夹里的文件,也没有任何遥测。
+
 > [!TIP]
 > 发布的 `CCBar.app` 为 ad-hoc 签名、未做 Apple 公证;如果介意,可以自行审阅代码后[从源码构建](#-从源码构建),不依赖发布的二进制包。
 

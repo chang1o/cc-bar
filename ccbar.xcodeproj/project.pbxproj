@@ -88,6 +88,7 @@
 		49C1BC15000000000001AABB /* CursorUsageFetcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */; };
 		49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */; };
 		49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */; };
+		49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */; };
 		49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */; };
 		49C1B3F4000000000001AABB /* claude-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */; };
 /* End PBXBuildFile section */
@@ -188,6 +189,7 @@
 		49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageFetcherTests.swift; sourceTree = "<group>"; };
 		49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScannerTests.swift; sourceTree = "<group>"; };
 		49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScannerTests.swift; sourceTree = "<group>"; };
+		49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationProjectResolverTests.swift; sourceTree = "<group>"; };
 		49C1B301000000000001AAAA /* CCBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CCBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "codex-fast-scan.jsonl"; sourceTree = "<group>"; };
 		49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "claude-fast-scan.jsonl"; sourceTree = "<group>"; };
@@ -423,6 +425,7 @@
 				49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */,
 				49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */,
 				49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */,
+				49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */,
 				49C1BF09000000000001AAAA /* UpdateCheckerTests.swift */,
 				49C1B3F2000000000001AAAA /* Fixtures */,
 			);
@@ -637,6 +640,7 @@
 				49C1BF09000000000001AABB /* UpdateCheckerTests.swift in Sources */,
 				49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */,
 				49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */,
+				49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

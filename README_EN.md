@@ -81,6 +81,8 @@ cc-bar is a small open-source tool built for personal use. To query quotas, it r
 
 Usage statistics are computed from local session logs: the JSONL logs of Codex (`~/.codex/sessions` and `~/.codex/archived_sessions`), Claude Code (`~/.claude/projects`), and Pi (the pi coding agent; under `~/.pi/agent/sessions`), plus OpenCode's SQLite session database (`~/.local/share/opencode/opencode.db`, opened read-only).
 
+Project grouping on the conversations page is based purely on the working-directory paths recorded in those logs: paths in ordinary locations inside your home folder (e.g. `~/Code/...`) get an existence check and a Git-repo-root lookup for grouping, while paths under system-protected folders (Desktop, Documents, Downloads, Music, Pictures, Movies) are **never touched on the filesystem** and are grouped by string only — which is why cc-bar never triggers the macOS "would like to access your Documents/Music folder" permission prompt. cc-bar reads the session logs themselves, never the contents of those folders, and ships no telemetry.
+
 > [!TIP]
 > The released `CCBar.app` is ad-hoc signed and not notarized. If that concerns you, review the code yourself and [build from source](#-building-from-source) instead of relying on the released binaries.
 

@@ -104,8 +104,10 @@ struct ConversationStatsView: View {
 
     private func projectMenu(_ result: ConversationQueryResult) -> some View {
         let options = result.projectOptions
-        let recent = Array(options.filter { $0.status == .available }.sorted { $0.lastAt > $1.lastAt }.prefix(5))
-        let available = options.filter { $0.status == .available }.sorted {
+        // unverified（受保护目录，未做存在性检查）与可用项目同组展示，不显示“已不存在”。
+        let openable = options.filter { $0.status == .available || $0.status == .unverified }
+        let recent = Array(openable.sorted { $0.lastAt > $1.lastAt }.prefix(5))
+        let available = openable.sorted {
             projectLabel($0, duplicateNames: result.duplicateProjectNames)
                 .localizedCaseInsensitiveCompare(projectLabel($1, duplicateNames: result.duplicateProjectNames)) == .orderedAscending
         }
@@ -272,7 +274,7 @@ struct ConversationStatsView: View {
         switch option.status {
         case .unassigned: return tr("No project", "无明确项目")
         case .system: return tr("CCBar system tasks", "CCBar 系统任务")
-        case .available, .unavailable:
+        case .available, .unavailable, .unverified:
             guard duplicateNames.contains(option.name) else { return option.name }
             let parent = URL(fileURLWithPath: option.path).deletingLastPathComponent().lastPathComponent
             return "\(option.name) — \(parent)"
@@ -284,7 +286,7 @@ struct ConversationStatsView: View {
         case .unassigned: return tr("No reliable project could be identified", "未能可靠识别项目")
         case .system: return tr("Usage created by CCBar background tasks", "CCBar 后台任务产生的用量")
         case .unavailable: return "\(option.path) · \(tr("Unavailable", "已不存在"))"
-        case .available: return option.path
+        case .available, .unverified: return option.path
         }
     }
 
@@ -373,7 +375,7 @@ private struct ConversationListRow: View {
         switch summary.info.projectStatus {
         case .unassigned: return tr("No project", "无明确项目")
         case .system: return tr("System task", "系统任务")
-        case .available, .unavailable: return summary.info.projectName
+        case .available, .unavailable, .unverified: return summary.info.projectName
         }
     }
 
@@ -382,7 +384,7 @@ private struct ConversationListRow: View {
         case .unassigned: return tr("No reliable project could be identified", "未能可靠识别项目")
         case .system: return tr("Usage created by CCBar background tasks", "CCBar 后台任务产生的用量")
         case .unavailable: return "\(summary.info.projectPath) · \(tr("Unavailable", "已不存在"))"
-        case .available: return summary.info.projectPath
+        case .available, .unverified: return summary.info.projectPath
         }
     }
 }
@@ -536,7 +538,7 @@ private struct ConversationDetailView: View {
         case .unassigned: return tr("No project", "无明确项目")
         case .system: return tr("CCBar system task", "CCBar 系统任务")
         case .unavailable: return "\(detail.info.projectPath) · \(tr("Unavailable", "已不存在"))"
-        case .available: return detail.info.projectPath
+        case .available, .unverified: return detail.info.projectPath
         }
     }
 

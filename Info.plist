@@ -22,6 +22,18 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>CCBar 只确认 AI 会话记录中项目目录是否存在，不读取文件夹内容，数据不会离开这台 Mac。CCBar only checks whether project folders exist; it never reads their contents.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>CCBar 只确认 AI 会话记录中项目目录是否存在，不读取文件夹内容，数据不会离开这台 Mac。CCBar only checks whether project folders exist; it never reads their contents.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>CCBar 只确认 AI 会话记录中项目目录是否存在，不读取文件夹内容，数据不会离开这台 Mac。CCBar only checks whether project folders exist; it never reads their contents.</string>
+    <key>NSMusicFolderUsageDescription</key>
+    <string>CCBar 只确认 AI 会话记录中项目目录是否存在，不读取文件夹内容，数据不会离开这台 Mac。CCBar only checks whether project folders exist; it never reads their contents.</string>
+    <key>NSPicturesFolderUsageDescription</key>
+    <string>CCBar 只确认 AI 会话记录中项目目录是否存在，不读取文件夹内容，数据不会离开这台 Mac。CCBar only checks whether project folders exist; it never reads their contents.</string>
+    <key>NSMoviesFolderUsageDescription</key>
+    <string>CCBar 只确认 AI 会话记录中项目目录是否存在，不读取文件夹内容，数据不会离开这台 Mac。CCBar only checks whether project folders exist; it never reads their contents.</string>
     <key>NSHumanReadableCopyright</key>
     <string></string>
     <key>NSSupportsAutomaticTermination</key>

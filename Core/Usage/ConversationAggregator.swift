@@ -169,7 +169,7 @@ final class ConversationAggregator {
             )
         }
         let duplicateNames = Dictionary(grouping: projectOptions.filter {
-            $0.status == .available || $0.status == .unavailable
+            $0.status.isPathBased
         }, by: \.name)
             .compactMap { $0.value.count > 1 ? $0.key : nil }
 

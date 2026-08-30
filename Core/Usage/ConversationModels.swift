@@ -3,8 +3,18 @@ import Foundation
 nonisolated enum ConversationProjectStatus: String, Sendable, Codable, Equatable {
     case available
     case unavailable
+    /// 路径落在 TCC 保护目录（桌面/文稿等）或家目录之外，按隐私规则跳过文件系统验证。
+    case unverified
     case unassigned
     case system
+
+    /// 有真实路径身份、可按名称参与分组与去重的状态。
+    var isPathBased: Bool {
+        switch self {
+        case .available, .unavailable, .unverified: return true
+        case .unassigned, .system: return false
+        }
+    }
 }
 
 nonisolated enum ConversationProjectSource: String, Sendable, Codable, Equatable {
@@ -271,10 +281,35 @@ nonisolated struct ConversationDetail: Sendable, Equatable {
 }
 
 /// 把日志 cwd 归一为稳定项目身份。每次扫描只对少量唯一原始路径做文件系统检查。
+///
+/// 隐私分级：只有家目录以内、且不在 TCC 保护目录（桌面/文稿/下载/音乐/图片/影片）
+/// 之下的路径才允许做存在性检查与 git root 探测；其余路径（含可移动卷、网络宗卷、
+/// 其他用户目录）只按字符串归组（status = .unverified）。非沙盒 App 访问这些路径
+/// 会触发系统“文件与文件夹”授权弹窗，惊扰用户且并无收益。
 nonisolated struct ConversationProjectResolver {
+    private static let protectedHomeFolders: Set<String> = [
+        "Desktop", "Documents", "Downloads", "Music", "Pictures", "Movies",
+    ]
+
     private var cache: [String: ConversationProject] = [:]
     private let fm = FileManager.default
-    private let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+    private let home: String
+
+    init(home: String = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path) {
+        self.home = home
+    }
+
+    /// 是否允许对 `standardizedPath` 做文件系统访问。大小写不敏感比较，
+    /// 拿不准一律返回 false：宁可少查一次，不可多弹一次窗。
+    static func allowsFileSystemCheck(standardizedPath: String, home: String) -> Bool {
+        let path = standardizedPath.lowercased()
+        let homePrefix = home.lowercased() + "/"
+        guard path.hasPrefix(homePrefix) else { return false }
+        let top = path.dropFirst(homePrefix.count)
+            .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).first
+        guard let top else { return false }
+        return !protectedHomeFolders.contains(String(top))
+    }
 
     mutating func resolve(rawPath: String, source: ConversationProjectSource) -> ConversationProject {
         let raw = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -305,6 +340,18 @@ nonisolated struct ConversationProjectResolver {
         if standardizedPath == "/" || standardizedPath == home {
             cache[cacheKey] = .unassigned
             return .unassigned
+        }
+
+        guard Self.allowsFileSystemCheck(standardizedPath: standardizedPath, home: home) else {
+            let project = ConversationProject(
+                key: "path:\(standardizedPath)",
+                name: standardizedURL.lastPathComponent,
+                path: standardizedPath,
+                status: .unverified,
+                source: source
+            )
+            cache[cacheKey] = project
+            return project
         }
 
         var isDirectory: ObjCBool = false
@@ -339,7 +386,7 @@ nonisolated struct ConversationProjectResolver {
         let resolved = usable.map { candidate in
             (candidate: candidate, project: resolve(rawPath: candidate.path, source: .cwd))
         }
-        let normal = resolved.filter { $0.project.status == .available || $0.project.status == .unavailable }
+        let normal = resolved.filter { $0.project.status.isPathBased }
         let uniqueProjects = Dictionary(grouping: normal, by: { $0.project.key })
         if uniqueProjects.count == 1, let project = normal.first?.project { return project }
 
@@ -368,7 +415,8 @@ nonisolated struct ConversationProjectResolver {
 
     private func nearestGitRoot(from url: URL) -> URL? {
         var current = url
-        while current.path != "/" {
+        // 只在家目录范围内向上找；家目录之上不属于用户项目，也无需触碰。
+        while current.path != "/", current.path == home || current.path.hasPrefix(home + "/") {
             if fm.fileExists(atPath: current.appendingPathComponent(".git").path) { return current }
             current.deleteLastPathComponent()
         }

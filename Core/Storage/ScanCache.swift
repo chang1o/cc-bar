@@ -24,7 +24,8 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// v10: 新增 pi 扫描 watermark（`pi` / `piSeenEntryIds`）。
     /// v11: 新增 opencode 扫描 watermark（`opencodeLastMessageTime` / `opencodeSeenMessageIds`）。
     /// v12: Pi/OpenCode 统一费用解析规则改变，旧扫描结果必须全量重算。
-    static let currentVersion: Int = 12
+    /// v13: 项目归属隐私分级——受 TCC 保护目录不再做文件系统检查，旧项目归组必须全量重算。
+    static let currentVersion: Int = 13
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownUsage:)` 不一致即视为缓存失效、全量重扫重算。
