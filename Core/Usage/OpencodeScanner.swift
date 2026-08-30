@@ -103,79 +103,89 @@ enum OpencodeScanner {
         }
 
         var entries: [UsageEntry] = []
-        var seen = Set(seenMessageIds)
+        var seen = SeenIDSet(seenMessageIds)
         var lastTime = lastMessageTime
         var messagesRead = 0
         var lastModelBySession: [String: String] = [:]
         var sessionsWithEntries: Set<String> = []
         var sessionMeta: [String: SessionMeta] = [:]
 
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            messagesRead += 1
-            if messagesRead % 200 == 0 {
-                onProgress?(ScanProgress(
-                    app: .opencode,
-                    filesCompleted: messagesRead,
-                    filesTotal: 0,
-                    linesParsed: messagesRead
-                ))
-            }
-            guard let messageID = columnText(stmt, 0),
-                  let sessionID = columnText(stmt, 1) else { continue }
-            let timeCreated = sqlite3_column_int64(stmt, 2)
-            guard let data = columnText(stmt, 3),
-                  let json = try? JSONSerialization.jsonObject(
-                    with: Data(data.utf8)
-                  ) as? [String: Any] else { continue }
-            let title = columnText(stmt, 4)
-            let directory = columnText(stmt, 5) ?? ""
-            let branch = columnText(stmt, 6)
+        // 每批 256 行一个 autoreleasepool：逐行 JSONSerialization 产生的 Objective-C
+        // 临时对象在长任务里不会一直挂在线程上，全量扫描内存峰值显著下降。
+        var reachedEnd = false
+        while !reachedEnd {
+            autoreleasepool {
+                var batch = 0
+                while batch < 256, sqlite3_step(stmt) == SQLITE_ROW {
+                    batch += 1
+                    messagesRead += 1
+                    if messagesRead % 200 == 0 {
+                        onProgress?(ScanProgress(
+                            app: .opencode,
+                            filesCompleted: messagesRead,
+                            filesTotal: 0,
+                            linesParsed: messagesRead
+                        ))
+                    }
+                    guard let messageID = columnText(stmt, 0),
+                          let sessionID = columnText(stmt, 1) else { continue }
+                    let timeCreated = sqlite3_column_int64(stmt, 2)
+                    guard let data = columnText(stmt, 3),
+                          let json = try? JSONSerialization.jsonObject(
+                            with: Data(data.utf8)
+                          ) as? [String: Any] else { continue }
+                    let title = columnText(stmt, 4)
+                    let directory = columnText(stmt, 5) ?? ""
+                    let branch = columnText(stmt, 6)
 
-            lastTime = max(lastTime, timeCreated)
-            let role = json["role"] as? String
-            if role == "user" {
-                // user 消息带嵌套 `model` 对象，继承给后续 assistant 兜底。
-                if let model = parseModel(json["model"]) {
-                    lastModelBySession[sessionID] = model
+                    lastTime = max(lastTime, timeCreated)
+                    let role = json["role"] as? String
+                    if role == "user" {
+                        // user 消息带嵌套 `model` 对象，继承给后续 assistant 兜底。
+                        if let model = parseModel(json["model"]) {
+                            lastModelBySession[sessionID] = model
+                        }
+                        continue
+                    }
+                    guard role == "assistant" else { continue }
+                    if seen.contains(messageID) { continue }
+                    seen.insert(messageID)
+
+                    guard let tokens = json["tokens"] as? [String: Any] else { continue }
+                    let cost = decimalValue(json["cost"])
+                    let input = intValue(tokens["input"])
+                    let output = intValue(tokens["output"]) + intValue(tokens["reasoning"])
+                    let cache = tokens["cache"] as? [String: Any] ?? [:]
+                    let cacheRead = intValue(cache["read"])
+                    let cacheWrite = intValue(cache["write"])
+                    let totalTokens = max(
+                        intValue(tokens["total"]),
+                        input + output + cacheRead + cacheWrite
+                    )
+                    // total 为 0 且无 cost（或官方 cost 为 0）的消息（工具调用收尾等）不产生用量。
+                    if totalTokens <= 0 && (cost == nil || cost == 0) { continue }
+
+                    // assistant 消息自身带顶层 providerID/modelID，优先于会话继承的 user 模型；
+                    // 增量扫描只追加 assistant 时继承为空，靠自身字段保证标签不丢。
+                    let model = parseModel(json) ?? lastModelBySession[sessionID] ?? "unknown/unknown"
+                    let timestamp = Date(timeIntervalSince1970: Double(timeCreated) / 1000)
+                    entries.append(makeEntry(
+                        conversationID: sessionID,
+                        model: model,
+                        timestamp: timestamp,
+                        input: input,
+                        output: output,
+                        cacheRead: cacheRead,
+                        cacheWrite: cacheWrite,
+                        totalTokens: totalTokens,
+                        cost: cost
+                    ))
+                    sessionsWithEntries.insert(sessionID)
+                    if sessionMeta[sessionID] == nil {
+                        sessionMeta[sessionID] = SessionMeta(title: title, directory: directory, branch: branch)
+                    }
                 }
-                continue
-            }
-            guard role == "assistant" else { continue }
-            if seen.contains(messageID) { continue }
-            seen.insert(messageID)
-
-            guard let tokens = json["tokens"] as? [String: Any] else { continue }
-            let cost = decimalValue(json["cost"])
-            let input = intValue(tokens["input"])
-            let output = intValue(tokens["output"]) + intValue(tokens["reasoning"])
-            let cache = tokens["cache"] as? [String: Any] ?? [:]
-            let cacheRead = intValue(cache["read"])
-            let cacheWrite = intValue(cache["write"])
-            let totalTokens = max(
-                intValue(tokens["total"]),
-                input + output + cacheRead + cacheWrite
-            )
-            // total 为 0 且无 cost（或官方 cost 为 0）的消息（工具调用收尾等）不产生用量。
-            if totalTokens <= 0 && (cost == nil || cost == 0) { continue }
-
-            // assistant 消息自身带顶层 providerID/modelID，优先于会话继承的 user 模型；
-            // 增量扫描只追加 assistant 时继承为空，靠自身字段保证标签不丢。
-            let model = parseModel(json) ?? lastModelBySession[sessionID] ?? "unknown/unknown"
-            let timestamp = Date(timeIntervalSince1970: Double(timeCreated) / 1000)
-            entries.append(makeEntry(
-                conversationID: sessionID,
-                model: model,
-                timestamp: timestamp,
-                input: input,
-                output: output,
-                cacheRead: cacheRead,
-                cacheWrite: cacheWrite,
-                totalTokens: totalTokens,
-                cost: cost
-            ))
-            sessionsWithEntries.insert(sessionID)
-            if sessionMeta[sessionID] == nil {
-                sessionMeta[sessionID] = SessionMeta(title: title, directory: directory, branch: branch)
+                if batch < 256 { reachedEnd = true }
             }
         }
         sqlite3_finalize(stmt)
@@ -202,9 +212,8 @@ enum OpencodeScanner {
             )
         }
 
-        // 控制全局 seen 集合大小：保留最近 20000 条（与 Claude / Pi scanner 一致）。
-        let seenArr = Array(seen)
-        let cappedSeen = seenArr.count > 20000 ? Array(seenArr.suffix(20000)) : seenArr
+        // 控制全局 seen 集合大小：按插入顺序保留最近 N 条（与 Claude / Pi scanner 一致）。
+        let cappedSeen = seen.capped(to: SeenIDSet.defaultLimit)
 
         return Result(
             entries: entries,

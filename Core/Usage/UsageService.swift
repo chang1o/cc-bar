@@ -47,6 +47,16 @@ final class UsageService {
             $0.startDay < range.upperBound && range.lowerBound < $0.endDay
         }
     }
+    /// rollup 写盘节流：距上次成功落盘不足这个间隔时，本轮只更新内存聚合，
+    /// 不重写磁盘快照。三份 rollup 都是全量快照（本机实测 conversation-rollup 3.4MB、
+    /// scan-state 2.6MB），活跃编码时按 5 分钟扫描周期写等于每小时数十 MB。
+    /// 代价只是 App 意外退出后下次启动多重扫这段窗口内的增量日志（秒级），不丢数据：
+    /// 未落盘期间 watermark 一并压住，盘上永远是「rollup 与 scan-state 同代同进度」。
+    nonisolated private static let rollupWriteInterval: TimeInterval = 15 * 60
+    /// 已进入内存聚合但尚未落盘的用量变化。
+    private var hasUnwrittenRollupChanges = false
+    private var lastRollupWriteAt: Date?
+
     /// 上一轮成功提交的 ScanState 常驻内存，避免每轮扫描都从磁盘重读重解码
     /// scan-state.json（随文件数和 seen ID 增长，本地实测已近 1MB）。
     /// 冷启动首轮才从磁盘恢复；持久化失败时清空内存副本，
@@ -55,7 +65,7 @@ final class UsageService {
 
     func bootstrap(appState: AppState) async {
         self.appState = appState
-        // 日聚合与对话两份主 rollup 必须同代；周期 rollup 也只在同代、同价格指纹时恢复。
+        // 日聚合与对话两份主 rollup 必须同代；周期 rollup 也只在同代时恢复。
         // rollup 可能较大（conversation-rollup 实测可达数 MB），三个 load 都是磁盘读取 +
         // JSON 解码，统一放到后台线程，避免启动时阻塞主线程、菜单栏图标卡顿。
         let (payload, conversationPayload, cyclePayload, cursorPayload) = await Task.detached(priority: .utility) {
@@ -76,7 +86,6 @@ final class UsageService {
             let validCycleIDs = Set(appState.quotaCycles.records.map(\.id))
             let rollupCycleIDs = Set(cyclePayload.buckets.map(\.cycleID))
             if cyclePayload.generationID == payload.generationID,
-               cyclePayload.pricingFingerprint == payload.pricingFingerprint,
                rollupCycleIDs.isSubset(of: validCycleIDs) {
                 cycleAggregator.load(from: cyclePayload.buckets)
                 loadedCycleGeneration = cyclePayload.generationID
@@ -354,6 +363,14 @@ final class UsageService {
         return chunks
     }
 
+    /// Scheduler 的周期扫描入口：日志目录自上次扫描以来没有变化时整轮跳过。
+    /// 手动刷新（`refreshNow`）与强制重算（`forceRescan`）直接走 `scanNow` / 全量路径，
+    /// 不受门控影响，用户点了就一定扫。
+    func scanPeriodically() async {
+        guard UsageLogWatcher.shared.shouldScan() else { return }
+        await scanNow()
+    }
+
     /// 由 Scheduler / 手动触发；防重入。
     func scanNow() async {
         if isScanning {
@@ -368,17 +385,12 @@ final class UsageService {
             // 借用量扫描的既有节奏当远端价格目录 24h 到期检查的心跳，不新开定时器；非阻塞。
             PricingCatalogStore.shared.refreshIfNeeded()
             PricingCatalogStore.shared.commitPending()
-            let knownUsage = pricingUsageKeys(from: aggregator.snapshotLocal())
-            let cacheResult = await resolveScanState(knownUsage: knownUsage)
+            let cacheResult = await resolveScanState()
             if case .invalidated = cacheResult {
                 clearUsageAggregatesForFullRebuild()
             }
-            if await runScan(prev: cacheResult.state) {
+            if await runScan(prev: cacheResult.state, allowDeferredWrite: true) {
                 requiresFullRebuild = false
-                if await refreshMissingPricingIfNeeded() {
-                    // 已在本轮结束的安全边界提交新价格；下一轮会因指纹变化自动全量重算。
-                    scanQueued = true
-                }
             }
         } while scanQueued
     }
@@ -564,8 +576,7 @@ final class UsageService {
     /// 受限重建前用主扫描状态做一次常规增量提交，保证窗口重扫后
     /// watermark 不会再返回同一批条目。失效状态沿用常规扫描的全量重建语义。
     private func drainPendingUsageBeforeCycleRebuild() async -> Bool {
-        let knownUsage = pricingUsageKeys(from: aggregator.snapshotLocal())
-        let cacheResult = await resolveScanState(knownUsage: knownUsage)
+        let cacheResult = await resolveScanState()
         if case .invalidated = cacheResult {
             clearUsageAggregatesForFullRebuild()
         }
@@ -576,6 +587,9 @@ final class UsageService {
 
     private func clearUsageAggregatesForFullRebuild() {
         cachedScanState = nil
+        // 待落盘的变化随聚合器一起作废；`lastRollupWriteAt` 归零让重建后的首轮立刻落盘。
+        hasUnwrittenRollupChanges = false
+        lastRollupWriteAt = nil
         aggregator.load(from: [])
         conversationAggregator.load(infos: [], buckets: [])
         cycleAggregator.load(from: [])
@@ -741,21 +755,21 @@ final class UsageService {
     }
 
     /// 决定本轮扫描的起点状态。优先用内存里上一轮已提交的 ScanState；
-    /// 内存路径与磁盘路径执行同样的校验——generationID 须与已加载 rollup 同代、
-    /// 价格指纹须与当前 active 价格目录一致（commitPending 提交新价格后指纹变化，
-    /// 照旧触发全量重建）。只有冷启动且日聚合、对话两份主 rollup 恢复成功时，
+    /// 内存路径与磁盘路径执行同样的结构校验——generationID 须与已加载 rollup 同代。
+    /// 价格指纹不参与失效判定：价格目录更新后自动扫描按现价计新条目，
+    /// 历史桶保持旧价，等用户在设置页「重新计算用量」手动全量重扫对齐。
+    /// 只有冷启动且日聚合、对话两份主 rollup 恢复成功时，
     /// 首轮需要读盘取得与它们同代的 ScanState。
-    private func resolveScanState(knownUsage: Set<PricingUsageKey>) async -> ScanCacheLoadResult {
+    private func resolveScanState() async -> ScanCacheLoadResult {
         if requiresFullRebuild { return .invalidated }
         if let cached = cachedScanState {
-            if cached.generationID == loadedRollupGeneration,
-               cached.pricingFingerprint == Pricing.fingerprint(knownUsage: knownUsage) {
+            if cached.generationID == loadedRollupGeneration {
                 return .valid(cached)
             }
             return .invalidated
         }
         let loaded = await Task.detached(priority: .utility) {
-            ScanCache.load(knownUsage: knownUsage)
+            ScanCache.load()
         }.value
         if case .valid(let state) = loaded, state.generationID == loadedRollupGeneration {
             return loaded
@@ -812,20 +826,26 @@ final class UsageService {
         }
     }
 
-    /// 设置页手动更新在线价格目录：绕过 24 小时，到扫描安全边界提交并按需重算。
+    /// 设置页手动更新在线价格目录：绕过 24 小时拉取最新目录，新价格在下一轮扫描的
+    /// 安全边界提交生效。只更新价格表，不触发重算；历史费用保持旧价，
+    /// 需要对齐历史时用「重新计算用量」（forceRescan）。
     @discardableResult
     func refreshPricingCatalog() async -> Bool {
         guard !isRefreshingPricingCatalog else { return false }
         isRefreshingPricingCatalog = true
         defer { isRefreshingPricingCatalog = false }
-        let succeeded = await PricingCatalogStore.shared.forceRefresh()
-        guard succeeded else { return false }
-        await scanNow()
-        return true
+        return await PricingCatalogStore.shared.forceRefresh()
     }
 
+    /// - Parameter allowDeferredWrite: 允许把本轮聚合结果留在内存里、等到节流窗口到期
+    ///   再统一落盘。只有常规周期扫描（`scanNow`）传 true；强制重算与周期重建前的
+    ///   drain 必须立刻提交，否则后续步骤会基于未落盘的状态继续推进。
     @discardableResult
-    private func runScan(prev: ScanState, reportProgress: Bool = false) async -> Bool {
+    private func runScan(
+        prev: ScanState,
+        reportProgress: Bool = false,
+        allowDeferredWrite: Bool = false
+    ) async -> Bool {
         let started = Date()
         let prevSeen = prev.claudeSeenMessageIds
         let progress: ScanProgressCallback?
@@ -880,8 +900,8 @@ final class UsageService {
         )
 
         // 个人历史用量一次性补录：缓存失效路径会清空聚合器，若只在 bootstrap 合并，
-        // 这里落盘的 rollup / 指纹将不含补录模型，下次启动指纹比对再失效、补录被反复冲掉。
-        // 每轮扫描都按天去重重新合并，保证快照与指纹始终包含补录数据。
+        // 清空后落盘的 rollup 将丢失补录数据。每轮扫描都按天去重重新合并，
+        // 保证任何一次落盘的快照都包含补录用量。
         let existingClaudeDays = Set(aggregator.snapshotLocal().filter { $0.app == .claude }.map(\.day))
         aggregator.ingestLocal(ImportedUsageBackfill.loadMissingEntries(app: .claude, existingDays: existingClaudeDays))
 
@@ -932,7 +952,14 @@ final class UsageService {
         let buckets = aggregator.snapshotLocal()
         let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: buckets))
         let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty || !pi.entries.isEmpty || !opencode.entries.isEmpty
-        let shouldWriteRollups = loadedRollupGeneration == nil || hasNewEntries || conversationChanged
+        if hasNewEntries || conversationChanged { hasUnwrittenRollupChanges = true }
+        // 尚未建立代次时必须立刻落盘，否则内存与磁盘无从对齐。
+        let mustWriteRollups = loadedRollupGeneration == nil
+        let throttleElapsed = lastRollupWriteAt.map {
+            started.timeIntervalSince($0) >= Self.rollupWriteInterval
+        } ?? true
+        let shouldWriteRollups = mustWriteRollups
+            || (hasUnwrittenRollupChanges && (!allowDeferredWrite || throttleElapsed))
         let generationID = shouldWriteRollups ? UUID().uuidString : loadedRollupGeneration!
         let newScanState = ScanState(
             generationID: generationID,
@@ -945,7 +972,11 @@ final class UsageService {
             opencodeLastMessageTime: opencode.newLastMessageTime,
             opencodeSeenMessageIds: opencode.newSeenMessageIds
         )
-        let shouldWriteScanState = newScanState != prev
+        // watermark 绝不能单独越过尚未落盘的聚合数据：那样重启后会拿到
+        // 「新 watermark + 旧 rollup」的同代组合，中间那段用量永久丢失。
+        // 因此只有本轮真的写 rollup、或压根没有待落盘数据时，才允许提交 watermark。
+        let commitsThisRound = shouldWriteRollups || !hasUnwrittenRollupChanges
+        let shouldWriteScanState = commitsThisRound && newScanState != prev
 
         let rollup: UsageRollupPayload?
         let conversationRollup: ConversationRollupPayload?
@@ -977,7 +1008,8 @@ final class UsageService {
         } else {
             rollup = nil
             conversationRollup = nil
-            if cycleChanged || loadedCycleGeneration == nil {
+            // 周期桶同理：领先于 watermark 会在下轮增量扫描时被重复灌入。
+            if commitsThisRound, cycleChanged || loadedCycleGeneration == nil {
                 cycleRollup = CycleUsageRollupPayload(
                     generationID: generationID,
                     pricingFingerprint: fingerprint,
@@ -1024,6 +1056,10 @@ final class UsageService {
             return false
         }
 
+        if shouldWriteRollups {
+            hasUnwrittenRollupChanges = false
+            lastRollupWriteAt = Date()
+        }
         loadedRollupGeneration = generationID
         if cycleRollup != nil {
             loadedCycleGeneration = generationID
@@ -1042,6 +1078,7 @@ final class UsageService {
 
     /// 只把“已有 Standard/Fast 用量但当前所有可靠价格源都未命中”的桶视为刷新候选。
     /// Unknown 档位和已知模型的请求级限制（例如 Codex Fast >272K）不会造成无休止刷新。
+    /// 仅手动重算（forceRescan）路径调用；自动扫描不做缺价刷新、也不因缺价排队重算。
     private func refreshMissingPricingIfNeeded() async -> Bool {
         let buckets = aggregator.snapshotLocal()
         let missing = Set(buckets.compactMap { bucket -> PricingUsageKey? in

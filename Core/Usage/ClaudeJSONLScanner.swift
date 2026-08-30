@@ -53,7 +53,7 @@ enum ClaudeJSONLScanner {
         var seeds: [String: ConversationSeed] = [:]
         var projectCandidates: [String: [ProjectCandidate]] = [:]
         // 跨文件全局去重：同一 message.id 在 sidechain / subagent 文件中会反复出现。
-        var seen = Set(seenMessageIds)
+        var seen = SeenIDSet(seenMessageIds)
 
         let totalFiles = files.count
         for (index, file) in files.enumerated() {
@@ -114,21 +114,6 @@ enum ClaudeJSONLScanner {
                 state.offset = 0
             }
 
-            let read: (lines: [String], newOffset: UInt64)
-            switch JSONLLineReader.readOutcome(url: url, fromOffset: state.offset) {
-            case let .success(lines, newOffset):
-                read = (lines: lines, newOffset: newOffset)
-            case .missing:
-                // 枚举后被归档或清理是正常并发变化；本轮保留旧 watermark 且不弹告警，
-                // 下轮枚举不到原路径时再由 alive 清理。
-                newState[path] = state
-                continue
-            case .failed:
-                newState[path] = state
-                failedFileCount += 1
-                continue
-            }
-
             // 本批次内按 id 收集 candidate，最后挑 stop_reason != nil 的；最终再与全局 seen 比对。
             var candidates: [String: ParsedAssistant] = [:]
             var fallbackTitles: [String: String] = [:]
@@ -140,51 +125,69 @@ enum ClaudeJSONLScanner {
             if let fileConversationID, let fileFallbackTitle {
                 fallbackTitles[fileConversationID] = fileFallbackTitle
             }
-            for line in read.lines {
-                linesParsed += 1
-                if let title = parseUserTitle(line) {
-                    fallbackTitles[title.sessionID] = fallbackTitles[title.sessionID] ?? title.title
-                    if fileFallbackTitle == nil { fileFallbackTitle = title.title }
-                }
-                guard let parsed = parseAssistantLine(line) else { continue }
-                fileConversationID = parsed.sessionID
-                if fileCwd.isEmpty || (fileIsSidechain == true && !parsed.isSidechain) {
-                    fileCwd = parsed.cwd
-                }
-                if fileGitBranch == nil { fileGitBranch = parsed.gitBranch }
-                fileIsSidechain = (fileIsSidechain ?? true) && parsed.isSidechain
-                let conversationKey = "claude:\(parsed.sessionID)"
-                let candidate = ProjectCandidate(
-                    path: parsed.cwd,
-                    isSidechain: parsed.isSidechain,
-                    container: projectContainer
-                )
-                if !projectCandidates[conversationKey, default: []].contains(candidate) {
-                    projectCandidates[conversationKey, default: []].append(candidate)
-                }
-                let discoveredSeed = ConversationSeed(
-                    key: conversationKey,
-                    id: parsed.sessionID,
-                    app: .claude,
-                    title: conversationIndex.titles[parsed.sessionID] ?? fallbackTitles[parsed.sessionID],
-                    project: .unassigned,
-                    gitBranch: parsed.gitBranch,
-                    sourcePath: path,
-                    includesSubtasks: parsed.isSidechain,
-                    cacheCreationAvailable: true
-                )
-                if var existing = seeds[conversationKey] {
-                    existing.includesSubtasks = existing.includesSubtasks || discoveredSeed.includesSubtasks
-                    if existing.title == nil { existing.title = discoveredSeed.title }
-                    if existing.sourcePath.contains("/subagents/") && !discoveredSeed.sourcePath.contains("/subagents/") {
-                        existing.sourcePath = discoveredSeed.sourcePath
+            // 按批流式解析：单文件不再把整份内容和全部行同时读进内存。
+            let outcome = JSONLLineReader.streamLines(url: url, fromOffset: state.offset) { batch in
+                for line in batch {
+                    linesParsed += 1
+                    if let title = parseUserTitle(line) {
+                        fallbackTitles[title.sessionID] = fallbackTitles[title.sessionID] ?? title.title
+                        if fileFallbackTitle == nil { fileFallbackTitle = title.title }
                     }
-                    seeds[conversationKey] = existing
-                } else {
-                    seeds[conversationKey] = discoveredSeed
+                    guard let parsed = parseAssistantLine(line) else { continue }
+                    fileConversationID = parsed.sessionID
+                    if fileCwd.isEmpty || (fileIsSidechain == true && !parsed.isSidechain) {
+                        fileCwd = parsed.cwd
+                    }
+                    if fileGitBranch == nil { fileGitBranch = parsed.gitBranch }
+                    fileIsSidechain = (fileIsSidechain ?? true) && parsed.isSidechain
+                    let conversationKey = "claude:\(parsed.sessionID)"
+                    let candidate = ProjectCandidate(
+                        path: parsed.cwd,
+                        isSidechain: parsed.isSidechain,
+                        container: projectContainer
+                    )
+                    if !projectCandidates[conversationKey, default: []].contains(candidate) {
+                        projectCandidates[conversationKey, default: []].append(candidate)
+                    }
+                    let discoveredSeed = ConversationSeed(
+                        key: conversationKey,
+                        id: parsed.sessionID,
+                        app: .claude,
+                        title: conversationIndex.titles[parsed.sessionID] ?? fallbackTitles[parsed.sessionID],
+                        project: .unassigned,
+                        gitBranch: parsed.gitBranch,
+                        sourcePath: path,
+                        includesSubtasks: parsed.isSidechain,
+                        cacheCreationAvailable: true
+                    )
+                    if var existing = seeds[conversationKey] {
+                        existing.includesSubtasks = existing.includesSubtasks || discoveredSeed.includesSubtasks
+                        if existing.title == nil { existing.title = discoveredSeed.title }
+                        if existing.sourcePath.contains("/subagents/") && !discoveredSeed.sourcePath.contains("/subagents/") {
+                            existing.sourcePath = discoveredSeed.sourcePath
+                        }
+                        seeds[conversationKey] = existing
+                    } else {
+                        seeds[conversationKey] = discoveredSeed
+                    }
+                    if seen.contains(parsed.messageId) { continue }
+                    mergeCandidate(parsed, into: &candidates)
                 }
-                if seen.contains(parsed.messageId) { continue }
-                mergeCandidate(parsed, into: &candidates)
+            }
+            // 打开 / 读取失败时丢弃本文件本轮解析出的候选，watermark 保持原值，下轮重来。
+            let newOffset: UInt64
+            switch outcome {
+            case let .success(offset):
+                newOffset = offset
+            case .missing:
+                // 枚举后被归档或清理是正常并发变化；本轮保留旧 watermark 且不弹告警，
+                // 下轮枚举不到原路径时再由 alive 清理。
+                newState[path] = state
+                continue
+            case .failed:
+                newState[path] = state
+                failedFileCount += 1
+                continue
             }
 
             for (id, p) in candidates {
@@ -240,7 +243,7 @@ enum ClaudeJSONLScanner {
             }
 
             state.mtime = mtime
-            state.offset = read.newOffset
+            state.offset = newOffset
             state.conversationID = fileConversationID
             state.conversationCwd = fileCwd
             state.conversationGitBranch = fileGitBranch
@@ -255,9 +258,8 @@ enum ClaudeJSONLScanner {
             newState.removeValue(forKey: key)
         }
 
-        // 控制全局 seen 集合大小：保留最近 20000 条
-        let seenArr = Array(seen)
-        let cappedSeen = seenArr.count > 20000 ? Array(seenArr.suffix(20000)) : seenArr
+        // 控制全局 seen 集合大小：按插入顺序保留最近 N 条（见 SeenIDSet）。
+        let cappedSeen = seen.capped(to: SeenIDSet.defaultLimit)
 
         var projectResolver = ConversationProjectResolver()
         for key in Array(seeds.keys) {

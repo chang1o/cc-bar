@@ -7,6 +7,7 @@ nonisolated struct ConversationRollupPayload: Sendable, Codable {
     static let currentVersion = 7
     var version = Self.currentVersion
     var generationID = ""
+    /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致丢弃（价格变化不自动重算）。
     var pricingFingerprint = ""
     var infos: [ConversationInfo] = []
     var buckets: [ConversationUsageBucket] = []
@@ -22,12 +23,6 @@ enum ConversationRollupCache {
         guard let data = try? Data(contentsOf: url),
               let payload = try? JSONDecoder().decode(ConversationRollupPayload.self, from: data),
               payload.version == ConversationRollupPayload.currentVersion else {
-            return ConversationRollupPayload()
-        }
-        let knownUsage = Set(payload.buckets.map {
-            PricingUsageKey(app: $0.app, model: $0.model, speed: $0.speed)
-        })
-        guard payload.pricingFingerprint == Pricing.fingerprint(knownUsage: knownUsage) else {
             return ConversationRollupPayload()
         }
         return payload

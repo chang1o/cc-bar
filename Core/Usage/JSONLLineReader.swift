@@ -1,14 +1,118 @@
 import Foundation
 
-/// 从指定字节偏移开始按行读取一个文件，返回行数组和新的偏移量。
-/// 简单实现：一次性读入 `offset` 之后的字节，按 `\n` 切分。
-/// 适合单文件大小通常 < 几 MB 的 JSONL；如果以后单文件巨大可换 chunk 流。
+/// 从指定字节偏移开始按行读取一个文件。
+/// 扫描器走 `streamLines`：按块读入、按整行切批回调，单文件常驻内存与文件大小无关；
+/// `readOutcome` / `read` 保留给只关心"一次拿到全部行"的调用方与单测。
 enum JSONLLineReader {
     enum ReadOutcome: Sendable {
         case success(lines: [String], newOffset: UInt64)
         /// 文件在枚举后、真正读取前被移动或删除；这是正常并发变化，不是扫描失败。
         case missing
         case failed
+    }
+
+    /// `streamLines` 的结果；行本身已通过回调交付，这里只回报新的 watermark。
+    enum StreamOutcome: Sendable {
+        case success(newOffset: UInt64)
+        case missing
+        case failed
+    }
+
+    /// 单次读盘的块大小。块内按整行切分，跨块的残行留到下一块拼接。
+    nonisolated static let defaultChunkSize = 4 << 20
+
+    /// 单批回调的最大行数。批越小，每批 JSON 解析产生的 autorelease 对象越早释放。
+    nonisolated static let defaultBatchLines = 256
+
+    /// 分块流式读取：从 `offset` 起按整行交付，`onBatch` 每批最多 `defaultBatchLines` 行。
+    /// 消费语义与 `readOutcome` 完全一致——只消费到最后一个 `\n`，
+    /// 末尾未结束的残行不推进 offset，整段没有换行时 `newOffset == offset`。
+    /// 每批回调都包在 `autoreleasepool` 里：调用方逐行 `JSONSerialization` 产生的
+    /// Objective-C 临时对象在长任务中不会一直挂在线程池里，这是全量重扫内存峰值的主因。
+    nonisolated static func streamLines(
+        url: URL,
+        fromOffset offset: UInt64,
+        chunkSize: Int = defaultChunkSize,
+        batchLines: Int = defaultBatchLines,
+        onBatch: (ArraySlice<String>) -> Void
+    ) -> StreamOutcome {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return failureStreamOutcome(for: url)
+        }
+        defer { try? handle.close() }
+
+        let end: UInt64
+        do {
+            end = try handle.seekToEnd()
+        } catch {
+            return failureStreamOutcome(for: url)
+        }
+        if offset >= end {
+            return .success(newOffset: end)
+        }
+        do {
+            try handle.seek(toOffset: offset)
+        } catch {
+            return failureStreamOutcome(for: url)
+        }
+
+        let newline = UInt8(ascii: "\n")
+        var pending = Data()
+        var consumed: UInt64 = 0
+        // 整块处理都包在池里：`FileHandle.read` 每块返回的是 autoreleased NSData 支撑的
+        // Data，只包住解析回调的话这些块会一直挂到任务结束，长任务照样吃满内存。
+        while true {
+            var finished = false
+            var failure: StreamOutcome?
+            autoreleasepool {
+                let chunk: Data?
+                do {
+                    chunk = try handle.read(upToCount: chunkSize)
+                } catch {
+                    failure = failureStreamOutcome(for: url)
+                    return
+                }
+                guard let chunk, !chunk.isEmpty else {
+                    finished = true
+                    return
+                }
+                let appendedStart = pending.endIndex
+                pending.append(chunk)
+                // 单行长于块大小时本块没有换行，继续累积到出现换行为止；
+                // 已确认无换行的前缀不再重复扫描，超长行不会退化成平方级。
+                guard let lastNewline = pending[appendedStart...].lastIndex(of: newline) else { return }
+                let completeEnd = pending.index(after: lastNewline)
+                let completePart = pending.subdata(in: pending.startIndex..<completeEnd)
+                pending.removeSubrange(pending.startIndex..<completeEnd)
+                consumed += UInt64(completePart.count)
+                emit(completePart, batchLines: batchLines, onBatch: onBatch)
+            }
+            if let failure { return failure }
+            if finished { break }
+        }
+        return .success(newOffset: offset + consumed)
+    }
+
+    /// 整段解码失败时与旧实现一致：该段不产出行，但 offset 照常推进，不会下轮重复计费。
+    nonisolated private static func emit(
+        _ data: Data,
+        batchLines: Int,
+        onBatch: (ArraySlice<String>) -> Void
+    ) {
+        guard let text = String(data: data, encoding: .utf8) else { return }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        var index = lines.startIndex
+        while index < lines.endIndex {
+            let batchEnd = min(index + batchLines, lines.endIndex)
+            autoreleasepool {
+                onBatch(lines[index..<batchEnd])
+            }
+            index = batchEnd
+        }
+    }
+
+    nonisolated private static func failureStreamOutcome(for url: URL) -> StreamOutcome {
+        FileManager.default.fileExists(atPath: url.path) ? .failed : .missing
     }
 
     /// 兼容只关心成功与否的调用方；需要区分文件消失与真失败时使用 `readOutcome`。

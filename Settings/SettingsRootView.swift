@@ -392,8 +392,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Price catalog",
                 chinese: "价格目录",
-                desc: "Fetch the latest Standard and Fast model pricing now.",
-                chineseDesc: "立即获取最新的 Standard 与 Fast 模型价格"
+                desc: "Fetch the latest Standard and Fast pricing. Applies to new records only; use Recalculate to reprice history.",
+                chineseDesc: "获取最新的 Standard 与 Fast 模型价格；只对新记录生效，历史费用需用「重新计算」对齐"
             ) {
                 HStack(spacing: 8) {
                     if let pricingCatalogMessage {
@@ -428,8 +428,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Recalculate usage",
                 chinese: "重新计算用量",
-                desc: "Rescan local logs and recompute cost with the current pricing table.",
-                chineseDesc: "重新扫描本地日志，按当前定价表重新计算费用"
+                desc: "Rescan all local logs, fill in missing prices, and recompute every cost with the current pricing table.",
+                chineseDesc: "重新扫描全部本地日志，补齐缺价并按当前定价表重算所有费用"
             ) {
                 HStack(spacing: 8) {
                     if let progress = appState.usageService.scanProgress, isRecalculatingUsage {

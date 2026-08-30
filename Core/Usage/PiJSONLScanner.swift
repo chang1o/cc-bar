@@ -56,7 +56,7 @@ enum PiJSONLScanner {
         var entries: [UsageEntry] = []
         var linesParsed = 0
         var seeds: [String: ConversationSeed] = [:]
-        var seen = Set(seenEntryIds)
+        var seen = SeenIDSet(seenEntryIds)
         var projectResolver = ConversationProjectResolver()
 
         let totalFiles = files.count
@@ -88,92 +88,103 @@ enum PiJSONLScanner {
                 state.offset = 0
             }
 
-            guard let read = JSONLLineReader.read(url: url, fromOffset: state.offset) else {
-                newState[path] = state
-                continue
-            }
-
             var sessionID = state.conversationID
             var sessionCwd = state.conversationCwd ?? ""
             var fallbackTitle = state.fallbackTitle
             // 最近一条 assistant 消息的 provider/model；compaction / branch_summary 无模型字段时沿用。
             var currentModel = state.lastModel
 
-            for line in read.lines {
-                linesParsed += 1
-                guard let data = line.data(using: .utf8),
-                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                let type = root["type"] as? String
+            // 本文件解析出的条目和去重键先局部收集：中途读失败时整份丢弃，
+            // 与 Claude / Codex 一致——不推进 watermark 就不能留下半份结果。
+            var fileEntries: [UsageEntry] = []
+            var fileSeenKeys: [String] = []
+            // 按批流式解析：单文件不再把整份内容和全部行同时读进内存。
+            let outcome = JSONLLineReader.streamLines(url: url, fromOffset: state.offset) { batch in
+                for line in batch {
+                    linesParsed += 1
+                    guard let data = line.data(using: .utf8),
+                          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                    let type = root["type"] as? String
 
-                if type == "session" {
-                    sessionID = (root["id"] as? String) ?? sessionID
-                    sessionCwd = (root["cwd"] as? String) ?? sessionCwd
-                    continue
-                }
-
-                guard type == "message" || type == "compaction" || type == "branch_summary" else { continue }
-                // 去重键依赖 entry 必填的 id + ISO timestamp；缺失的防御性跳过（pi 总会写）。
-                guard let entryID = root["id"] as? String,
-                      let entryTimestamp = root["timestamp"] as? String else { continue }
-
-                if type == "message" {
-                    guard let message = root["message"] as? [String: Any] else { continue }
-                    let role = message["role"] as? String
-                    if role == "user" {
-                        if fallbackTitle == nil, let title = ConversationTitleIndex.userMessage(from: message["content"]) {
-                            fallbackTitle = title
-                        }
+                    if type == "session" {
+                        sessionID = (root["id"] as? String) ?? sessionID
+                        sessionCwd = (root["cwd"] as? String) ?? sessionCwd
                         continue
                     }
-                    guard role == "assistant" else { continue }
-                    guard let usage = message["usage"] as? [String: Any] else { continue }
 
-                    let dedupeKey = "\(entryID)@\(entryTimestamp)"
-                    if seen.contains(dedupeKey) { continue }
-                    seen.insert(dedupeKey)
+                    guard type == "message" || type == "compaction" || type == "branch_summary" else { continue }
+                    // 去重键依赖 entry 必填的 id + ISO timestamp；缺失的防御性跳过（pi 总会写）。
+                    guard let entryID = root["id"] as? String,
+                          let entryTimestamp = root["timestamp"] as? String else { continue }
 
-                    let provider = message["provider"] as? String
-                    let model = message["model"] as? String ?? "unknown"
-                    currentModel = modelLabel(provider: provider, model: model)
-                    let ts = messageTimestamp(message: message, fallback: entryTimestamp)
-                    guard let resolvedID = sessionID ?? fileNameUUID(from: url) else { continue }
+                    if type == "message" {
+                        guard let message = root["message"] as? [String: Any] else { continue }
+                        let role = message["role"] as? String
+                        if role == "user" {
+                            if fallbackTitle == nil, let title = ConversationTitleIndex.userMessage(from: message["content"]) {
+                                fallbackTitle = title
+                            }
+                            continue
+                        }
+                        guard role == "assistant" else { continue }
+                        guard let usage = message["usage"] as? [String: Any] else { continue }
 
-                    guard let parsed = parseUsage(usage) else { continue }
-                    let hasPositiveLoggedCost = (parsed.cost?.total ?? 0) > 0
-                    if parsed.totalTokens <= 0 && !hasPositiveLoggedCost { continue }
-                    entries.append(makeEntry(
-                        app: .pi,
-                        conversationID: resolvedID,
-                        model: currentModel ?? "unknown/unknown",
-                        speed: .standard,
-                        timestamp: ts,
-                        usage: parsed
-                    ))
-                } else {
-                    // compaction / branch_summary：仅当带 usage 字段时计入（生成摘要的 LLM 开销）。
-                    guard let usage = root["usage"] as? [String: Any] else { continue }
-                    let dedupeKey = "\(entryID)@\(entryTimestamp)"
-                    if seen.contains(dedupeKey) { continue }
-                    seen.insert(dedupeKey)
+                        let dedupeKey = "\(entryID)@\(entryTimestamp)"
+                        if seen.contains(dedupeKey) { continue }
+                        seen.insert(dedupeKey)
+                        fileSeenKeys.append(dedupeKey)
 
-                    let ts = JSONLTimestamp.parse(entryTimestamp) ?? Date()
-                    guard let resolvedID = sessionID ?? fileNameUUID(from: url) else { continue }
-                    guard let parsed = parseUsage(usage) else { continue }
-                    let hasPositiveLoggedCost = (parsed.cost?.total ?? 0) > 0
-                    if parsed.totalTokens <= 0 && !hasPositiveLoggedCost { continue }
-                    entries.append(makeEntry(
-                        app: .pi,
-                        conversationID: resolvedID,
-                        model: currentModel ?? "unknown/unknown",
-                        speed: .standard,
-                        timestamp: ts,
-                        usage: parsed
-                    ))
+                        let provider = message["provider"] as? String
+                        let model = message["model"] as? String ?? "unknown"
+                        currentModel = modelLabel(provider: provider, model: model)
+                        let ts = messageTimestamp(message: message, fallback: entryTimestamp)
+                        guard let resolvedID = sessionID ?? fileNameUUID(from: url) else { continue }
+
+                        guard let parsed = parseUsage(usage) else { continue }
+                        let hasPositiveLoggedCost = (parsed.cost?.total ?? 0) > 0
+                        if parsed.totalTokens <= 0 && !hasPositiveLoggedCost { continue }
+                        fileEntries.append(makeEntry(
+                            app: .pi,
+                            conversationID: resolvedID,
+                            model: currentModel ?? "unknown/unknown",
+                            speed: .standard,
+                            timestamp: ts,
+                            usage: parsed
+                        ))
+                    } else {
+                        // compaction / branch_summary：仅当带 usage 字段时计入（生成摘要的 LLM 开销）。
+                        guard let usage = root["usage"] as? [String: Any] else { continue }
+                        let dedupeKey = "\(entryID)@\(entryTimestamp)"
+                        if seen.contains(dedupeKey) { continue }
+                        seen.insert(dedupeKey)
+                        fileSeenKeys.append(dedupeKey)
+
+                        let ts = JSONLTimestamp.parse(entryTimestamp) ?? Date()
+                        guard let resolvedID = sessionID ?? fileNameUUID(from: url) else { continue }
+                        guard let parsed = parseUsage(usage) else { continue }
+                        let hasPositiveLoggedCost = (parsed.cost?.total ?? 0) > 0
+                        if parsed.totalTokens <= 0 && !hasPositiveLoggedCost { continue }
+                        fileEntries.append(makeEntry(
+                            app: .pi,
+                            conversationID: resolvedID,
+                            model: currentModel ?? "unknown/unknown",
+                            speed: .standard,
+                            timestamp: ts,
+                            usage: parsed
+                        ))
+                    }
                 }
             }
+            // 打开 / 读取失败时丢弃本文件本轮结果、保留原 watermark，下轮重来（不计失败数）。
+            guard case let .success(newOffset) = outcome else {
+                seen.remove(contentsOf: fileSeenKeys)
+                newState[path] = state
+                continue
+            }
+            entries.append(contentsOf: fileEntries)
 
             state.mtime = mtime
-            state.offset = read.newOffset
+            state.offset = newOffset
             state.conversationID = sessionID
             state.conversationCwd = sessionCwd
             state.fallbackTitle = fallbackTitle
@@ -190,9 +201,8 @@ enum PiJSONLScanner {
             newState.removeValue(forKey: key)
         }
 
-        // 控制全局 seen 集合大小：保留最近 20000 条（与 Claude scanner 一致）。
-        let seenArr = Array(seen)
-        let cappedSeen = seenArr.count > 20000 ? Array(seenArr.suffix(20000)) : seenArr
+        // 控制全局 seen 集合大小：按插入顺序保留最近 N 条（与 Claude scanner 一致）。
+        let cappedSeen = seen.capped(to: SeenIDSet.defaultLimit)
 
         return Result(
             entries: entries,

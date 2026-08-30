@@ -254,10 +254,114 @@ enum CodexJSONLScanner {
             resetForTruncation(&state)
         }
 
-        let read: (lines: [String], newOffset: UInt64)
-        switch JSONLLineReader.readOutcome(url: url, fromOffset: state.offset) {
-        case let .success(lines, newOffset):
-            read = (lines: lines, newOffset: newOffset)
+        var linesParsed = 0
+        var currentModel = state.lastModel
+        var currentSpeed = state.lastServiceTier ?? .standard
+        var lastTotalUsageSignature = state.lastCodexTotalUsageSignature
+        var sessionID = state.conversationID ?? filenameID
+        var sessionCwd = state.conversationCwd ?? ""
+        var fallbackTitle = state.fallbackTitle
+        var entries: [UsageEntry] = []
+        var fileCacheCreationKeys: [String] = []
+        // 按批流式解析：单文件不再把整份内容和全部行同时读进内存。
+        let outcome = JSONLLineReader.streamLines(url: url, fromOffset: state.offset) { batch in
+            for line in batch {
+                linesParsed += 1
+                guard let data = line.data(using: .utf8),
+                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                let type = root["type"] as? String
+
+                if type == "session_meta", let payload = root["payload"] as? [String: Any] {
+                    sessionID = (payload["id"] as? String) ?? (payload["session_id"] as? String) ?? sessionID
+                    sessionCwd = (payload["cwd"] as? String) ?? sessionCwd
+                    continue
+                }
+
+                if type == "event_msg",
+                   let payload = root["payload"] as? [String: Any],
+                   (payload["type"] as? String) == "user_message",
+                   fallbackTitle == nil {
+                    fallbackTitle = ConversationTitleIndex.clean(payload["message"] as? String)
+                    continue
+                }
+
+                if type == "turn_context" {
+                    if let payload = root["payload"] as? [String: Any],
+                       let m = payload["model"] as? String {
+                        currentModel = m
+                    }
+                    continue
+                }
+                if let settings = threadSettings(from: root) {
+                    if let model = settings.model {
+                        currentModel = model
+                    }
+                    currentSpeed = settings.speed
+                    continue
+                }
+                guard type == "event_msg",
+                      let payload = root["payload"] as? [String: Any],
+                      (payload["type"] as? String) == "token_count" else {
+                    continue
+                }
+                guard let info = payload["info"] as? [String: Any],
+                      let last = info["last_token_usage"] as? [String: Any] else {
+                    continue
+                }
+                let totalSignature = totalUsageSignature(info["total_token_usage"] as? [String: Any])
+                if totalSignature == lastTotalUsageSignature, totalSignature != nil { continue }
+                let inputTotal = (last["input_tokens"] as? Int) ?? 0
+                let cachedInput = (last["cached_input_tokens"] as? Int) ?? 0
+                let cacheWrite = cacheWriteTokens(in: last)
+                let output = (last["output_tokens"] as? Int) ?? 0
+                let billableInput = max(0, inputTotal - cachedInput - cacheWrite)
+                if output == 0 && billableInput == 0 && cachedInput == 0 && cacheWrite == 0 { continue }
+
+                let ts: Date
+                if let s = root["timestamp"] as? String,
+                   let parsed = JSONLTimestamp.parse(s) {
+                    ts = parsed
+                } else {
+                    ts = Date()
+                }
+                let model = currentModel ?? "unknown"
+                guard let resolvedID = sessionID else { continue }
+                if let totalSignature { lastTotalUsageSignature = totalSignature }
+                let cost = Pricing.costBreakdown(
+                    app: .codex,
+                    model: model,
+                    speed: currentSpeed,
+                    input: billableInput,
+                    output: output,
+                    cacheRead: cachedInput,
+                    cacheCreation: cacheWrite,
+                    at: ts,
+                    inputTotal: inputTotal
+                )
+                if cacheWrite > 0 {
+                    fileCacheCreationKeys.append("codex:\(resolvedID)")
+                }
+                entries.append(UsageEntry(
+                    app: .codex,
+                    conversationKey: "codex:\(resolvedID)",
+                    model: Pricing.normalize(model: model),
+                    speed: currentSpeed,
+                    day: UsageDay.startOfDay(for: ts),
+                    timestamp: ts,
+                    inputTokens: billableInput,
+                    outputTokens: output,
+                    cacheReadTokens: cachedInput,
+                    cacheCreationTokens: cacheWrite,
+                    costUSD: cost?.total,
+                    costBreakdown: cost
+                ))
+            }
+        }
+        // 打开 / 读取失败时丢弃本文件已解析的部分，watermark 保持原值，下轮重来。
+        let newOffset: UInt64
+        switch outcome {
+        case let .success(offset):
+            newOffset = offset
         case .missing:
             return CodexFileScanResult(
                 stateKey: stateKey,
@@ -283,109 +387,8 @@ enum CodexJSONLScanner {
             )
         }
 
-        var linesParsed = 0
-        var currentModel = state.lastModel
-        var currentSpeed = state.lastServiceTier ?? .standard
-        var lastTotalUsageSignature = state.lastCodexTotalUsageSignature
-        var sessionID = state.conversationID ?? filenameID
-        var sessionCwd = state.conversationCwd ?? ""
-        var fallbackTitle = state.fallbackTitle
-        var entries: [UsageEntry] = []
-        var fileCacheCreationKeys: [String] = []
-        for line in read.lines {
-            linesParsed += 1
-            guard let data = line.data(using: .utf8),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            let type = root["type"] as? String
-
-            if type == "session_meta", let payload = root["payload"] as? [String: Any] {
-                sessionID = (payload["id"] as? String) ?? (payload["session_id"] as? String) ?? sessionID
-                sessionCwd = (payload["cwd"] as? String) ?? sessionCwd
-                continue
-            }
-
-            if type == "event_msg",
-               let payload = root["payload"] as? [String: Any],
-               (payload["type"] as? String) == "user_message",
-               fallbackTitle == nil {
-                fallbackTitle = ConversationTitleIndex.clean(payload["message"] as? String)
-                continue
-            }
-
-            if type == "turn_context" {
-                if let payload = root["payload"] as? [String: Any],
-                   let m = payload["model"] as? String {
-                    currentModel = m
-                }
-                continue
-            }
-            if let settings = threadSettings(from: root) {
-                if let model = settings.model {
-                    currentModel = model
-                }
-                currentSpeed = settings.speed
-                continue
-            }
-            guard type == "event_msg",
-                  let payload = root["payload"] as? [String: Any],
-                  (payload["type"] as? String) == "token_count" else {
-                continue
-            }
-            guard let info = payload["info"] as? [String: Any],
-                  let last = info["last_token_usage"] as? [String: Any] else {
-                continue
-            }
-            let totalSignature = totalUsageSignature(info["total_token_usage"] as? [String: Any])
-            if totalSignature == lastTotalUsageSignature, totalSignature != nil { continue }
-            let inputTotal = (last["input_tokens"] as? Int) ?? 0
-            let cachedInput = (last["cached_input_tokens"] as? Int) ?? 0
-            let cacheWrite = cacheWriteTokens(in: last)
-            let output = (last["output_tokens"] as? Int) ?? 0
-            let billableInput = max(0, inputTotal - cachedInput - cacheWrite)
-            if output == 0 && billableInput == 0 && cachedInput == 0 && cacheWrite == 0 { continue }
-
-            let ts: Date
-            if let s = root["timestamp"] as? String,
-               let parsed = JSONLTimestamp.parse(s) {
-                ts = parsed
-            } else {
-                ts = Date()
-            }
-            let model = currentModel ?? "unknown"
-            guard let resolvedID = sessionID else { continue }
-            if let totalSignature { lastTotalUsageSignature = totalSignature }
-            let cost = Pricing.costBreakdown(
-                app: .codex,
-                model: model,
-                speed: currentSpeed,
-                input: billableInput,
-                output: output,
-                cacheRead: cachedInput,
-                cacheCreation: cacheWrite,
-                at: ts,
-                inputTotal: inputTotal
-            )
-            if cacheWrite > 0 {
-                fileCacheCreationKeys.append("codex:\(resolvedID)")
-            }
-            entries.append(UsageEntry(
-                app: .codex,
-                conversationKey: "codex:\(resolvedID)",
-                model: Pricing.normalize(model: model),
-                speed: currentSpeed,
-                day: UsageDay.startOfDay(for: ts),
-                timestamp: ts,
-                inputTokens: billableInput,
-                outputTokens: output,
-                cacheReadTokens: cachedInput,
-                cacheCreationTokens: cacheWrite,
-                costUSD: cost?.total,
-                costBreakdown: cost
-            ))
-        }
-
         state.mtime = mtime
-        state.offset = read.newOffset
+        state.offset = newOffset
         state.lastModel = currentModel
         state.lastServiceTier = currentSpeed
         state.lastCodexTotalUsageSignature = lastTotalUsageSignature

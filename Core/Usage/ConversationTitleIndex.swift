@@ -29,12 +29,15 @@ nonisolated enum ConversationTitleIndex {
         }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
         var result: [String: String] = [:]
-        for line in text.split(separator: "\n") {
-            guard let data = line.data(using: .utf8),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let id = root["id"] as? String,
-                  let title = clean(root["thread_name"] as? String) else { continue }
-            result[id] = title
+        // 分批 autoreleasepool：逐行 JSONSerialization 的 Objective-C 临时对象及时释放。
+        forEachLineBatch(in: text) { batch in
+            for line in batch {
+                guard let data = line.data(using: .utf8),
+                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = root["id"] as? String,
+                      let title = clean(root["thread_name"] as? String) else { continue }
+                result[id] = title
+            }
         }
         codexCache.withLock { $0 = CachedIndex(mtime: stamp.mtime, size: stamp.size, value: result) }
         return result
@@ -55,20 +58,40 @@ nonisolated enum ConversationTitleIndex {
         }
         var titles: [String: String] = [:]
         var projects: [String: String] = [:]
-        for line in text.split(separator: "\n") {
-            guard let data = line.data(using: .utf8),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let id = root["sessionId"] as? String else { continue }
-            if titles[id] == nil, let title = clean(root["display"] as? String) {
-                titles[id] = title
-            }
-            if let project = root["project"] as? String, !project.isEmpty {
-                projects[id] = project
+        forEachLineBatch(in: text) { batch in
+            for line in batch {
+                guard let data = line.data(using: .utf8),
+                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = root["sessionId"] as? String else { continue }
+                if titles[id] == nil, let title = clean(root["display"] as? String) {
+                    titles[id] = title
+                }
+                if let project = root["project"] as? String, !project.isEmpty {
+                    projects[id] = project
+                }
             }
         }
         let index = ClaudeIndex(titles: titles, projects: projects)
         claudeCache.withLock { $0 = CachedIndex(mtime: stamp.mtime, size: stamp.size, value: index) }
         return index
+    }
+
+    /// 按 256 行一批遍历，每批包一个 autoreleasepool。索引文件可达数十 MB，
+    /// 逐行解析产生的 Objective-C 临时对象若不及时释放会明显抬高扫描内存峰值。
+    private static func forEachLineBatch(
+        in text: String,
+        batchLines: Int = 256,
+        body: (ArraySlice<Substring>) -> Void
+    ) {
+        let lines = text.split(separator: "\n")
+        var index = lines.startIndex
+        while index < lines.endIndex {
+            let end = min(index + batchLines, lines.endIndex)
+            autoreleasepool {
+                body(lines[index..<end])
+            }
+            index = end
+        }
     }
 
     private static func fileStamp(at url: URL) -> (mtime: Date, size: UInt64)? {

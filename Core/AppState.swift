@@ -125,6 +125,13 @@ final class AppState {
     /// 批次 C：持久化提交的单调递增序列号。`Task.detached` 的执行顺序无语言保证，
     /// 序列号用于让 coordinator 丢弃乱序到达的过期快照，防止旧数据覆盖新数据。
     private var persistenceSequence: UInt64 = 0
+    /// quota-history 的最短写盘间隔。每次采样 `sampledAt` 都会前进，快照必然不等，
+    /// 因此它会跟着额度刷新频率被整份重写——本机实测 220KB，2 分钟一次就是每小时
+    /// 6.6MB。它只承载历史曲线，当前额度由 quota-cache（数 KB）承载，
+    /// 丢几个采样点对用户没有实质影响，所以单独限速。cache / cycles 体量小或本就不常变，
+    /// 不受这里限制。
+    private static let quotaHistoryWriteInterval: TimeInterval = 15 * 60
+    private var lastQuotaHistoryWriteAt: Date?
 
     /// `refreshNow()` 的去重锁。同一时刻只允许一个真正在跑的整体刷新;
     /// 期间额外的 `refreshNow()` 调用立即返回(no-op),不再排队。
@@ -870,14 +877,28 @@ final class AppState {
     /// 编码与原子写在 utility 任务里执行，不再阻塞 MainActor。
     private func scheduleQuotaPersistenceFlush() {
         guard !dirtyQuotaFiles.isEmpty else { return }
+        let now = Date()
+        let historyDue = lastQuotaHistoryWriteAt.map {
+            now.timeIntervalSince($0) >= Self.quotaHistoryWriteInterval
+        } ?? true
+        let writesCache = dirtyQuotaFiles.contains(.cache)
+        let writesCycles = dirtyQuotaFiles.contains(.cycles)
+        let writesHistory = dirtyQuotaFiles.contains(.history) && historyDue
+        // 只有 history 脏、且还没到写盘间隔时，本轮什么都不用提交；脏标记留到下一轮。
+        guard writesCache || writesCycles || writesHistory else { return }
         persistenceSequence &+= 1
         let snapshot = QuotaPersistenceCoordinator.Snapshot(
             sequence: persistenceSequence,
-            cache: dirtyQuotaFiles.contains(.cache) ? quotaCache : nil,
-            history: dirtyQuotaFiles.contains(.history) ? quotaHistory : nil,
-            cycles: dirtyQuotaFiles.contains(.cycles) ? quotaCycles : nil
+            cache: writesCache ? quotaCache : nil,
+            history: writesHistory ? quotaHistory : nil,
+            cycles: writesCycles ? quotaCycles : nil
         )
-        dirtyQuotaFiles.removeAll()
+        if writesCache { dirtyQuotaFiles.remove(.cache) }
+        if writesCycles { dirtyQuotaFiles.remove(.cycles) }
+        if writesHistory {
+            dirtyQuotaFiles.remove(.history)
+            lastQuotaHistoryWriteAt = now
+        }
         let coordinator = quotaPersistenceCoordinator
         Task.detached(priority: .utility) {
             await coordinator.submit(snapshot)

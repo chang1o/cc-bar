@@ -3402,6 +3402,66 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(Pricing.fingerprint(knownUsage: []).count, 64)
     }
 
+    /// 价格变化不再自动失效缓存：指纹漂移时扫描缓存仍然有效。
+    /// 缓存目录一律注入临时目录：测试绝不能读写用户真机缓存，删掉 watermark
+    /// 会让下一次启动全量重扫 GB 级日志。
+    func testScanCacheLoadKeepsStateWhenPricingFingerprintDiffers() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = ScanState()
+        state.generationID = "gen-fingerprint-drift"
+        state.pricingFingerprint = "stale-fingerprint"
+        try ScanCache.save(state, in: directory)
+
+        guard case .valid(let loaded) = ScanCache.load(in: directory) else {
+            return XCTFail("价格指纹不同不应使扫描缓存失效")
+        }
+        XCTAssertEqual(loaded.generationID, "gen-fingerprint-drift")
+    }
+
+    /// 结构失效路径必须保留：版本不匹配仍然全量重建。
+    func testScanCacheLoadStillInvalidatesOnVersionMismatch() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = ScanState()
+        state.generationID = "gen-version-mismatch"
+        state.version = ScanState.currentVersion + 1
+        try ScanCache.save(state, in: directory)
+
+        guard case .invalidated = ScanCache.load(in: directory) else {
+            return XCTFail("版本不匹配仍必须使扫描缓存失效")
+        }
+    }
+
+    /// 价格变化不再自动失效缓存：指纹漂移时日聚合 rollup 的桶保留。
+    func testUsageRollupCacheLoadKeepsBucketsWhenPricingFingerprintDiffers() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var payload = UsageRollupPayload()
+        payload.generationID = "gen-rollup-drift"
+        payload.pricingFingerprint = "stale-fingerprint"
+        payload.buckets = [
+            UsageBucket(
+                app: .claude,
+                model: "claude-test",
+                speed: .standard,
+                day: Date(timeIntervalSince1970: 1_788_000_000),
+                inputTokens: 10,
+                outputTokens: 5,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                costUSD: 0,
+                requestCount: 1,
+                hasUnpricedUsage: false
+            )
+        ]
+        try UsageRollupCache.save(payload, in: directory)
+
+        let loaded = UsageRollupCache.load(in: directory)
+        XCTAssertEqual(loaded.generationID, "gen-rollup-drift")
+        XCTAssertEqual(loaded.buckets.count, 1)
+    }
+
     private func codexRoot(
         primarySeconds: Int,
         secondarySeconds: Int?
