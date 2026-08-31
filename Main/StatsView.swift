@@ -490,6 +490,7 @@ struct StatsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .pointingHandCursor()
     }
 
