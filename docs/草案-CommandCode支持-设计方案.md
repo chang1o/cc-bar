@@ -1,6 +1,6 @@
 # 草案 · Command Code GOAT 订阅额度支持
 
-> 状态：产品范围与第一版交互已收敛，本文档作为后续开发基线。当前只完成设计与本地源码 / 公开资料调研，尚未实施代码，也尚未使用本机真实 Command Code 凭据完成接口端到端验证。实现完成并验收后，再把最终行为并入 `产品需求.md`、`技术实现.md`、`界面布局.md` 与 `设计风格.md`，并归档本草案。
+> 状态：**开发实现已完成**。已完成本机真实脱敏凭据接口验证、官方矢量 Logo 提取、Provider 能力解耦、自动 5 级只读凭据扫描与 Keychain 手动 Key 存储、额度客户端、Popover 与设置页接入、工程配置及单元测试。行为已同步至核心规范文档。
 >
 > 核心边界：**Command Code 在本功能中是“订阅额度 Provider”，只进入「设置 → 账号」和 Popover；它不是新的本地用量统计服务，不进入主窗口。**主窗口继续按 Codex / Claude Code / Cursor / Pi / OpenCode 的真实数据源统计对话 Token 与 API 等值预估费用。
 
@@ -24,17 +24,17 @@
 
 - **设置 → 账号**：新增 Command Code 账号行和 Provider 总开关，交互语义与 Codex / Claude Code 账号行一致。
 - **Popover**：打开总开关后新增 Command Code block，显示 5H、Weekly、Monthly 三档订阅额度及重置时间。
+- **菜单栏（Menu Bar）**：支持常驻展示 ⌘ 矢量图标 + 额度百分比，支持选择主要（5H）、周额度或两者并排。
+- **桌面悬浮窗（Floating HUD）**：支持展示 18pt ⌘ 方块 + 进度条 + 百分比。
+- **首次引导（Onboarding）**：第 2 步自动检测列表与第 3 步菜单栏配置包含 Command Code。
 - **凭据**：默认自动只读复用本机已有登录态；提供手动 API key 作为兜底，手动 key 只存 macOS Keychain。
 - **刷新**：接入现有额度刷新调度、60 秒最小成功间隔与 429 退避；刷新失败保留同账号旧快照。
 - **默认状态**：新旧用户均默认关闭 Command Code Provider。只有用户在设置中开启后才发远端额度请求。
-- **排序**：设置账号行与 Popover block 均排在 Cursor 之后。
+- **排序**：设置账号行、Popover block、菜单栏及悬浮窗均排在 Cursor 之后。
 
 ### 1.3 第一版明确不做
 
-- 不进入菜单栏额度文字。
-- 不进入桌面悬浮窗。
 - 不进入主窗口 Overview / Conversations / Timeline / Cycles，也不新增“统计服务”开关。
-- 不进入 Onboarding；自动检测结果在「设置 → 账号」呈现即可。
 - 不展示今日 / 本周费用，`showsCost = false`。
 - 不展示或合并 purchased / free / top-up credits；它们不是 GOAT 订阅窗口额度，后续如需支持应作为独立余额信息设计。
 - 不调用 Command Code 的模型推理接口，不发送 prompt，不读取对话内容。

@@ -13,6 +13,7 @@ extension QuotaApp {
         case .codex: .codexAccent
         case .claude: .claudeAccent
         case .cursor: .gray
+        case .commandCode: Color(red: 24 / 255, green: 24 / 255, blue: 27 / 255)
         }
     }
 }

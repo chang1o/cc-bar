@@ -12,7 +12,7 @@ struct FloatingContentView: View {
     let settings: SettingsStore
 
     var body: some View {
-        let providers = QuotaProviderDescriptor.primaryProviders.filter {
+        let providers = QuotaProviderDescriptor.floatingProviders.filter {
             settings.effectiveFloatingVisibility(for: $0.app)
         }
 

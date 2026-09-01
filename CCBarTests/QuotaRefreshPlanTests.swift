@@ -7,22 +7,32 @@ final class QuotaRefreshPlanTests: XCTestCase {
 
     func testAllProvidersEnabled() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: true, showClaude: true, showCursor: true, hasVisibleImported: true
+            showCodex: true,
+            showClaude: true,
+            showCursor: true,
+            showCommandCode: true,
+            hasVisibleImported: true
         )
         XCTAssertTrue(plan.refreshCodex)
         XCTAssertTrue(plan.refreshClaude)
         XCTAssertTrue(plan.refreshCursor)
+        XCTAssertTrue(plan.refreshCommandCode)
         XCTAssertTrue(plan.refreshImported)
         XCTAssertTrue(plan.canMirrorPrimary)
     }
 
     func testAllProvidersDisabled() {
         let plan = QuotaRefreshPlan.make(
-            showCodex: false, showClaude: false, showCursor: false, hasVisibleImported: false
+            showCodex: false,
+            showClaude: false,
+            showCursor: false,
+            showCommandCode: false,
+            hasVisibleImported: false
         )
         XCTAssertFalse(plan.refreshCodex)
         XCTAssertFalse(plan.refreshClaude)
         XCTAssertFalse(plan.refreshCursor)
+        XCTAssertFalse(plan.refreshCommandCode)
         XCTAssertFalse(plan.refreshImported)
         XCTAssertFalse(plan.canMirrorPrimary)
     }
@@ -88,6 +98,31 @@ final class QuotaRefreshPlanTests: XCTestCase {
         XCTAssertFalse(defaults.enabled)
         XCTAssertFalse(defaults.menuBar)
         XCTAssertFalse(defaults.floatingHUD)
+    }
+
+    func testCommandCodeOnly() {
+        let plan = QuotaRefreshPlan.make(
+            showCodex: false,
+            showClaude: false,
+            showCursor: false,
+            showCommandCode: true,
+            hasVisibleImported: false
+        )
+
+        XCTAssertFalse(plan.refreshCodex)
+        XCTAssertFalse(plan.refreshClaude)
+        XCTAssertFalse(plan.refreshCursor)
+        XCTAssertTrue(plan.refreshCommandCode)
+        XCTAssertFalse(plan.refreshImported)
+        XCTAssertFalse(plan.canMirrorPrimary)
+    }
+
+    func testCommandCodeDisplayDefaultsStayDisabled() {
+        let defaults = ProviderDisplaySettings.defaults(for: .commandCode)
+
+        XCTAssertFalse(defaults.enabled)
+        XCTAssertTrue(defaults.menuBar)
+        XCTAssertTrue(defaults.floatingHUD)
     }
 
     // MARK: - 镜像判定矩阵（AppState 展示层）

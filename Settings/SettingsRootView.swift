@@ -38,6 +38,7 @@ struct SettingsRootView: View {
     /// 主账号额外重置 credit 的展开状态与懒加载结果(nil = 尚未加载)。
     @State private var codexResetCreditsExpanded = false
     @State private var codexResetCreditsState: CodexResetCreditsState?
+    @State private var showCommandCodeSheet = false
 
     var body: some View {
         @Bindable var settings = SettingsStore.shared
@@ -55,6 +56,9 @@ struct SettingsRootView: View {
             .padding(.horizontal, 28)
             .padding(.vertical, 20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .sheet(isPresented: $showCommandCodeSheet) {
+            CommandCodeCredentialSheet()
         }
         .onAppear {
             settings.syncLaunchAtLoginStatus()
@@ -131,6 +135,24 @@ struct SettingsRootView: View {
                         set: { setCursorProviderEnabled($0, settings: settings) }
                     )
                 )
+                AccountRow(
+                    title: "Command Code",
+                    subtitle: "Command Code",
+                    tint: QuotaApp.commandCode.tintColor,
+                    logoName: "commandcode",
+                    fallback: "⌘",
+                    email: appState.commandCodeAccount?.login,
+                    plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                    availability: appState.commandCodeAccount == nil ? .notDetected : .connected,
+                    canToggle: appState.commandCodeAccount != nil,
+                    isOn: Binding(
+                        get: {
+                            appState.commandCodeAccount != nil && settings.isProviderEnabled(.commandCode)
+                        },
+                        set: { setCommandCodeProviderEnabled($0, settings: settings) }
+                    ),
+                    accessory: AnyView(commandCodeCredentialButton)
+                )
             }
 
             // 其他 Codex 账号（手动导入）
@@ -151,6 +173,26 @@ struct SettingsRootView: View {
         Task {
             await appState.refreshQuotas(reason: .userInitiated)
         }
+    }
+
+    private func setCommandCodeProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
+        settings.setProviderEnabled(enabled, for: .commandCode)
+        guard enabled else { return }
+        Task {
+            await appState.refreshQuotas(reason: .userInitiated)
+        }
+    }
+
+    private var commandCodeCredentialButton: some View {
+        Button {
+            showCommandCodeSheet = true
+        } label: {
+            Image(systemName: "key")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(tr("Command Code credentials", "Command Code 凭据设置"))
     }
 
     /// 主账号「额外重置次数」入口(🎁),点击展开懒加载明细。
@@ -235,7 +277,7 @@ struct SettingsRootView: View {
             desc: "What appears next to the icon.",
             chineseDesc: "图标旁显示什么"
         ) {
-            ForEach(QuotaProviderDescriptor.primaryProviders) { provider in
+            ForEach(QuotaProviderDescriptor.menuBarProviders) { provider in
                 PrefsRow(
                     label: "Show \(provider.title)",
                     chinese: "显示 \(provider.title)"
@@ -288,7 +330,7 @@ struct SettingsRootView: View {
                 .toggleStyle(.switch)
                 .tint(.green)
             }
-            ForEach(QuotaProviderDescriptor.primaryProviders) { provider in
+            ForEach(QuotaProviderDescriptor.floatingProviders) { provider in
                 PrefsRow(
                     label: "Show \(provider.title) row",
                     chinese: "显示 \(provider.title) 行"

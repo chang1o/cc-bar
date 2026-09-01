@@ -189,6 +189,17 @@ private struct DetectAccountsStep: View {
                     fallback: "C",
                     isDetected: appState.cursorAccount != nil
                 )
+                DetectedAccountRow(
+                    title: "Command Code",
+                    subtitle: "Command Code",
+                    plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                    email: appState.commandCodeAccount?.login ?? appState.commandCodeAccount?.email,
+                    source: commandCodeSource,
+                    tint: QuotaApp.commandCode.tintColor,
+                    logoName: "commandcode",
+                    fallback: "⌘",
+                    isDetected: appState.commandCodeAccount != nil
+                )
             }
             .padding(.top, 18)
 
@@ -219,8 +230,22 @@ private struct DetectAccountsStep: View {
         }
     }
 
+    private var commandCodeSource: String {
+        switch appState.commandCodeAccount?.source {
+        case .commandCodeCLI: return "~/.commandcode/auth.json"
+        case .pi: return "~/.pi/agent/auth.json"
+        case .opencode: return "~/.local/share/opencode/auth.json"
+        case .environment: return "ENV · COMMAND_CODE_API_KEY"
+        case .manualKeychain: return "Keychain · command-code"
+        case .none: return "—"
+        }
+    }
+
     private var anyDetected: Bool {
-        appState.codexAccount != nil || appState.claudeAccount != nil || appState.cursorAccount != nil
+        appState.codexAccount != nil
+            || appState.claudeAccount != nil
+            || appState.cursorAccount != nil
+            || appState.commandCodeAccount != nil
     }
 }
 
@@ -331,27 +356,45 @@ private struct ConfigureStep: View {
                              chineseTitle: "菜单栏",
                              subtitle: "Show enabled providers next to the menu bar icon.",
                              chineseSubtitle: "在菜单栏图标旁显示百分比") {
-                    HStack(spacing: 12) {
-                        Toggle("Codex", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
-                            .toggleStyle(.switch)
-                            .tint(.green)
-                        Toggle("Claude Code", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
-                            .toggleStyle(.switch)
-                            .tint(.green)
-                        Toggle("Cursor", isOn: Binding(
-                            get: { settings.isProviderShownInMenuBar(.cursor) },
-                            set: { shown in
-                                settings.setProviderShownInMenuBar(shown, for: .cursor)
-                                if shown {
-                                    settings.setProviderEnabled(true, for: .cursor)
-                                    Task {
-                                        await appState.refreshQuotas(reason: .userInitiated)
+                    VStack(alignment: .trailing, spacing: 8) {
+                        HStack(spacing: 12) {
+                            Toggle("Codex", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
+                                .toggleStyle(.switch)
+                                .tint(.green)
+                            Toggle("Claude Code", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
+                                .toggleStyle(.switch)
+                                .tint(.green)
+                        }
+                        HStack(spacing: 12) {
+                            Toggle("Cursor", isOn: Binding(
+                                get: { settings.isProviderShownInMenuBar(.cursor) },
+                                set: { shown in
+                                    settings.setProviderShownInMenuBar(shown, for: .cursor)
+                                    if shown {
+                                        settings.setProviderEnabled(true, for: .cursor)
+                                        Task {
+                                            await appState.refreshQuotas(reason: .userInitiated)
+                                        }
                                     }
                                 }
-                            }
-                        ))
-                        .toggleStyle(.switch)
-                        .tint(.green)
+                            ))
+                            .toggleStyle(.switch)
+                            .tint(.green)
+                            Toggle("Command Code", isOn: Binding(
+                                get: { settings.isProviderShownInMenuBar(.commandCode) },
+                                set: { shown in
+                                    settings.setProviderShownInMenuBar(shown, for: .commandCode)
+                                    if shown {
+                                        settings.setProviderEnabled(true, for: .commandCode)
+                                        Task {
+                                            await appState.refreshQuotas(reason: .userInitiated)
+                                        }
+                                    }
+                                }
+                            ))
+                            .toggleStyle(.switch)
+                            .tint(.green)
+                        }
                     }
                 }
 

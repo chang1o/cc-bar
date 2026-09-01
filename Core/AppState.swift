@@ -25,9 +25,13 @@ final class AppState {
     var cursorAccount: CursorAuthSession? {
         didSet { SettingsStore.shared.cursorAccountDetected = cursorAccount != nil }
     }
+    var commandCodeAccount: CommandCodeAuthSession? {
+        didSet { SettingsStore.shared.commandCodeAccountDetected = commandCodeAccount != nil }
+    }
     var codexError: String?
     var claudeError: String?
     var cursorError: String?
+    var commandCodeError: String?
 
     // MARK: 导入的 Codex 副账号
     //
@@ -98,6 +102,22 @@ final class AppState {
         get { refreshState(for: .cursor) }
         set { updatePrimaryState(.cursor) { $0.refresh = newValue } }
     }
+    var commandCodeQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .commandCode) }
+        set { updatePrimaryState(.commandCode) { $0.snapshot = newValue } }
+    }
+    var commandCodeQuotaError: String? {
+        get { quotaError(for: .commandCode) }
+        set { updatePrimaryState(.commandCode) { $0.error = newValue } }
+    }
+    var commandCodeQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .commandCode) }
+        set { updatePrimaryState(.commandCode) { $0.source = newValue } }
+    }
+    var commandCodeRefreshState: QuotaRefreshState {
+        get { refreshState(for: .commandCode) }
+        set { updatePrimaryState(.commandCode) { $0.refresh = newValue } }
+    }
     var quotaHistory = QuotaHistoryPayload()
     var quotaCycles = QuotaCyclePayload()
 
@@ -164,6 +184,7 @@ final class AppState {
         // Cursor 只读本机 SQLite，用于账号页和 Onboarding 的登录态检测；
         // 是否请求其远端额度仍由 Provider / Stats 开关控制。
         await loadCursor()
+        await loadCommandCode()
         recordCachedQuotaCycleObservations()
         logCredentialSummary()
 
@@ -245,6 +266,7 @@ final class AppState {
             // 账号一旦丢失就会把刷新链路一起关掉，从而再也检测不回来。
             showCursor: SettingsStore.shared.isProviderEnabled(.cursor)
                 || SettingsStore.shared.isUsageServiceVisible(.cursor),
+            showCommandCode: SettingsStore.shared.isProviderEnabled(.commandCode),
             hasVisibleImported: importedCodexAccounts.contains(where: \.visibleInPopover)
         )
         if plan.refreshCodex {
@@ -262,6 +284,10 @@ final class AppState {
             // get-filtered-usage-events 仍应照常拉取，否则统计页会永远停在"暂不可用"。
             // 节流由 UsageService 自己的 inFlight / backoff 负责，不复用额度的刷新门禁。
             await refreshCursorRemoteUsage(snapshot: cursorQuota)
+        }
+        if plan.refreshCommandCode {
+            await loadCommandCode()
+            await loadCommandCodeQuota(reason: reason)
         }
         if plan.refreshImported {
             await loadAllImportedCodexQuotas(
@@ -1162,6 +1188,45 @@ final class AppState {
         saveQuotaCache()
     }
 
+    func loadCommandCode() async {
+        let pref = SettingsStore.shared.commandCodeCredentialPreference
+        let next = await Task.detached(priority: .utility) {
+            CommandCodeAuth.load(preference: pref)
+        }.value
+
+        guard let next else {
+            commandCodeAccount = nil
+            commandCodeError = "未检测到 Command Code 登录态或 API Key"
+            return
+        }
+
+        let changedFromRuntime = commandCodeAccount.map {
+            $0.accountKey != next.accountKey
+        } ?? false
+        let changedFromCache: Bool = {
+            guard commandCodeAccount == nil,
+                  let cachedID = quotaCache.commandCode?.accountID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !cachedID.isEmpty
+            else { return false }
+            return cachedID != next.accountKey
+        }()
+        if changedFromRuntime || changedFromCache {
+            resetCommandCodeQuotaState()
+        }
+
+        commandCodeAccount = next
+        commandCodeError = nil
+    }
+
+    private func resetCommandCodeQuotaState() {
+        commandCodeQuota = nil
+        commandCodeQuotaSource = nil
+        commandCodeQuotaError = nil
+        commandCodeRefreshState = QuotaRefreshState()
+        quotaCache.commandCode = nil
+        saveQuotaCache()
+    }
+
     private func loadCodexQuota(reason: QuotaRefreshReason) async {
         guard beginCodexRefresh(reason: reason) else { return }
         defer { codexRefreshState.inFlight = false }
@@ -1295,6 +1360,72 @@ final class AppState {
             }
         case .failure(let error):
             markCursorFailure(error.description, error: error)
+        }
+    }
+
+    private func beginCommandCodeRefresh(reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        guard !commandCodeRefreshState.inFlight else { return false }
+        if let backoffUntil = commandCodeRefreshState.backoffUntil, backoffUntil > now {
+            markCommandCodeFailure(backoffMessage(until: backoffUntil))
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = commandCodeRefreshState.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        commandCodeRefreshState.inFlight = true
+        commandCodeRefreshState.lastAttemptAt = now
+        return true
+    }
+
+    private func loadCommandCodeQuota(reason: QuotaRefreshReason) async {
+        guard beginCommandCodeRefresh(reason: reason) else { return }
+        defer { commandCodeRefreshState.inFlight = false }
+
+        guard let session = commandCodeAccount else {
+            markCommandCodeFailure(commandCodeError ?? "未检测到 Command Code 账号")
+            return
+        }
+
+        let result = await CommandCodeQuotaClient.fetch(accessToken: session.accessToken)
+        switch result {
+        case .success(let response):
+            if var current = commandCodeAccount {
+                current.login = response.accountDetails.login
+                current.name = response.accountDetails.name
+                current.email = response.accountDetails.email
+                current.orgID = response.accountDetails.orgID
+                current.planType = response.accountDetails.planType
+                commandCodeAccount = current
+            }
+            storeCommandCode(snapshot: response.snapshot, source: .api)
+        case .failure(let error) where error.httpStatusCode == 401 || error.httpStatusCode == 403:
+            let previousToken = session.accessToken
+            await loadCommandCode()
+            guard let reloaded = commandCodeAccount, reloaded.accessToken != previousToken else {
+                markCommandCodeFailure("凭据已失效", error: error)
+                return
+            }
+            let retried = await CommandCodeQuotaClient.fetch(accessToken: reloaded.accessToken)
+            switch retried {
+            case .success(let response):
+                if var current = commandCodeAccount {
+                    current.login = response.accountDetails.login
+                    current.name = response.accountDetails.name
+                    current.email = response.accountDetails.email
+                    current.orgID = response.accountDetails.orgID
+                    current.planType = response.accountDetails.planType
+                    commandCodeAccount = current
+                }
+                storeCommandCode(snapshot: response.snapshot, source: .api)
+            case .failure(let retryError):
+                markCommandCodeFailure(retryError.description, error: retryError)
+            }
+        case .failure(let error):
+            markCommandCodeFailure(error.description, error: error)
         }
     }
 
@@ -1481,6 +1612,25 @@ final class AppState {
         saveQuotaCache()
     }
 
+    private func storeCommandCode(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: commandCodeQuota, now: updatedAt)
+        commandCodeQuota = mergedSnapshot
+        commandCodeQuotaSource = source
+        commandCodeQuotaError = nil
+        commandCodeRefreshState.lastSuccessAt = updatedAt
+        commandCodeRefreshState.lastError = nil
+        commandCodeRefreshState.backoffUntil = nil
+        commandCodeRefreshState.source = source
+        quotaCache.commandCode = QuotaCacheRecord(
+            snapshot: mergedSnapshot,
+            source: source,
+            updatedAt: updatedAt,
+            accountID: commandCodeAccount?.accountKey
+        )
+        saveQuotaCache()
+    }
+
     private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
         codexQuotaError = message
         codexRefreshState.lastError = message
@@ -1505,6 +1655,14 @@ final class AppState {
         }
     }
 
+    private func markCommandCodeFailure(_ message: String, error: QuotaError? = nil) {
+        commandCodeQuotaError = message
+        commandCodeRefreshState.lastError = message
+        if error?.isRateLimited == true {
+            commandCodeRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+    }
+
     private func backoffMessage(until: Date) -> String {
         "rate limited; retry in \(relativeAge(until: until))"
     }
@@ -1524,6 +1682,11 @@ final class AppState {
             print("[Credentials 凭据] Cursor: userID=\(c.userID) email=\(c.email ?? "—") expiresAt=\(c.expiresAt) hasAccessToken=true")
         } else {
             print("[Credentials 凭据] Cursor 未加载: error=\(cursorError ?? "unknown")")
+        }
+        if let c = commandCodeAccount {
+            print("[Credentials 凭据] Command Code: login=\(c.login ?? "—") source=\(c.source.displayName) plan=\(c.planType ?? "—")")
+        } else {
+            print("[Credentials 凭据] Command Code 未加载: error=\(commandCodeError ?? "unknown")")
         }
     }
 
@@ -1545,6 +1708,11 @@ final class AppState {
             print("[Quota 额度] Cursor: source=\(cursorQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
         } else {
             print("[Quota 额度] Cursor 拉取失败: error=\(cursorQuotaError ?? cursorError ?? "unknown")")
+        }
+        if let q = commandCodeQuota {
+            print("[Quota 额度] Command Code: source=\(commandCodeQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
+        } else if SettingsStore.shared.isProviderEnabled(.commandCode) {
+            print("[Quota 额度] Command Code 拉取失败: error=\(commandCodeQuotaError ?? commandCodeError ?? "unknown")")
         }
         // 远端用量和额度是两个独立接口，失败原因必须单独可见，
         // 否则统计页只剩一句"暂不可用"，无法区分未登录和拉取失败。

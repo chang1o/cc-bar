@@ -97,14 +97,30 @@ struct ProviderDisplaySettings: Sendable, Codable, Equatable {
         floatingHUD: true
     )
 
-    /// Cursor 首次出现时保持关闭；只有用户启用额度展示或远端统计后，
-    /// 才会进入远端刷新链路，避免未安装 Cursor 的机器产生后台失败状态。
+    /// Cursor 与 Command Code 首次出现时保持关闭；只有用户主动开启后，
+    /// 才会进入远端刷新链路，避免未配置的机器产生后台失败状态。
     static func defaults(for app: QuotaApp) -> ProviderDisplaySettings {
         switch app {
         case .codex, .claude:
             enabledByDefault
         case .cursor:
             ProviderDisplaySettings(enabled: false, menuBar: false, floatingHUD: false)
+        case .commandCode:
+            ProviderDisplaySettings(enabled: false, menuBar: true, floatingHUD: true)
+        }
+    }
+}
+
+enum CommandCodeCredentialPreference: String, CaseIterable, Identifiable, Codable {
+    case automatic
+    case manual
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .automatic: return "自动（推荐）"
+        case .manual: return "手动 API Key"
         }
     }
 }
@@ -130,6 +146,14 @@ final class SettingsStore {
     // 运行时 Cursor 账号可用性，由 AppState 的账号检测同步，不持久化。
     // 乐观初值 true：启动瞬间 loadCursor 还没跑完，先按上次偏好渲染，避免统计页闪一下空白。
     var cursorAccountDetected: Bool = true
+
+    // 运行时 Command Code 账号可用性，由 AppState 的账号检测同步，不持久化。
+    var commandCodeAccountDetected: Bool = true
+
+    // Command Code 凭据来源偏好
+    var commandCodeCredentialPreference: CommandCodeCredentialPreference {
+        didSet { defaults.set(commandCodeCredentialPreference.rawValue, forKey: Keys.commandCodeCredentialPreference) }
+    }
 
     // 兼容现有调用方的语义化入口。
     var showCodex: Bool {
@@ -221,6 +245,8 @@ final class SettingsStore {
         autoCheckForUpdates = defaults.object(forKey: Keys.autoCheckForUpdates) as? Bool ?? false
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false
+        let ccpRaw = defaults.string(forKey: Keys.commandCodeCredentialPreference) ?? CommandCodeCredentialPreference.automatic.rawValue
+        commandCodeCredentialPreference = CommandCodeCredentialPreference(rawValue: ccpRaw) ?? .automatic
         saveProviderDisplaySettings()
     }
 
@@ -470,5 +496,6 @@ final class SettingsStore {
         static let floatingFrameY = "ccbar.settings.floatingFrame.y"
         static let floatingFrameW = "ccbar.settings.floatingFrame.w"
         static let floatingFrameH = "ccbar.settings.floatingFrame.h"
+        static let commandCodeCredentialPreference = "ccbar.settings.commandCodeCredentialPreference"
     }
 }

@@ -44,6 +44,11 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
         set { providers[.cursor] = newValue }
     }
 
+    var commandCode: QuotaCacheRecord? {
+        get { providers[.commandCode] }
+        set { providers[.commandCode] = newValue }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case version
         case providers

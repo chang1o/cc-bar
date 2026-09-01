@@ -120,7 +120,7 @@ struct PopoverRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        let providers = QuotaProviderDescriptor.primaryProviders.filter {
+        let providers = QuotaProviderDescriptor.popoverProviders.filter {
             SettingsStore.shared.isProviderEnabled($0.app)
         }
         let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
@@ -184,6 +184,10 @@ struct PopoverRootView: View {
             email = appState.cursorAccount?.email
             plan = appState.quotaSnapshot(for: .cursor)?.planType
             fallback = "Cursor"
+        case .commandCode:
+            email = appState.commandCodeAccount?.email ?? appState.commandCodeAccount?.login
+            plan = appState.commandCodeAccount?.planType ?? appState.quotaSnapshot(for: .commandCode)?.planType
+            fallback = "Command Code"
         }
         if !privacy, let email, !email.isEmpty { parts.append(email) }
         if let plan, !plan.isEmpty { parts.append(plan) }
@@ -213,7 +217,7 @@ struct PopoverRootView: View {
 
     private func providerDisplayError(for app: QuotaApp) -> String? {
         guard let error = appState.quotaError(for: app) else { return nil }
-        guard app == .cursor else { return error }
+        guard app == .cursor || app == .commandCode else { return error }
         return tr("refresh failed", "刷新失败")
     }
 
@@ -237,6 +241,7 @@ struct PopoverRootView: View {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
         case .cursor: cursorTodayCost
+        case .commandCode: nil
         }
     }
 
@@ -250,7 +255,7 @@ struct PopoverRootView: View {
         return switch app {
         case .codex: appState.codexServiceStatus
         case .claude: appState.claudeServiceStatus
-        case .cursor: nil
+        case .cursor, .commandCode: nil
         }
     }
 
@@ -274,7 +279,7 @@ struct PopoverRootView: View {
     }
 
     private var enabledPrimaryApps: [QuotaApp] {
-        QuotaProviderDescriptor.primaryProviders.compactMap {
+        QuotaProviderDescriptor.popoverProviders.compactMap {
             SettingsStore.shared.isProviderEnabled($0.app) ? $0.app : nil
         }
     }

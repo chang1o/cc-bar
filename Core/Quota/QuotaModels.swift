@@ -4,13 +4,14 @@ nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
     case cursor
+    case commandCode
 
     /// 对应的本地用量数据源；`nil` = 该服务没有可解析的本地日志。
     var usageApp: UsageApp? {
         switch self {
         case .codex: return .codex
         case .claude: return .claude
-        case .cursor: return nil
+        case .cursor, .commandCode: return nil
         }
     }
 }
@@ -24,17 +25,21 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
     /// Popover 是否展示今日 / 本周花费。Codex 与 Claude 是本机日志估算，
     /// Cursor 是账号远端计量；三者复用同一组既有费用展示位。
     let showsCost: Bool
+    let supportsMenuBar: Bool
+    let supportsFloatingHUD: Bool
 
     var id: QuotaApp { app }
 
-    static let primaryProviders: [QuotaProviderDescriptor] = [
+    static let allProviders: [QuotaProviderDescriptor] = [
         QuotaProviderDescriptor(
             app: .codex,
             title: "Codex",
             vendor: "OpenAI",
             logoName: "codex",
             fallback: "C",
-            showsCost: true
+            showsCost: true,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true
         ),
         QuotaProviderDescriptor(
             app: .claude,
@@ -42,7 +47,9 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "Anthropic",
             logoName: "claude",
             fallback: "K",
-            showsCost: true
+            showsCost: true,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true
         ),
         QuotaProviderDescriptor(
             app: .cursor,
@@ -50,9 +57,40 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "Cursor",
             logoName: "cursor",
             fallback: "C",
-            showsCost: true
+            showsCost: true,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true
+        ),
+        QuotaProviderDescriptor(
+            app: .commandCode,
+            title: "Command Code",
+            vendor: "Command Code",
+            logoName: "commandcode",
+            fallback: "⌘",
+            showsCost: false,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true
         ),
     ]
+
+    /// 兼容现有调用方；建议新调用方改用各子界面对应的具体集合。
+    static var primaryProviders: [QuotaProviderDescriptor] { allProviders }
+
+    static var accountProviders: [QuotaProviderDescriptor] { allProviders }
+
+    static var popoverProviders: [QuotaProviderDescriptor] { allProviders }
+
+    static var menuBarProviders: [QuotaProviderDescriptor] {
+        allProviders.filter(\.supportsMenuBar)
+    }
+
+    static var floatingProviders: [QuotaProviderDescriptor] {
+        allProviders.filter(\.supportsFloatingHUD)
+    }
+
+    static func descriptor(for app: QuotaApp) -> QuotaProviderDescriptor? {
+        allProviders.first { $0.app == app }
+    }
 }
 
 nonisolated enum QuotaSnapshotSource: String, Sendable, Codable {
