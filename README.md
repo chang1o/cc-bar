@@ -1,25 +1,29 @@
 <p align="center">
-  <img src="Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="CCBar 图标">
+  <img src="Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="cc-bar Logo">
 </p>
 
 <h1 align="center">cc-bar</h1>
 
-<p align="center">macOS 菜单栏工具:实时显示 Codex、Claude Code、Antigravity 的剩余额度,<br>并统计本机的 Token 用量与费用。</p>
-
 <p align="center">
-  <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white">
-  <img alt="swiftui" src="https://img.shields.io/badge/SwiftUI-F05138?logo=swift&logoColor=white">
-  <a href="https://github.com/nanvon/cc-bar/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/nanvon/cc-bar?color=brightgreen"></a>
-  <img alt="downloads" src="https://img.shields.io/github/downloads/nanvon/cc-bar/total?color=blue">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-orange">
+  <b>macOS 原生菜单栏 AI 额度监控与本地用量看板</b><br>
+  实时追踪 Codex、Claude Code、Antigravity、Cursor 与 Command Code 配额状态，精准分析本地会话 Token 与费用。
 </p>
 
 <p align="center">
-  <a href="https://github.com/nanvon/cc-bar/releases/latest">下载</a> ·
-  <a href="#-安装">安装</a> ·
+  <img alt="Platform" src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white">
+  <img alt="SwiftUI" src="https://img.shields.io/badge/SwiftUI-F05138?logo=swift&logoColor=white">
+  <a href="https://github.com/nanvon/cc-bar/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/nanvon/cc-bar?color=brightgreen"></a>
+  <img alt="Downloads" src="https://img.shields.io/github/downloads/nanvon/cc-bar/total?color=blue">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-orange">
+</p>
+
+<p align="center">
+  <a href="https://github.com/nanvon/cc-bar/releases/latest">下载安装</a> ·
+  <a href="#-核心特性">功能特性</a> ·
+  <a href="#-快速安装">安装指南</a> ·
+  <a href="#-数据与隐私安全">安全说明</a> ·
   <a href="#-从源码构建">从源码构建</a> ·
-  <a href="#-相关项目">相关项目</a> ·
-  <a href="https://github.com/nanvon/cc-bar/issues">反馈</a> ·
+  <a href="https://github.com/nanvon/cc-bar/issues">问题反馈</a> ·
   <a href="README_EN.md">English</a>
 </p>
 
@@ -28,106 +32,146 @@
   <img src="docs/Screenshots/popover-dark.png" width="360" alt="Popover 总览 - 深色模式">
 </p>
 
-## ✨ 功能
+---
 
-- **额度总览** —— Codex、Claude Code、Antigravity 的 5 小时 / 周窗口剩余额度,菜单栏图标直接显示剩余百分比
-- **悬浮 HUD** —— 可选的桌面悬浮窗,可拖动、边缘吸附、置顶且不抢焦点
-- **多 Codex 账号** —— 导入多个 Codex 账号,主副账号在 Popover 同屏展示;设置页可查看每个账号的额外重置次数与到期时间
-- **用量统计** —— 汇总 Codex、Claude Code、Pi 与 OpenCode 的 Token 用量与费用,按今天 / 昨天 / 本周 / 本月 / 本年 / 近 7 天 / 近 30 天 / 全部 / 自定义范围切换,支持按服务、按模型、按单个对话、按模型提供商拆分,并带每日用量图表
-- **周期用量** —— 按 Codex / Claude 主账号真实重置窗口统计本机 Tokens 与费用,给出用满预估与重置倒计时
-- **额度时间线** —— 5 小时窗口额度随时间变化的记录
-- **服务状态** —— Popover 中显示 OpenAI / Anthropic 官方状态页圆点
-- **设置项** —— 账号开关、菜单栏显示内容、悬浮窗、刷新间隔、服务状态、价格目录更新、重新计算用量、重置时间显示、隐私模式、中英双语、开机自启
+## ✨ 核心特性
+
+### ⚡ 多服务配额实时监控
+* **全平台客户端覆盖** — 原生支持 5 大 AI 编程助手的配额查询与健康感知：
+  * **Codex (OpenAI)**：5 小时主额度与周额度、重置倒计时；支持导入多个 Codex 账号同屏对比，展示额度到期时间与额外重置 Credits 次数。
+  * **Claude Code (Anthropic)**：5 小时与周额度，支持专项模型（如 Fable）周额度细分；API 异常或凭据过期时支持安全的 CLI 兜底刷新。
+  * **Antigravity (Google)**：Cloud Mode 直连云端 API（无需运行本地 IDE/CLI），权威分组展示 Gemini 5H 主额度、Gemini 周额度及 Claude 辅助额度。
+  * **Cursor**：直连官方 Usage API，展示 Total 主额度、Auto 及 API 次要额度，自动识别 Unlimited 并呈现 `∞` 标识，精确汇总今日与本周真实费用。
+  * **Command Code**：支持 5 小时主额度（cap 14.0）、周额度（cap 35.0）及月度 GOAT 会员 Credits 额度。
+* **常驻菜单栏与 HUD 悬浮** — 菜单栏动态展示所选服务百分比（支持主要/周/双窗口模式）；独立桌面悬浮窗支持分服务开关、20pt 边缘自动吸附、位置记忆且不抢占键盘输入焦点。
+* **实时可用性与智能调度** — Popover 动态滚动呈现最近刷新相对时间，内嵌 OpenAI 与 Anthropic 官方服务健康状态点；后台 2 分钟额度/5 分钟日志独立循环，内置 60s 节流与 429 智能指数退避。
+
+### 📊 本地用量与全维费用透视
+* **跨引擎日志与远端计量聚合** — 自动解析本地 Codex（含 Standard/Fast 档位映射）、Claude Code（含 5m/1h 缓存 TTL 计价）、Pi（日志总价优先 + 价格表补齐）与 OpenCode（SQLite 库 `opencode.db`）会话记录，并接入 Cursor 全设备远端计量。
+* **四大专业分析视图**：
+  * **Overview（概览）**：总额与各服务 KPI 卡（带同期环比变化）、每日堆叠趋势柱状图、服务占比水平条、按模型明细明细表。
+  * **Conversations（对话明细）**：深入单次对话，展示四项 Token（输入/输出/缓存创建/缓存读取）、缓存命中率、速度档位（`Fast` / `Mixed` 徽标）与 API 等值成本明细；无系统权限弹窗的安全智能项目归属识别。
+  * **Cycles（周期用量）**：按 Codex / Claude 主账号真实重置窗口统计当前 5H / 周周期的本机消耗（2×2 宽卡网格），基于官方比例测算耗尽预估与重置倒计时。
+  * **Timeline（额度时间线）**：记录 5 小时重置窗口内的额度变动事件，并联 15 天周视图趋势，多账号独立平滑采样。
+* **厂商提供商归并（ModelProvider）** — 跨客户端将模型智能归并在 OpenAI、Anthropic、DeepSeek、OpenCode-Go、Command Code 与其他 6 大面板下，支持按费用/Tokens/请求数/名称排序并就地展开 Token 拆分。
+
+### 💻 纯净高效的原生体验
+* **零配置自动识别** — 自动扫描本机既有登录态，涵盖 5 大服务的本地凭据，无需重复输入或保存任何第三方 API Key（亦支持 Command Code Keychain 手动配置）。
+* **内置与双层在线价格引擎** — 内置价格表持续收录 Claude 5、GPT-5.6、DeepSeek、Cursor、Command Code 等最新模型；自动拉取 LiteLLM 与 models.dev 远端目录增量补齐，离线自动降级。
+* **纯本地解析与注重隐私** — 对受保护文件夹纯文本路径分词，零 macOS TCC 权限弹窗；会话仅提取 Token 与模型元数据，绝不读取聊天文本；支持隐私模式（隐藏邮箱/副账号名）与静默开机自启。
+* **静态版本更新检测** — 基于 GitHub Release 静态版本清单检查更新，支持设置页手动一键检查，避免 GitHub API 速率限制。
+
+---
 
 ### 📸 界面预览
 
 <p align="center">
   <img src="docs/Screenshots/statistics-overview.png" width="720" alt="用量统计 - 概览"><br>
-  <sub>概览:Token / 费用汇总,按服务与模型拆分</sub>
+  <sub><b>用量概览</b>：按服务与模型分类汇总 Token 消耗与费用走势</sub>
 </p>
 
 <p align="center">
   <img src="docs/Screenshots/statistics-conversations.png" width="720" alt="用量统计 - 对话"><br>
-  <sub>对话:按单个对话查看 Token 与费用明细</sub>
+  <sub><b>会话明细</b>：下钻至单次对话的 Token 明细与成本分析</sub>
 </p>
 
 <p align="center">
   <img src="docs/Screenshots/statistics-timeline.png" width="720" alt="用量统计 - 时间线"><br>
-  <sub>时间线:5 小时窗口额度随时间变化</sub>
+  <sub><b>额度时间线</b>：5 小时重置窗口内的额度消耗历史走势</sub>
 </p>
 
-## 📦 安装
+---
 
-🍎 要求 macOS 14 (Sonoma) 或更新版本。Codex / Claude Code / Antigravity 需已在终端完成登录(Antigravity 登录一次即可,无需常驻 IDE)。
+## 📦 快速安装
 
-1. 从 [Releases](https://github.com/nanvon/cc-bar/releases/latest) 下载 `CCBar.dmg`(或备用的 `CCBar.app.zip`),把 `CCBar.app` 拖入 `/Applications`。
-2. CCBar 未做 Apple 公证,首次启动会被 Gatekeeper 拦截:双击打开被拦下后,到 **系统设置 → 隐私与安全性**,下滑找到 CCBar 的提示,点 **「仍要打开」**。
-3. 若本机没有 `~/.claude/.credentials.json`,应用会在弹出说明后请求 Keychain 授权,请选 **「始终允许」**。
+> **运行环境**：macOS 14 (Sonoma) 或更新版本。<br>
+> **前置条件**：相关 AI 编程工具需已在终端或桌面端完成至少一次登录。
+
+1. 进入 [Releases 页面](https://github.com/nanvon/cc-bar/releases/latest) 下载最新的 `CCBar.dmg`（或 `CCBar.app.zip`）。
+2. 打开 DMG，将 `CCBar.app` 拖入 `/Applications` 文件夹即可。
 
 > [!NOTE]
-> macOS Sequoia 起,旧的「右键 → 打开」放行方式已失效,只能通过上面的系统设置放行。
-> 若仍提示「应用程序已损坏」,可在终端手动去除隔离属性:
+> **首次启动安全提示 (Gatekeeper)**
 >
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/CCBar.app
-> ```
+> 发布的构建为 ad-hoc 签名（未走付费 Apple 公证）。首次启动若被系统拦截：
+> 1. 打开 **系统设置 → 隐私与安全性**，向下滑动找到 CCBar 的拦截提示，点击 **「仍要打开」**；
+> 2. 若系统提示「应用程序已损坏」，可在终端执行以下命令清除隔离标记：
+>    ```bash
+>    xattr -dr com.apple.quarantine /Applications/CCBar.app
+>    ```
+> 3. 若本机不存在明文 credentials 文件，应用会在说明后请求 Keychain 读取权限，请选择 **「始终允许」**。
 
-## 🔒 数据与安全
+---
 
-cc-bar 是为个人需求开发的开源小工具。为了查询额度,它会读取本地凭据:
+## 🔒 数据与隐私安全
 
-- Codex:`~/.codex/auth.json`。access_token 临期时会用 refresh_token 续期并写回;续期前先重读一次文件,`codex` CLI 已经自己刷过就直接采用,不去跟它抢
-- Claude Code:`~/.claude/.credentials.json` 与 macOS Keychain,**只读**。cc-bar 不刷新、也不写回 Claude 的凭据 —— Anthropic 的 refresh_token 是一次性的,第三方刷新会把你从 Claude Code 挤下线。凭据过期时保留上一次额度快照并提示你去 Claude Code 刷新登录,本地 Token / 费用统计不受影响
-- Antigravity:`~/.gemini/jetski-standalone-oauth-token`(agy CLI / IDE 插件登录即写此文件,优先读取)与 `~/.gemini/oauth_creds.json`(旧版 Gemini CLI 遗留,仅兜底)。access_token 临期时用 refresh_token 续期并回写原文件,账号身份由 Google 云端配额接口回填
+cc-bar 严格遵循**本地优先与最小权限**原则，所有用量统计与额度查询均在本地完成：
 
-用量统计基于扫描本机会话日志得出:Codex(`~/.codex/sessions` 与 `~/.codex/archived_sessions`)、Claude Code(`~/.claude/projects`)与 Pi(pi coding agent,日志位于 `~/.pi/agent/sessions`)的 JSONL 日志,以及 OpenCode 的 SQLite 会话库(`~/.local/share/opencode/opencode.db`,只读打开)。
+### 凭据读取与刷新策略
 
-对话页的项目归组只基于日志里记录的工作目录路径:家目录内普通位置(如 `~/Code/...`)会检查目录是否存在、并向上寻找 Git 仓库根以便归组;桌面、文稿、下载、音乐、图片、影片等系统保护目录下的路径**不做任何文件系统访问**,只按路径字符串归组——所以 cc-bar 不会触发「访问文稿/音乐文件夹」的系统授权弹窗。cc-bar 只读取会话日志本身,不读取这些文件夹里的文件,也没有任何遥测。
+| 服务 / 目标 | 凭据存储位置 | 读写权限 | 行为机制与安全保障 |
+| :--- | :--- | :---: | :--- |
+| **Codex** | `~/.codex/auth.json` | 读 / 写 | 临期时使用 `refresh_token` 自动续期。续期前二次确认本地文件，避免与 `codex` CLI 冲突抢刷。 |
+| **Claude Code** | `~/.claude/.credentials.json`<br>或 macOS Keychain | **严格只读** | **绝不刷新或篡改凭据**。因 Anthropic 刷新令牌为一次性，第三方刷新会导致 CLI 被踢下线。过期时保留快照并提示终端重登；必要时提供安全 CLI 兜底。 |
+| **Antigravity** | `~/.gemini/jetski-standalone-oauth-token`<br>`~/.gemini/oauth_creds.json` (兜底) | 读 / 写 | 优先读取独立 OAuth Token，临期自动续期回写。Cloud Mode 直连 Google 云端 API，无需本地 IDE 运行。 |
+| **Cursor** | `~/Library/Application Support/Cursor`<br>`/User/globalStorage/state.vscdb` | **严格只读** | 仅读 `cursorAuth/accessToken` 构造 Cookie 查询用量，绝不碰 refresh token/OAuth，不写回 Cursor SQLite 或 Keychain。 |
+| **Command Code** | 5 级本地配置或 macOS Keychain | 读 / Keychain | 支持 5 级只读自动探测（CLI、Pi、OpenCode、环境变量），或由用户在设置中通过 macOS Keychain 安全存储手动 Key。 |
+| **本地会话日志** | `~/.codex/sessions`、`~/.claude/projects`<br>`~/.pi/agent/sessions`、OpenCode SQLite | **严格只读** | 仅扫描本地 JSONL/SQLite 解析 Token 用量与模型元数据，绝不收集或上传聊天正文。受保护目录做纯文本路径分词，零权限弹窗。 |
+
+### 系统权限与零遥测承诺
+* **无受保护文件夹访问**：对桌面、文稿、下载等受保护目录，项目归组仅做**纯文本路径分词**，绝不调用文件系统接口，因此**不会触发系统的隐私权限弹窗**。
+* **零外部遥测**：全应用不包含任何统计上报或第三方 SDK，不发送任何用户行为遥测。
 
 > [!TIP]
-> 发布的 `CCBar.app` 为 ad-hoc 签名、未做 Apple 公证;如果介意,可以自行审阅代码后[从源码构建](#-从源码构建),不依赖发布的二进制包。
+> 如果你对预编译二进制包有所顾虑，欢迎审阅完整源码并[从源码自主构建](#-从源码构建)。
+
+---
 
 ## 🔧 从源码构建
 
-需要完整版 Xcode(仅 Command Line Tools 不够)。
+需要完整版 Xcode（仅 Command Line Tools 无法构建 SwiftUI 资产）。
 
-**日常开发**:双击 `ccbar.xcodeproj`,选择 scheme `ccbar` 与「My Mac」,⌘R 运行。
+### 本地日常调试
+在 Xcode 中打开 `ccbar.xcodeproj`，Scheme 选择 `ccbar`，目标设备选「My Mac」，按下 <kbd>⌘</kbd> + <kbd>R</kbd> 运行。
 
-**打包分发**:
-
+### 打包正式 Release
 ```bash
-# 首次需将命令行工具指向完整 Xcode(一次性)
+# 1. 确保命令行工具指向完整 Xcode (一次性)
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-# Release 构建 + 打包,产物输出到 dist/CCBar.dmg 与 dist/CCBar.app.zip
+# 2. 执行本地打包脚本 (产物输出至 dist/ 目录)
 ./scripts/build.sh
 ```
 
-脚本以 `CODE_SIGNING_ALLOWED=NO` 构建,产物为 ad-hoc 签名,可在任意 Mac 上运行,无需付费证书或公证。
+构建脚本使用 `CODE_SIGNING_ALLOWED=NO` 编译并生成 ad-hoc 签名，产出的 `dist/CCBar.dmg` 与 `dist/CCBar.app.zip` 可在任意 Mac 机器上直接运行。
 
 > [!WARNING]
-> 不要用 Xcode 的 Archive 导出分发:那会引入 "Apple Development" 开发证书,产物只能在本机运行。
+> 请勿使用 Xcode 菜单中的 **Product → Archive** 导出分发，该方式会绑定个人开发证书，导致构建包无法在其他设备运行。
+
+---
 
 ## 🔗 相关项目
 
-同一作者的三个应用,共享同一套额度口径与视觉语言:
+同作者系列工具，共享同一套配额口径与设计语言：
 
-|                                                                  |                                        |
-| ---------------------------------------------------------------- | -------------------------------------- |
-| **cc-bar**(本仓库)                                             | macOS 原生菜单栏版(SwiftUI)          |
-| [**CC Trace**](https://github.com/nanvon/cc-trace)               | 桌面端 · macOS 菜单栏 / Windows 托盘   |
-| [**CC Trace Mobile**](https://github.com/nanvon/cc-trace-mobile) | 移动端 · iOS / Android                 |
+| 项目 | 平台形态 | 技术栈 |
+| :--- | :--- | :--- |
+| **cc-bar**（本仓库） | macOS 原生菜单栏工具 | Swift / SwiftUI |
+| [**CC Trace**](https://github.com/nanvon/cc-trace) | 桌面客户端（macOS 菜单栏 / Windows 托盘） | Tauri / Web |
+| [**CC Trace Mobile**](https://github.com/nanvon/cc-trace-mobile) | 移动端伴侣（iOS / Android） | 移动端框架 |
 
-CC Trace 在 cc-bar 的功能基础上用 Tauri 重构,同时支持 macOS 与 Windows。三个应用相互独立,数据与设置不互通。
+---
 
 ## 🙏 致谢
 
-设计与实现参考了以下开源项目:
+在架构设计与额度解析思路上，本项目参考并汲取了以下开源项目的优秀经验：
 
-- [cc-switch](https://github.com/farion1231/cc-switch) —— 多 Provider 账号切换器,启发了多账号管理与导入流程
-- [cockpit-tools](https://github.com/jlcodes99/cockpit-tools) —— 多平台 AI 编码助手仪表盘,在额度与刷新策略上提供了参考
-- [CodexBar](https://github.com/steipete/CodexBar) —— macOS 菜单栏 AI 用量监控,在菜单栏交互与本地解析思路上多有借鉴
+* [cc-switch](https://github.com/farion1231/cc-switch) — 多 Provider 账号切换器，启发了多账号管理与切换流
+* [cockpit-tools](https://github.com/jlcodes99/cockpit-tools) — 多平台 AI 辅助看板，在额度计算与刷新机制上提供了参考
+* [CodexBar](https://github.com/steipete/CodexBar) — macOS 菜单栏用量监控，在本地日志解析与原生菜单栏交互上多有借鉴
+
+---
 
 ## 📄 许可证
 
-[MIT](LICENSE)
+本项目基于 [MIT License](LICENSE) 开源。
