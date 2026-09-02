@@ -196,5 +196,34 @@ final class CommandCodeQuotaTests: XCTestCase {
         XCTAssertNotNil(snapshot.secondaryLimit)
         XCTAssertEqual(snapshot.auxiliaryLimits.first?.displayName, "MONTHLY")
     }
+
+    func testClientParseUnstartedCycleEstimatesFiveHours() throws {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let unstartedCredits: [String: Any] = [
+            "fiveHour": [
+                "cap": 14.0,
+                "used": 0.0,
+                "resetAt": 0
+            ] as [String: Any],
+            "weekly": [
+                "cap": 35.0,
+                "used": 0.0,
+                "resetAt": 0
+            ] as [String: Any]
+        ]
+
+        let (snapshot, _) = CommandCodeQuotaClient.parse(
+            creditsRoot: unstartedCredits,
+            subscriptionsRoot: nil,
+            fetchedAt: now
+        )
+
+        let window = snapshot.primaryWindow
+        XCTAssertNotNil(window)
+        XCTAssertEqual(window?.usedPercent, 0)
+        // resetsAt 不应为 1970，而应预估为当前时间 + 5 小时（18000 秒）
+        XCTAssertEqual(window?.resetsAt, now.addingTimeInterval(18_000))
+        XCTAssertEqual(snapshot.secondaryLimit?.window.resetsAt, now.addingTimeInterval(604_800))
+    }
 }
 

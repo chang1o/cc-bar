@@ -188,14 +188,16 @@ enum CommandCodeQuotaClient {
             id: "command-code-five-hour",
             displayName: "5HOUR",
             kind: .fiveHour,
-            windowSeconds: 18_000
+            windowSeconds: 18_000,
+            fetchedAt: fetchedAt
         )
         let weekly = parseWindow(
             dict: weeklyDict,
             id: "command-code-weekly",
             displayName: "WEEKLY",
             kind: .weekly,
-            windowSeconds: 604_800
+            windowSeconds: 604_800,
+            fetchedAt: fetchedAt
         )
 
         // 2. 解析 Monthly Credits，兼容嵌套在 credits 字典下或直接平铺
@@ -241,13 +243,19 @@ enum CommandCodeQuotaClient {
         id: String,
         displayName: String,
         kind: QuotaLimitKind,
-        windowSeconds: Int
+        windowSeconds: Int,
+        fetchedAt: Date
     ) -> QuotaLimit? {
         guard let dict else { return nil }
         guard let cap = parseNumber(dict["cap"]), cap > 0 else { return nil }
         let used = parseNumber(dict["used"]) ?? 0
         let usedPercent = min(100, max(0, (used / cap) * 100))
-        let resetsAt = parseDate(dict["resetAt"])
+        var resetsAt = parseDate(dict["resetAt"])
+
+        // 若周期未开始（used == 0 且无有效未来重置时间），按窗口长度预估重置时间（如 5 小时），与 Codex/Claude 对齐
+        if usedPercent == 0, resetsAt == nil || (resetsAt != nil && resetsAt! <= fetchedAt) {
+            resetsAt = fetchedAt.addingTimeInterval(Double(windowSeconds))
+        }
 
         return QuotaLimit(
             id: id,
@@ -273,6 +281,7 @@ enum CommandCodeQuotaClient {
     private static func parseDate(_ value: Any?) -> Date? {
         guard let value else { return nil }
         if let num = parseNumber(value) {
+            guard num > 0 else { return nil }
             if num > 1_000_000_000_000 {
                 return Date(timeIntervalSince1970: num / 1000.0)
             }
@@ -281,9 +290,15 @@ enum CommandCodeQuotaClient {
         if let str = value as? String {
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let d = formatter.date(from: str) { return d }
+            if let d = formatter.date(from: str) {
+                guard d.timeIntervalSince1970 > 0 else { return nil }
+                return d
+            }
             formatter.formatOptions = [.withInternetDateTime]
-            return formatter.date(from: str)
+            if let d = formatter.date(from: str) {
+                guard d.timeIntervalSince1970 > 0 else { return nil }
+                return d
+            }
         }
         return nil
     }
