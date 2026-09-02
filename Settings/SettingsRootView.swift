@@ -119,6 +119,26 @@ struct SettingsRootView: View {
                     )
                 )
                 AccountRow(
+                    title: "Antigravity",
+                    subtitle: "Google",
+                    tint: .antigravityAccent,
+                    logoName: "antigravity",
+                    fallback: "A",
+                    email: appState.antigravityAccount?.email,
+                    plan: appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType,
+                    availability: appState.antigravityAccount == nil ? .notDetected : .connected,
+                    canToggle: appState.antigravityAccount != nil,
+                    isOn: Binding(
+                        get: { appState.antigravityAccount == nil ? false : settings.showAntigravity },
+                        set: { newValue in
+                            settings.showAntigravity = newValue
+                            if newValue {
+                                Task { await appState.refreshQuotas(reason: .userInitiated) }
+                            }
+                        }
+                    )
+                )
+                AccountRow(
                     title: "Cursor",
                     subtitle: "Cursor",
                     tint: .gray,

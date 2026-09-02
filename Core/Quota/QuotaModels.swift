@@ -3,6 +3,7 @@ import Foundation
 nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
+    case antigravity
     case cursor
     case commandCode
 
@@ -11,7 +12,7 @@ nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
         switch self {
         case .codex: return .codex
         case .claude: return .claude
-        case .cursor, .commandCode: return nil
+        case .antigravity, .cursor, .commandCode: return nil
         }
     }
 }
@@ -48,6 +49,16 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             logoName: "claude",
             fallback: "K",
             showsCost: true,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true
+        ),
+        QuotaProviderDescriptor(
+            app: .antigravity,
+            title: "Antigravity",
+            vendor: "Google",
+            logoName: "antigravity",
+            fallback: "A",
+            showsCost: false,
             supportsMenuBar: true,
             supportsFloatingHUD: true
         ),
@@ -214,6 +225,8 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     var secondaryLimit: QuotaLimit?
     var auxiliaryLimits: [QuotaLimit]
     var modelLimits: [QuotaLimit]
+    var geminiWindow: QuotaWindow? // 仅 Antigravity
+    var geminiWeekly: QuotaWindow? // 仅 Antigravity
     var isUnlimited: Bool?
     var planType: String?
     var fetchedAt: Date
@@ -224,6 +237,8 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         secondaryLimit: QuotaLimit?,
         auxiliaryLimits: [QuotaLimit] = [],
         modelLimits: [QuotaLimit] = [],
+        geminiWindow: QuotaWindow? = nil,
+        geminiWeekly: QuotaWindow? = nil,
         isUnlimited: Bool? = nil,
         planType: String?,
         fetchedAt: Date
@@ -233,6 +248,8 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         self.secondaryLimit = secondaryLimit
         self.auxiliaryLimits = auxiliaryLimits
         self.modelLimits = modelLimits
+        self.geminiWindow = geminiWindow
+        self.geminiWeekly = geminiWeekly
         self.isUnlimited = isUnlimited
         self.planType = planType
         self.fetchedAt = fetchedAt
@@ -251,6 +268,8 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     /// 兼容仍按标准窗口取值的调用点；新展示入口应优先使用 primaryLimit。
     var fiveHour: QuotaWindow? { fiveHourLimit?.window }
     var weekly: QuotaWindow? { weeklyLimit?.window }
+
+    var secondaryWindow: QuotaWindow? { secondaryLimit?.window }
 
     var weeklyOpus: QuotaWindow? {
         modelLimit(named: "opus")?.window
@@ -282,6 +301,13 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         next.modelLimits = modelLimits.map {
             carryingReset(for: $0, previousByID: previousByID, now: now) ?? $0
         }
+        // Gemini 窗口单独保活
+        if next.geminiWindow?.resetsAt == nil, let prev = previous.geminiWindow, let reset = prev.resetsAt, reset > now {
+            next.geminiWindow?.resetsAt = reset
+        }
+        if next.geminiWeekly?.resetsAt == nil, let prev = previous.geminiWeekly, let reset = prev.resetsAt, reset > now {
+            next.geminiWeekly?.resetsAt = reset
+        }
         return next
     }
 
@@ -312,6 +338,8 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         case secondaryLimit
         case auxiliaryLimits
         case modelLimits
+        case geminiWindow
+        case geminiWeekly
         case isUnlimited
         case planType
         case fetchedAt
@@ -328,6 +356,8 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         isUnlimited = try container.decodeIfPresent(Bool.self, forKey: .isUnlimited)
         planType = try container.decodeIfPresent(String.self, forKey: .planType)
         fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        geminiWindow = try container.decodeIfPresent(QuotaWindow.self, forKey: .geminiWindow)
+        geminiWeekly = try container.decodeIfPresent(QuotaWindow.self, forKey: .geminiWeekly)
 
         if container.contains(.primaryLimit)
             || container.contains(.secondaryLimit)
@@ -372,6 +402,8 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         try container.encodeIfPresent(secondaryLimit, forKey: .secondaryLimit)
         try container.encode(auxiliaryLimits, forKey: .auxiliaryLimits)
         try container.encode(modelLimits, forKey: .modelLimits)
+        try container.encodeIfPresent(geminiWindow, forKey: .geminiWindow)
+        try container.encodeIfPresent(geminiWeekly, forKey: .geminiWeekly)
         try container.encodeIfPresent(isUnlimited, forKey: .isUnlimited)
         try container.encodeIfPresent(planType, forKey: .planType)
         try container.encode(fetchedAt, forKey: .fetchedAt)

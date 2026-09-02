@@ -5,6 +5,7 @@ nonisolated enum QuotaHistoryAccountKind: String, Sendable, Codable {
     case codexPrimary
     case codexImported
     case claudePrimary
+    case antigravityPrimary
 }
 
 nonisolated struct QuotaHistorySample: Sendable, Equatable, Codable {
@@ -103,6 +104,14 @@ enum QuotaHistoryAccountKey {
         }
         let digest = SHA256.hash(data: Data(email.utf8))
         return "claude:primary:\(digest.map { String(format: "%02x", $0) }.joined())"
+    }
+
+    nonisolated static func antigravityPrimary(email: String?) -> String {
+        guard let email = nonEmpty(email)?.lowercased() else {
+            return "antigravity:primary"
+        }
+        let digest = SHA256.hash(data: Data(email.utf8))
+        return "antigravity:primary:\(digest.map { String(format: "%02x", $0) }.joined())"
     }
 
     nonisolated private static func nonEmpty(_ value: String?) -> String? {

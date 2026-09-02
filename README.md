@@ -4,7 +4,7 @@
 
 <h1 align="center">cc-bar</h1>
 
-<p align="center">macOS 菜单栏工具:实时显示 Codex、Claude Code 的剩余额度,<br>并统计本机的 Token 用量与费用。</p>
+<p align="center">macOS 菜单栏工具:实时显示 Codex、Claude Code、Antigravity 的剩余额度,<br>并统计本机的 Token 用量与费用。</p>
 
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white">
@@ -30,7 +30,7 @@
 
 ## ✨ 功能
 
-- **额度总览** —— Codex、Claude Code 的 5 小时 / 周窗口剩余额度,菜单栏图标直接显示剩余百分比
+- **额度总览** —— Codex、Claude Code、Antigravity 的 5 小时 / 周窗口剩余额度,菜单栏图标直接显示剩余百分比
 - **悬浮 HUD** —— 可选的桌面悬浮窗,可拖动、边缘吸附、置顶且不抢焦点
 - **多 Codex 账号** —— 导入多个 Codex 账号,主副账号在 Popover 同屏展示;设置页可查看每个账号的额外重置次数与到期时间
 - **用量统计** —— 汇总 Codex、Claude Code、Pi 与 OpenCode 的 Token 用量与费用,按今天 / 昨天 / 本周 / 本月 / 本年 / 近 7 天 / 近 30 天 / 全部 / 自定义范围切换,支持按服务、按模型、按单个对话、按模型提供商拆分,并带每日用量图表
@@ -58,7 +58,7 @@
 
 ## 📦 安装
 
-🍎 要求 macOS 14 (Sonoma) 或更新版本。Codex / Claude Code 需已在终端完成登录。
+🍎 要求 macOS 14 (Sonoma) 或更新版本。Codex / Claude Code / Antigravity 需已在终端完成登录(Antigravity 登录一次即可,无需常驻 IDE)。
 
 1. 从 [Releases](https://github.com/nanvon/cc-bar/releases/latest) 下载 `CCBar.dmg`(或备用的 `CCBar.app.zip`),把 `CCBar.app` 拖入 `/Applications`。
 2. CCBar 未做 Apple 公证,首次启动会被 Gatekeeper 拦截:双击打开被拦下后,到 **系统设置 → 隐私与安全性**,下滑找到 CCBar 的提示,点 **「仍要打开」**。
@@ -78,6 +78,7 @@ cc-bar 是为个人需求开发的开源小工具。为了查询额度,它会读
 
 - Codex:`~/.codex/auth.json`。access_token 临期时会用 refresh_token 续期并写回;续期前先重读一次文件,`codex` CLI 已经自己刷过就直接采用,不去跟它抢
 - Claude Code:`~/.claude/.credentials.json` 与 macOS Keychain,**只读**。cc-bar 不刷新、也不写回 Claude 的凭据 —— Anthropic 的 refresh_token 是一次性的,第三方刷新会把你从 Claude Code 挤下线。凭据过期时保留上一次额度快照并提示你去 Claude Code 刷新登录,本地 Token / 费用统计不受影响
+- Antigravity:`~/.gemini/jetski-standalone-oauth-token`(agy CLI / IDE 插件登录即写此文件,优先读取)与 `~/.gemini/oauth_creds.json`(旧版 Gemini CLI 遗留,仅兜底)。access_token 临期时用 refresh_token 续期并回写原文件,账号身份由 Google 云端配额接口回填
 
 用量统计基于扫描本机会话日志得出:Codex(`~/.codex/sessions` 与 `~/.codex/archived_sessions`)、Claude Code(`~/.claude/projects`)与 Pi(pi coding agent,日志位于 `~/.pi/agent/sessions`)的 JSONL 日志,以及 OpenCode 的 SQLite 会话库(`~/.local/share/opencode/opencode.db`,只读打开)。
 

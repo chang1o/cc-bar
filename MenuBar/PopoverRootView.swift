@@ -180,6 +180,10 @@ struct PopoverRootView: View {
             email = appState.claudeAccount?.email
             plan = appState.claudeAccount?.subscriptionType?.capitalized
             fallback = "Anthropic"
+        case .antigravity:
+            email = appState.antigravityAccount?.email
+            plan = appState.quotaSnapshot(for: .antigravity)?.planType?.capitalized ?? appState.antigravityAccount?.planType?.capitalized
+            fallback = "Google"
         case .cursor:
             email = appState.cursorAccount?.email
             plan = appState.quotaSnapshot(for: .cursor)?.planType
@@ -240,6 +244,7 @@ struct PopoverRootView: View {
         switch app {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
+        case .antigravity: nil
         case .cursor: cursorTodayCost
         case .commandCode: nil
         }
@@ -255,7 +260,7 @@ struct PopoverRootView: View {
         return switch app {
         case .codex: appState.codexServiceStatus
         case .claude: appState.claudeServiceStatus
-        case .cursor, .commandCode: nil
+        case .antigravity, .cursor, .commandCode: nil
         }
     }
 
@@ -500,13 +505,14 @@ private struct ServiceBlockView: View {
     private func compactLimitRow(_ limit: QuotaLimit) -> some View {
         let remaining = limit.window.remainingPercent
         let color = statusColor(remainingPercent: remaining, tint: tint)
+        let labelWidth: CGFloat = app == .antigravity ? 88 : 70 // 官方组名“CLAUDE 5H”比 5HOUR 宽
         return HStack(spacing: 10) {
             Text(compactLimitLabel(limit))
                 .font(.system(size: 9, weight: .semibold))
                 .kerning(0.6)
                 .foregroundStyle(.quaternary)
                 .lineLimit(1)
-                .frame(width: 70, alignment: .leading)
+                .frame(width: labelWidth, alignment: .leading)
 
             ProgressBar(value: remaining / 100, tint: color, height: 2.5)
 
@@ -540,6 +546,11 @@ private struct ServiceBlockView: View {
     }
 
     private func compactLimitLabel(_ limit: QuotaLimit) -> String {
+        // Antigravity 的四窗口带官方组名（Gemini 5H / Gemini WK / Claude 5H / Claude WK），
+        // 用 displayName 显示；其余服务仍按窗口类型回落。
+        if app == .antigravity, let name = normalizedModelLabel(limit.displayName) {
+            return name.uppercased()
+        }
         if app == .cursor, let name = normalizedModelLabel(limit.displayName) {
             return name.uppercased()
         }
@@ -619,6 +630,10 @@ private struct ServiceBlockView: View {
     private var primaryLimitTitle: String {
         if isUnlimited { return "UNLIMITED" }
         guard let limit = snapshot?.primaryLimit else { return "CURRENT" }
+        // Antigravity 主条是 Gemini 5H，标签用 displayName 而非通用 5HOUR
+        if app == .antigravity, let name = normalizedModelLabel(limit.displayName) {
+            return name.uppercased()
+        }
         switch limit.kind {
         case .fiveHour: return "5HOUR"
         case .weekly: return app == .claude ? "ALL" : "WEEKLY"

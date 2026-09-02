@@ -20,6 +20,7 @@ enum UpdateStatus: Equatable {
 final class AppState {
     var codexAccount: CodexAccount?
     var claudeAccount: ClaudeAccount?
+    var antigravityAccount: AntigravityAccount?
     // 账号态同步给设置层：Cursor 未安装 / 未登录时统计页不再渲染空的 Cursor 服务行，
     // 用户的统计开关偏好本身保留，重新登录后自动恢复（见 SettingsStore.cursorAccountDetected）。
     var cursorAccount: CursorAuthSession? {
@@ -30,6 +31,7 @@ final class AppState {
     }
     var codexError: String?
     var claudeError: String?
+    var antigravityError: String?
     var cursorError: String?
     var commandCodeError: String?
 
@@ -101,6 +103,22 @@ final class AppState {
     var cursorRefreshState: QuotaRefreshState {
         get { refreshState(for: .cursor) }
         set { updatePrimaryState(.cursor) { $0.refresh = newValue } }
+    }
+    var antigravityQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.snapshot = newValue } }
+    }
+    var antigravityQuotaError: String? {
+        get { quotaError(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.error = newValue } }
+    }
+    var antigravityQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.source = newValue } }
+    }
+    var antigravityRefreshState: QuotaRefreshState {
+        get { refreshState(for: .antigravity) }
+        set { updatePrimaryState(.antigravity) { $0.refresh = newValue } }
     }
     var commandCodeQuota: QuotaSnapshot? {
         get { quotaSnapshot(for: .commandCode) }
@@ -181,6 +199,7 @@ final class AppState {
         await loadCodex()
         maybeShowKeychainPrompt()
         await loadClaude()
+        await loadAntigravity()
         // Cursor 只读本机 SQLite，用于账号页和 Onboarding 的登录态检测；
         // 是否请求其远端额度仍由 Provider / Stats 开关控制。
         await loadCursor()
@@ -261,6 +280,7 @@ final class AppState {
         let plan = QuotaRefreshPlan.make(
             showCodex: SettingsStore.shared.showCodex,
             showClaude: SettingsStore.shared.showClaude,
+            showAntigravity: SettingsStore.shared.showAntigravity,
             // Cursor 额度展示与远端统计可分别启用；任一入口启用后才允许网络刷新。
             // 这里刻意读用户偏好而不是 isUsageServiceEffectivelyVisible：后者依赖账号检测结果，
             // 账号一旦丢失就会把刷新链路一起关掉，从而再也检测不回来。
@@ -276,6 +296,10 @@ final class AppState {
         if plan.refreshClaude {
             await loadClaude()
             await loadClaudeQuota(reason: reason)
+        }
+        if plan.refreshAntigravity {
+            await loadAntigravity()
+            await loadAntigravityQuota(reason: reason)
         }
         if plan.refreshCursor {
             await loadCursor()
@@ -450,6 +474,7 @@ final class AppState {
                 sampledAt: observedAt
             )
         }
+        // Antigravity 暂无本地用量周期，仅记录额度历史，不参与 cycle 统计
     }
 
     // MARK: - Imported Codex accounts
@@ -951,6 +976,16 @@ final class AppState {
         )
     }
 
+    private func recordAntigravityQuotaHistory(snapshot: QuotaSnapshot, sampledAt: Date) {
+        recordQuotaHistory(
+            accountKey: QuotaHistoryAccountKey.antigravityPrimary(email: antigravityAccount?.email),
+            app: .antigravity,
+            kind: .antigravityPrimary,
+            snapshot: snapshot,
+            sampledAt: sampledAt
+        )
+    }
+
     private func recordImportedCodexQuotaHistory(id: String, snapshot: QuotaSnapshot, sampledAt: Date) {
         recordQuotaHistory(
             accountKey: QuotaHistoryAccountKey.codexImported(id: id),
@@ -1143,6 +1178,53 @@ final class AppState {
         saveQuotaCache()
     }
 
+    private func loadAntigravity() async {
+        do {
+            var next = try await Task.detached(priority: .utility) {
+                try AntigravityCredentials.load()
+            }.value
+            guard var next else {
+                antigravityAccount = nil
+                antigravityError = "未配置 Antigravity：请先在 VSCode/Antigravity CLI 中登录 Google 账号"
+                return
+            }
+            if antigravityIdentityChanged(previous: antigravityAccount, next: next) {
+                resetAntigravityQuotaState()
+            } else if let prev = antigravityAccount {
+                // 邮箱/plan 靠首次取数回填，重读 jetski 时这些字段为空。
+                // 同一凭据未变则沿用上次回填的身份，避免 UI 抖动 / 误判账号切换。
+                next.email = next.email ?? prev.email
+                next.displayName = next.displayName ?? prev.displayName
+                next.planType = next.planType ?? prev.planType
+            }
+            antigravityAccount = next
+            antigravityError = nil
+        } catch {
+            antigravityAccount = nil
+            antigravityError = "\(error)"
+        }
+    }
+
+    private func antigravityIdentityChanged(previous: AntigravityAccount?, next: AntigravityAccount) -> Bool {
+        guard let previous else { return false }
+        if let a = previous.email, let b = next.email, !a.isEmpty, !b.isEmpty {
+            return a != b
+        }
+        if let prevRef = previous.refreshToken, let nextRef = next.refreshToken {
+            return prevRef != nextRef
+        }
+        return previous.accessToken != next.accessToken
+    }
+
+    private func resetAntigravityQuotaState() {
+        antigravityQuota = nil
+        antigravityQuotaSource = nil
+        antigravityQuotaError = nil
+        antigravityRefreshState = QuotaRefreshState()
+        quotaCache.antigravity = nil
+        saveQuotaCache()
+    }
+
     private func loadCursor() async {
         do {
             let next = try await Task.detached(priority: .utility) {
@@ -1194,10 +1276,19 @@ final class AppState {
             CommandCodeAuth.load(preference: pref)
         }.value
 
-        guard let next else {
+        guard var next else {
             commandCodeAccount = nil
             commandCodeError = "未检测到 Command Code 登录态或 API Key"
             return
+        }
+
+        // 同一令牌未变时沿用上次回填的身份，避免 UI 抖动 / 误判账号切换
+        if let prev = commandCodeAccount, prev.accessToken == next.accessToken {
+            next.login = next.login ?? prev.login
+            next.name = next.name ?? prev.name
+            next.email = next.email ?? prev.email
+            next.orgID = next.orgID ?? prev.orgID
+            next.planType = next.planType ?? prev.planType
         }
 
         let changedFromRuntime = commandCodeAccount.map {
@@ -1323,6 +1414,92 @@ final class AppState {
             if reason == .userInitiated, claudeQuota == nil {
                 await loadClaudeCLIFallback(apiError: err)
             }
+        }
+    }
+
+    private func loadAntigravityQuota(reason: QuotaRefreshReason) async {
+        guard beginAntigravityRefresh(reason: reason) else { return }
+        defer { antigravityRefreshState.inFlight = false }
+
+        guard var account = antigravityAccount else {
+            markAntigravityFailure(antigravityError ?? "no antigravity account")
+            return
+        }
+        guard account.accessToken != nil else {
+            markAntigravityFailure(QuotaError.missingToken.description)
+            return
+        }
+        let refreshed = await AntigravityCredentials.ensureFreshAccessToken(account: &account)
+        let activeToken: String
+        switch refreshed {
+        case .success(let t):
+            activeToken = t
+            if t != antigravityAccount?.accessToken {
+                antigravityAccount = account
+            }
+        case .failure(let err):
+            markAntigravityFailure(err.description, error: err)
+            return
+        }
+        let result = await AntigravityQuotaClient.fetch(accessToken: activeToken)
+        switch result {
+        case .success(let fetched):
+            // 回填 plan；邮箱 jetski 本地解不出（非 JWT），额度链路成功后用 UserInfo
+            // 单独回填一次，仅当仍未取得时再调用（避免每轮都打 UserInfo）。
+            var email = fetched.account.email ?? account.email
+            if email == nil {
+                email = await AntigravityQuotaClient.fetchAccountEmail(accessToken: activeToken)
+            }
+            if let email {
+                account.email = email
+            }
+            account.planType = fetched.account.planType ?? account.planType
+            antigravityAccount = account
+            let snapshot = fetched.snapshot
+            storeAntigravity(snapshot: snapshot, source: .api)
+        case .failure(let err):
+            markAntigravityFailure(err.description, error: err)
+        }
+    }
+
+    private func beginAntigravityRefresh(reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        guard !antigravityRefreshState.inFlight else { return false }
+        if let backoffUntil = antigravityRefreshState.backoffUntil, backoffUntil > now {
+            markAntigravityFailure(backoffMessage(until: backoffUntil))
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = antigravityRefreshState.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        antigravityRefreshState.inFlight = true
+        antigravityRefreshState.lastAttemptAt = now
+        return true
+    }
+
+    private func storeAntigravity(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: antigravityQuota, now: updatedAt)
+        antigravityQuota = mergedSnapshot
+        antigravityQuotaSource = source
+        antigravityQuotaError = nil
+        antigravityRefreshState.lastSuccessAt = updatedAt
+        antigravityRefreshState.lastError = nil
+        antigravityRefreshState.backoffUntil = nil
+        antigravityRefreshState.source = source
+        quotaCache.antigravity = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt, accountID: antigravityAccount?.email)
+        saveQuotaCache()
+        recordAntigravityQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
+    }
+
+    private func markAntigravityFailure(_ message: String, error: QuotaError? = nil) {
+        antigravityQuotaError = message
+        antigravityRefreshState.lastError = message
+        if error?.isRateLimited == true {
+            antigravityRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
     }
 
@@ -1678,6 +1855,11 @@ final class AppState {
         } else {
             print("[Credentials 凭据] Claude 未加载: error=\(claudeError ?? "unknown")")
         }
+        if let c = antigravityAccount {
+            print("[Credentials 凭据] Antigravity: email=\(c.email ?? "—") plan=\(c.planType ?? "—") expiry=\(c.expiryDate.map { "\($0)" } ?? "—") hasAccessToken=\(c.accessToken != nil)")
+        } else {
+            print("[Credentials 凭据] Antigravity 未加载: error=\(antigravityError ?? "unknown")")
+        }
         if let c = cursorAccount {
             print("[Credentials 凭据] Cursor: userID=\(c.userID) email=\(c.email ?? "—") expiresAt=\(c.expiresAt) hasAccessToken=true")
         } else {
@@ -1703,6 +1885,14 @@ final class AppState {
             }
         } else {
             print("[Quota 额度] Claude 拉取失败: error=\(claudeQuotaError ?? "unknown")")
+        }
+        if let q = antigravityQuota {
+            var antigravityExtra = ""
+            if let gw = q.geminiWindow { antigravityExtra += " GM=\(format(window: gw))" }
+            if let gw = q.geminiWeekly { antigravityExtra += " GW=\(format(window: gw))" }
+            print("[Quota 额度] Antigravity: source=\(antigravityQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))\(antigravityExtra)")
+        } else if SettingsStore.shared.isProviderEnabled(.antigravity) {
+            print("[Quota 额度] Antigravity 拉取失败: error=\(antigravityQuotaError ?? antigravityError ?? "unknown")")
         }
         if let q = cursorQuota {
             print("[Quota 额度] Cursor: source=\(cursorQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")

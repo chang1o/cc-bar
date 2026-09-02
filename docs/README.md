@@ -24,6 +24,7 @@
 | [草案-用量统计增强与对话明细-技术方案.md](草案-用量统计增强与对话明细-技术方案.md) | 原宽范围方案已收窄;仅保留后续技术候选 |
 | [草案-Cursor支持-设计方案.md](草案-Cursor支持-设计方案.md) | 新增 Cursor 额度 + 用量统计的设计方案(认证/接口/映射/风险);代码实现已完成(额度链路、远端用量拉取与独立缓存、历史懒加载、全部 UI 与文档同步),待用真实已登录的 Cursor.app 做端到端验收 |
 | [草案-CommandCode支持-设计方案.md](草案-CommandCode支持-设计方案.md) | Command Code GOAT 订阅额度的产品边界、凭据方案、接口映射、安全策略与验收基线；第一版只进入设置账号与 Popover，不进入主窗口统计 |
+| [草案-Antigravity支持-设计方案.md](草案-Antigravity支持-设计方案.md) | Antigravity（Google Gemini Code Assist）额度 Cloud Mode 设计方案（本机凭据复用 + 云端配额直连，无需本地 IDE/App）；代码实现已完成，待真机云端配额回填与周/5h 窗口验收 |
 
 ## 历史参考
 

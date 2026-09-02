@@ -179,6 +179,17 @@ private struct DetectAccountsStep: View {
                     isDetected: appState.claudeAccount != nil
                 )
                 DetectedAccountRow(
+                    title: "Antigravity",
+                    subtitle: "Google",
+                    plan: appState.antigravityQuota?.planType ?? appState.antigravityAccount?.planType,
+                    email: appState.antigravityAccount?.email,
+                    source: "~/.gemini/jetski-standalone-oauth-token",
+                    tint: .antigravityAccent,
+                    logoName: "antigravity",
+                    fallback: "A",
+                    isDetected: appState.antigravityAccount != nil
+                )
+                DetectedAccountRow(
                     title: "Cursor",
                     subtitle: "Cursor",
                     plan: appState.cursorQuota?.planType,
@@ -244,6 +255,7 @@ private struct DetectAccountsStep: View {
     private var anyDetected: Bool {
         appState.codexAccount != nil
             || appState.claudeAccount != nil
+            || appState.antigravityAccount != nil
             || appState.cursorAccount != nil
             || appState.commandCodeAccount != nil
     }

@@ -17,6 +17,7 @@
 		49C1B101000000000001AABB /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B101000000000001AAAA /* Models.swift */; };
 		49C1B102000000000001AABB /* JWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B102000000000001AAAA /* JWT.swift */; };
 		49C1BC11000000000001AABB /* CursorAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC11000000000001AAAA /* CursorAuth.swift */; };
+		49C1D100000000000001AABB /* AntigravityCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1D100000000000001AAAA /* AntigravityCredentials.swift */; };
 		49C1BC13000000000001AABB /* CursorUsageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC13000000000001AAAA /* CursorUsageCache.swift */; };
 		49C1B103000000000001AABB /* CodexAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B103000000000001AAAA /* CodexAuth.swift */; };
 		49C1B104000000000001AABB /* ClaudeAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B104000000000001AAAA /* ClaudeAuth.swift */; };
@@ -28,6 +29,7 @@
 		49C1B120000000000001AABB /* QuotaModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B120000000000001AAAA /* QuotaModels.swift */; };
 		49C1B121000000000001AABB /* CodexTokenRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B121000000000001AAAA /* CodexTokenRefresher.swift */; };
 		49C1B122000000000001AABB /* CodexQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B122000000000001AAAA /* CodexQuotaClient.swift */; };
+		49C1D101000000000001AABB /* AntigravityQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1D101000000000001AAAA /* AntigravityQuotaClient.swift */; };
 		49C1BC10000000000001AABB /* CursorQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC10000000000001AAAA /* CursorQuotaClient.swift */; };
 		49C1BC14000000000001AABB /* CursorUsageFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC14000000000001AAAA /* CursorUsageFetcher.swift */; };
 		49C1B123000000000001AABB /* ClaudeQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B123000000000001AAAA /* ClaudeQuotaClient.swift */; };
@@ -49,6 +51,7 @@
 		49C1B132000000000001AABB /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B132000000000001AAAA /* L10n.swift */; };
 		49C1B140000000000001AABB /* codex.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B140000000000001AAAA /* codex.svg */; };
 		49C1B141000000000001AABB /* claude.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B141000000000001AAAA /* claude.svg */; };
+		49C1B143000000000001AABB /* antigravity.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B143000000000001AAAA /* antigravity.svg */; };
 		49C1BC16000000000001AABB /* cursor.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1BC16000000000001AAAA /* cursor.svg */; };
 		49C1CC01000000000001AABB /* commandcode.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CC01000000000001AAAA /* commandcode.svg */; };
 		49C1CC02000000000001AABB /* CommandCodeAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC02000000000001AAAA /* CommandCodeAuth.swift */; };
@@ -124,6 +127,7 @@
 		49C1B101000000000001AAAA /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		49C1B102000000000001AAAA /* JWT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JWT.swift; sourceTree = "<group>"; };
 		49C1BC11000000000001AAAA /* CursorAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorAuth.swift; sourceTree = "<group>"; };
+		49C1D100000000000001AAAA /* AntigravityCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityCredentials.swift; sourceTree = "<group>"; };
 		49C1BC13000000000001AAAA /* CursorUsageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageCache.swift; sourceTree = "<group>"; };
 		49C1B103000000000001AAAA /* CodexAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAuth.swift; sourceTree = "<group>"; };
 		49C1B104000000000001AAAA /* ClaudeAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeAuth.swift; sourceTree = "<group>"; };
@@ -135,6 +139,7 @@
 		49C1B120000000000001AAAA /* QuotaModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaModels.swift; sourceTree = "<group>"; };
 		49C1B121000000000001AAAA /* CodexTokenRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexTokenRefresher.swift; sourceTree = "<group>"; };
 		49C1B122000000000001AAAA /* CodexQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexQuotaClient.swift; sourceTree = "<group>"; };
+		49C1D101000000000001AAAA /* AntigravityQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityQuotaClient.swift; sourceTree = "<group>"; };
 		49C1BC10000000000001AAAA /* CursorQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorQuotaClient.swift; sourceTree = "<group>"; };
 		49C1BC14000000000001AAAA /* CursorUsageFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageFetcher.swift; sourceTree = "<group>"; };
 		49C1B123000000000001AAAA /* ClaudeQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeQuotaClient.swift; sourceTree = "<group>"; };
@@ -156,6 +161,7 @@
 		49C1B132000000000001AAAA /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		49C1B140000000000001AAAA /* codex.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = codex.svg; sourceTree = "<group>"; };
 		49C1B141000000000001AAAA /* claude.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = claude.svg; sourceTree = "<group>"; };
+		49C1B143000000000001AAAA /* antigravity.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = antigravity.svg; sourceTree = "<group>"; };
 		49C1BC16000000000001AAAA /* cursor.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = cursor.svg; sourceTree = "<group>"; };
 		49C1CC01000000000001AAAA /* commandcode.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = commandcode.svg; sourceTree = "<group>"; };
 		49C1CC02000000000001AAAA /* CommandCodeAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeAuth.swift; sourceTree = "<group>"; };
@@ -311,6 +317,7 @@
 				49C1B101000000000001AAAA /* Models.swift */,
 				49C1B102000000000001AAAA /* JWT.swift */,
 				49C1BC11000000000001AAAA /* CursorAuth.swift */,
+				49C1D100000000000001AAAA /* AntigravityCredentials.swift */,
 				49C1CC02000000000001AAAA /* CommandCodeAuth.swift */,
 				49C1B103000000000001AAAA /* CodexAuth.swift */,
 				49C1B104000000000001AAAA /* ClaudeAuth.swift */,
@@ -341,6 +348,7 @@
 				49C1B120000000000001AAAA /* QuotaModels.swift */,
 				49C1B121000000000001AAAA /* CodexTokenRefresher.swift */,
 				49C1B122000000000001AAAA /* CodexQuotaClient.swift */,
+				49C1D101000000000001AAAA /* AntigravityQuotaClient.swift */,
 				49C1BC10000000000001AAAA /* CursorQuotaClient.swift */,
 				49C1CC03000000000001AAAA /* CommandCodeQuotaClient.swift */,
 				49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */,
@@ -359,6 +367,7 @@
 			children = (
 				49C1B140000000000001AAAA /* codex.svg */,
 				49C1B141000000000001AAAA /* claude.svg */,
+				49C1B143000000000001AAAA /* antigravity.svg */,
 				49C1BC16000000000001AAAA /* cursor.svg */,
 				49C1CC01000000000001AAAA /* commandcode.svg */,
 			);
@@ -554,6 +563,7 @@
 				4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */,
 				49C1B140000000000001AABB /* codex.svg in Resources */,
 				49C1B141000000000001AABB /* claude.svg in Resources */,
+				49C1B143000000000001AABB /* antigravity.svg in Resources */,
 				49C1BC16000000000001AABB /* cursor.svg in Resources */,
 				49C1CC01000000000001AABB /* commandcode.svg in Resources */,
 			);
@@ -585,6 +595,7 @@
 				49C1B101000000000001AABB /* Models.swift in Sources */,
 				49C1B102000000000001AABB /* JWT.swift in Sources */,
 				49C1BC11000000000001AABB /* CursorAuth.swift in Sources */,
+				49C1D100000000000001AABB /* AntigravityCredentials.swift in Sources */,
 				49C1CC02000000000001AABB /* CommandCodeAuth.swift in Sources */,
 				49C1BC13000000000001AABB /* CursorUsageCache.swift in Sources */,
 				49C1B103000000000001AABB /* CodexAuth.swift in Sources */,
@@ -594,6 +605,7 @@
 				49C1B120000000000001AABB /* QuotaModels.swift in Sources */,
 				49C1B121000000000001AABB /* CodexTokenRefresher.swift in Sources */,
 				49C1B122000000000001AABB /* CodexQuotaClient.swift in Sources */,
+				49C1D101000000000001AABB /* AntigravityQuotaClient.swift in Sources */,
 				49C1BC10000000000001AABB /* CursorQuotaClient.swift in Sources */,
 				49C1CC03000000000001AABB /* CommandCodeQuotaClient.swift in Sources */,
 				49C1BC14000000000001AABB /* CursorUsageFetcher.swift in Sources */,

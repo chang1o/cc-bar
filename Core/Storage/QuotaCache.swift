@@ -44,6 +44,11 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
         set { providers[.cursor] = newValue }
     }
 
+    var antigravity: QuotaCacheRecord? {
+        get { providers[.antigravity] }
+        set { providers[.antigravity] = newValue }
+    }
+
     var commandCode: QuotaCacheRecord? {
         get { providers[.commandCode] }
         set { providers[.commandCode] = newValue }

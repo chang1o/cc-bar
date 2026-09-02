@@ -13,6 +13,264 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(fetched.snapshot.primaryWindow?.remainingPercent, 68)
     }
 
+    // MARK: - Antigravity retrieveUserQuota buckets
+
+    private func antigravityBucket(
+        modelId: String,
+        remaining: Double,
+        reset: String? = nil,
+        bucketId: String? = nil,
+        tokenType: String? = "WTUS"
+    ) -> [String: Any] {
+        var b: [String: Any] = ["modelId": modelId, "remainingFraction": remaining]
+        if let tokenType { b["tokenType"] = tokenType }
+        if let reset { b["resetTime"] = reset }
+        if let bucketId { b["bucketId"] = bucketId }
+        return b
+    }
+
+    private func antigravityFetch(buckets: [[String: Any]], at time: Date = Date(timeIntervalSince1970: 1_750_000_000)) -> AntigravityQuotaClient.Fetched {
+        AntigravityQuotaClient.parse(root: ["buckets": buckets], fetchedAt: time)
+    }
+
+    // MARK: - Antigravity retrieveUserQuotaSummary groups（真实 free-tier 响应）
+
+    /// 真实 `retrieveUserQuotaSummary`（免费版账号实测，2026-09-02）：
+    /// Gemini Models 组含 gemini-weekly（已用 15.6%）/ gemini-5h；
+    /// Claude and GPT models 组含 3p-weekly（已用 33.8%）/ 3p-5h。
+    private func antigravitySummaryGroups() -> [[String: Any]] {
+        [
+            [
+                "description": "Models within this group: Gemini Flash, Gemini Pro",
+                "displayName": "Gemini Models",
+                "buckets": [
+                    [
+                        "bucketId": "gemini-weekly",
+                        "displayName": "Weekly Limit Remaining",
+                        "description": "You have used some of your weekly limit, it will fully refresh in 6 days.",
+                        "remainingFraction": 0.8439504,
+                        "resetTime": "2026-09-08T07:27:48Z",
+                        "window": "weekly",
+                    ],
+                    [
+                        "bucketId": "gemini-5h",
+                        "displayName": "Five Hour Limit Remaining",
+                        "description": "",
+                        "remainingFraction": 1,
+                        "resetTime": "2026-09-02T11:23:08Z",
+                        "window": "5h",
+                    ],
+                ],
+            ],
+            [
+                "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+                "displayName": "Claude and GPT models",
+                "buckets": [
+                    [
+                        "bucketId": "3p-weekly",
+                        "displayName": "Weekly Limit Remaining",
+                        "description": "You have used some of your weekly limit, it will fully refresh in 6 days, 2 hours.",
+                        "remainingFraction": 0.6616248,
+                        "resetTime": "2026-09-08T09:29:14Z",
+                        "window": "weekly",
+                    ],
+                    [
+                        "bucketId": "3p-5h",
+                        "displayName": "Five Hour Limit Remaining",
+                        "description": "",
+                        "remainingFraction": 1,
+                        "resetTime": "2026-09-02T11:50:29Z",
+                        "window": "5h",
+                    ],
+                ],
+            ],
+        ]
+    }
+
+    /// 真实免费版账号的 retrieveUserQuotaSummary：应解析出第三方主 5h、第三方周、
+    /// Gemini 5h、Gemini 周四个窗口，且 Gemini 周与第三方周分别落到各自槽位。
+    func testAntigravitySummaryGroupsParseFourWindows() {
+        let fetched = AntigravityQuotaClient.parse(
+            root: ["groups": antigravitySummaryGroups()],
+            fetchedAt: Date(timeIntervalSince1970: 1_750_000_000)
+        )
+        let snap = fetched.snapshot
+
+        // 主条 = Gemini 5h（未用，100%），标签 Gemini 5H
+        XCTAssertEqual(snap.primaryLimit?.kind, .fiveHour)
+        XCTAssertEqual(snap.primaryLimit?.displayName, "Gemini 5H")
+        XCTAssertEqual(snap.primaryWindow?.usedPercent ?? 0, 0, accuracy: 0.01)
+        XCTAssertNotNil(snap.primaryWindow?.resetsAt)
+        // 副条 = Gemini 周（15.6% 已用），标签 Gemini WK
+        XCTAssertEqual(snap.secondaryLimit?.kind, .weekly)
+        XCTAssertEqual(snap.secondaryLimit?.displayName, "Gemini WK")
+        XCTAssertEqual(snap.secondaryWindow?.usedPercent ?? 0, 15.6, accuracy: 0.1)
+        XCTAssertEqual(snap.secondaryWindow?.windowSeconds, 7 * 24 * 3600)
+        XCTAssertNotNil(snap.secondaryWindow?.resetsAt)
+        // 辅助两行 = Claude 5H + Claude WK（33.8% 已用）
+        XCTAssertEqual(snap.auxiliaryLimits.count, 2)
+        XCTAssertEqual(snap.auxiliaryLimits[0].displayName, "Claude 5H")
+        XCTAssertEqual(snap.auxiliaryLimits[0].kind, .fiveHour)
+        XCTAssertEqual(snap.auxiliaryLimits[0].window.usedPercent ?? 0, 0, accuracy: 0.01)
+        XCTAssertEqual(snap.auxiliaryLimits[1].displayName, "Claude WK")
+        XCTAssertEqual(snap.auxiliaryLimits[1].kind, .weekly)
+        XCTAssertEqual(snap.auxiliaryLimits[1].window.usedPercent ?? 0, 33.8, accuracy: 0.1)
+        XCTAssertEqual(snap.auxiliaryLimits[1].window.windowSeconds, 7 * 24 * 3600)
+        // 不再使用 gemini 细行字段
+        XCTAssertNil(snap.geminiWindow)
+        XCTAssertNil(snap.geminiWeekly)
+    }
+
+    /// 无前缀（缺 gemini-/3p-）的旧结构：靠组 displayName 区分 Gemini 与第三方。
+    func testAntigravitySummaryGroupsFallbackToGroupNameWhenPrefixMissing() {
+        let groups: [[String: Any]] = [
+            ["displayName": "Gemini Models", "buckets": [
+                ["bucketId": "week", "window": "weekly", "remainingFraction": 0.9],
+                ["bucketId": "five_hour", "window": "5h", "remainingFraction": 0.8],
+            ]],
+            ["displayName": "Claude and GPT models", "buckets": [
+                ["bucketId": "week", "window": "weekly", "remainingFraction": 0.7],
+                ["bucketId": "five_hour", "window": "5h", "remainingFraction": 0.6],
+            ]],
+        ]
+        let fetched = AntigravityQuotaClient.parse(root: ["groups": groups], fetchedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        let snap = fetched.snapshot
+
+        // 主条 = Gemini 5h（20% used）
+        XCTAssertEqual(snap.primaryWindow?.usedPercent ?? 0, 20, accuracy: 0.01)
+        XCTAssertEqual(snap.primaryLimit?.displayName, "Gemini 5H")
+        // 副条 = Gemini WK（10% used）
+        XCTAssertEqual(snap.secondaryWindow?.usedPercent ?? 0, 10, accuracy: 0.01)
+        XCTAssertEqual(snap.secondaryLimit?.displayName, "Gemini WK")
+        // 辅助 = Claude 5H（40% used）+ Claude WK（30% used）
+        XCTAssertEqual(snap.auxiliaryLimits.map(\.displayName), ["Claude 5H", "Claude WK"])
+        XCTAssertEqual(snap.auxiliaryLimits[0].window.usedPercent ?? 0, 40, accuracy: 0.01)
+        XCTAssertEqual(snap.auxiliaryLimits[1].window.usedPercent ?? 0, 30, accuracy: 0.01)
+    }
+
+    /// loadCodeAssist：currentTier 才是真实层级，paidTier 只是可升级目标。
+    func testAntigravityLoadCodeAssistPrefersCurrentTierOverPaidTier() {
+        let root: [String: Any] = [
+            "currentTier": ["id": "free-tier", "name": "Antigravity"],
+            "paidTier": ["id": "g1-pro-tier", "name": "Google AI Pro"],
+        ]
+        let fetched = AntigravityQuotaClient.parse(root: root, fetchedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        XCTAssertEqual(fetched.snapshot.planType, "free-tier")
+    }
+
+    /// Free 账号真实响应：第三方（Claude/GPT）模型与 Gemini 模型各有 5h 轮换 reset，
+    /// 内部桶（chat_/tab_ 等无 reset、remaining=1）不代表额度窗口。
+    func testAntigravityRetrieveUserQuotaBucketsClassifiesThirdPartyAndGemini() {
+        let fetched = antigravityFetch(buckets: [
+            antigravityBucket(modelId: "chat_20706", remaining: 1),
+            antigravityBucket(modelId: "chat_23310", remaining: 1),
+            antigravityBucket(modelId: "claude-opus-4-6-thinking", remaining: 0.55, reset: "2026-09-02T11:04:10Z"),
+            antigravityBucket(modelId: "gpt-oss-120b-medium", remaining: 0.8, reset: "2026-09-02T11:04:10Z"),
+            antigravityBucket(modelId: "gemini-2.5-pro", remaining: 0.97, reset: "2026-09-02T06:23:08Z"),
+            antigravityBucket(modelId: "gemini-3.5-flash-low", remaining: 0.97, reset: "2026-09-02T06:23:08Z"),
+        ])
+
+        // 第三方 5h 主条：Claude 更紧张（45% used）
+        XCTAssertEqual(fetched.snapshot.primaryLimit?.kind, .fiveHour)
+        XCTAssertEqual(fetched.snapshot.primaryWindow?.usedPercent ?? 0, 45, accuracy: 0.01)
+        XCTAssertNotNil(fetched.snapshot.primaryWindow?.resetsAt)
+        // Gemini 轮换 5h（remaining 96.7 → 3.3% used）
+        XCTAssertEqual(fetched.snapshot.geminiWindow?.usedPercent ?? 0, 3, accuracy: 0.01)
+        XCTAssertNotNil(fetched.snapshot.geminiWindow?.resetsAt)
+        // 内部 / 未消耗桶不产生窗口
+        XCTAssertNil(fetched.snapshot.geminiWeekly)
+        XCTAssertNil(fetched.snapshot.secondaryLimit)
+        XCTAssertNil(fetched.snapshot.weekly)
+    }
+
+    /// 未消耗（remaining=1 且无 reset）的第三方桶，不应被当成有效额度窗口。
+    func testAntigravityRetrieveUserQuotaIgnoresUnconsumedPlaceholders() {
+        let fetched = antigravityFetch(buckets: [
+            antigravityBucket(modelId: "claude-sonnet-4-6", remaining: 1),
+            antigravityBucket(modelId: "gemini-2.5-pro", remaining: 1),
+        ])
+
+        XCTAssertNil(fetched.snapshot.primaryLimit)
+        XCTAssertNil(fetched.snapshot.secondaryLimit)
+        XCTAssertNil(fetched.snapshot.geminiWindow)
+        XCTAssertNil(fetched.snapshot.geminiWeekly)
+    }
+
+    /// 同一窗口多个模型：只取最紧张（remaining 最小）的一个作为主额度。
+    func testAntigravityRetrieveUserQuotaTakesTightestBucket() {
+        let fetched = antigravityFetch(buckets: [
+            antigravityBucket(modelId: "claude-sonnet-4-6", remaining: 0.85, reset: "2026-09-02T11:04:10Z"),
+            antigravityBucket(modelId: "claude-opus-4-6-thinking", remaining: 0.45, reset: "2026-09-02T11:04:10Z"),
+        ])
+
+        XCTAssertEqual(fetched.snapshot.primaryLimit?.kind, .fiveHour)
+        XCTAssertEqual(fetched.snapshot.primaryWindow?.usedPercent ?? 0, 55, accuracy: 0.01)
+    }
+
+    /// 富化补齐周额度：主条已是 5h 时，周额度应落在 secondary 而不是被丢掉。
+    func testAntigravityRetrieveUserQuotaWeeklyFillsSecondarySlot() {
+        let fetched = antigravityFetch(buckets: [
+            antigravityBucket(modelId: "claude-opus-4-6-thinking", remaining: 0.55, reset: "2026-09-02T11:04:10Z"),
+            antigravityBucket(modelId: "gemini-2.5-pro", remaining: 0.97, reset: "2026-09-02T06:23:08Z"),
+            antigravityBucket(modelId: "claude-opus-4-6", remaining: 0.9, reset: "2026-09-07T00:00:00Z", bucketId: "WEEKLY"),
+        ])
+
+        XCTAssertEqual(fetched.snapshot.primaryLimit?.kind, .fiveHour)
+        XCTAssertEqual(fetched.snapshot.primaryWindow?.usedPercent ?? 0, 45, accuracy: 0.01)
+        XCTAssertEqual(fetched.snapshot.secondaryLimit?.kind, .weekly)
+        XCTAssertEqual(fetched.snapshot.secondaryWindow?.usedPercent ?? 0, 10, accuracy: 0.01)
+        XCTAssertEqual(fetched.snapshot.weekly?.usedPercent ?? 0, 10, accuracy: 0.01)
+    }
+
+    /// merge 语义：base 已有 primary(5h)，富化只含 weekly 时 secondary 应被补齐且保持周语义。
+    func testAntigravityMergeFillsSecondaryWeeklyWithoutOverwritingPrimary() {
+        // base: 5h 第三方窗口（claude-opus…5h）
+        let base = antigravityFetch(buckets: [
+            antigravityBucket(modelId: "claude-opus-4-6-thinking", remaining: 0.55, reset: "2026-09-02T11:04:10Z"),
+        ])
+        XCTAssertEqual(base.snapshot.primaryLimit?.kind, .fiveHour)
+        XCTAssertNil(base.snapshot.secondaryLimit)
+
+        // enrichment: 只有 weekly 桶（无 5h）
+        let enrichment = antigravityFetch(buckets: [
+            antigravityBucket(modelId: "claude-opus-4-6", remaining: 0.9, reset: "2026-09-07T00:00:00Z", bucketId: "WEEKLY"),
+        ])
+        XCTAssertEqual(enrichment.snapshot.primaryLimit?.kind, .weekly, "只有 weekly 时主条应为 weekly")
+
+        // merge 应把 weekly 挂到 secondary，同时保留 base 的 5h 主条
+        let merged = AntigravityQuotaClient.merge(base: base, enrichment: enrichment)
+
+        XCTAssertEqual(merged.snapshot.primaryLimit?.kind, .fiveHour)
+        XCTAssertEqual(merged.snapshot.primaryWindow?.usedPercent ?? 0, 45, accuracy: 0.01)
+        XCTAssertEqual(merged.snapshot.secondaryLimit?.kind, .weekly)
+        XCTAssertEqual(merged.snapshot.secondaryLimit?.window.usedPercent ?? 0, 10, accuracy: 0.01)
+    }
+
+    /// merge 时 base（loadCodeAssist）无 aux，富化（retrieveUserQuotaSummary）带
+    /// Claude 5H / Claude WK 两行：aux 必须被补进快照，否则 UI 只剩 Gemini 两行。
+    func testAntigravityMergeCarriesAuxiliaryLimitsFromSummary() {
+        // base：loadCodeAssist 无任何额度窗口
+        let base = AntigravityQuotaClient.parse(
+            root: ["currentTier": ["id": "free-tier"]],
+            fetchedAt: Date(timeIntervalSince1970: 1_750_000_000)
+        )
+        XCTAssertNil(base.snapshot.primaryLimit)
+        XCTAssertTrue(base.snapshot.auxiliaryLimits.isEmpty)
+
+        // enrichment：retrieveUserQuotaSummary 分组源
+        let enrichment = AntigravityQuotaClient.parse(
+            root: ["groups": antigravitySummaryGroups()],
+            fetchedAt: Date(timeIntervalSince1970: 1_750_000_000)
+        )
+        XCTAssertEqual(enrichment.snapshot.auxiliaryLimits.map(\.displayName), ["Claude 5H", "Claude WK"])
+
+        let merged = AntigravityQuotaClient.merge(base: base, enrichment: enrichment)
+
+        XCTAssertEqual(merged.snapshot.primaryLimit?.displayName, "Gemini 5H")
+        XCTAssertEqual(merged.snapshot.secondaryLimit?.displayName, "Gemini WK")
+        XCTAssertEqual(merged.snapshot.auxiliaryLimits.map(\.displayName), ["Claude 5H", "Claude WK"])
+    }
+
     func testCodexTemporaryWeeklyOnlyResponseUsesWeeklyAsPrimary() {
         let fetched = CodexQuotaClient.parse(root: codexRoot(
             primarySeconds: 604_800,

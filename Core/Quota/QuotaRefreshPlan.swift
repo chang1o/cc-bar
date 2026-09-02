@@ -6,6 +6,7 @@ import Foundation
 struct QuotaRefreshPlan: Equatable, Sendable {
     var refreshCodex: Bool
     var refreshClaude: Bool
+    var refreshAntigravity: Bool
     var refreshCursor: Bool
     var refreshCommandCode: Bool
     /// 有可见导入 Codex 账号时需要调度导入刷新（是否真正刷新仍按各账号
@@ -19,6 +20,7 @@ struct QuotaRefreshPlan: Equatable, Sendable {
     static func make(
         showCodex: Bool,
         showClaude: Bool,
+        showAntigravity: Bool = false,
         showCursor: Bool,
         showCommandCode: Bool = false,
         hasVisibleImported: Bool
@@ -26,6 +28,7 @@ struct QuotaRefreshPlan: Equatable, Sendable {
         QuotaRefreshPlan(
             refreshCodex: showCodex,
             refreshClaude: showClaude,
+            refreshAntigravity: showAntigravity,
             refreshCursor: showCursor,
             refreshCommandCode: showCommandCode,
             refreshImported: hasVisibleImported,

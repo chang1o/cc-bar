@@ -99,9 +99,10 @@ struct ProviderDisplaySettings: Sendable, Codable, Equatable {
 
     /// Cursor 与 Command Code 首次出现时保持关闭；只有用户主动开启后，
     /// 才会进入远端刷新链路，避免未配置的机器产生后台失败状态。
+    /// Antigravity 默认开启（云端凭据直连，无本地进程依赖）。
     static func defaults(for app: QuotaApp) -> ProviderDisplaySettings {
         switch app {
-        case .codex, .claude:
+        case .codex, .claude, .antigravity:
             enabledByDefault
         case .cursor:
             ProviderDisplaySettings(enabled: false, menuBar: false, floatingHUD: false)
@@ -164,6 +165,10 @@ final class SettingsStore {
         get { isProviderEnabled(.claude) }
         set { setProviderEnabled(newValue, for: .claude) }
     }
+    var showAntigravity: Bool {
+        get { isProviderEnabled(.antigravity) }
+        set { setProviderEnabled(newValue, for: .antigravity) }
+    }
     var menuBarShowCodex: Bool {
         get { isProviderShownInMenuBar(.codex) }
         set { setProviderShownInMenuBar(newValue, for: .codex) }
@@ -171,6 +176,10 @@ final class SettingsStore {
     var menuBarShowClaude: Bool {
         get { isProviderShownInMenuBar(.claude) }
         set { setProviderShownInMenuBar(newValue, for: .claude) }
+    }
+    var menuBarShowAntigravity: Bool {
+        get { isProviderShownInMenuBar(.antigravity) }
+        set { setProviderShownInMenuBar(newValue, for: .antigravity) }
     }
 
     // 菜单栏
@@ -185,6 +194,10 @@ final class SettingsStore {
     var floatingShowClaude: Bool {
         get { isProviderShownInFloatingHUD(.claude) }
         set { setProviderShownInFloatingHUD(newValue, for: .claude) }
+    }
+    var floatingShowAntigravity: Bool {
+        get { isProviderShownInFloatingHUD(.antigravity) }
+        set { setProviderShownInFloatingHUD(newValue, for: .antigravity) }
     }
 
     // 刷新
