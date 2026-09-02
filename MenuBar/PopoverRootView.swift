@@ -422,7 +422,7 @@ private struct ServiceBlockView: View {
     }
 
     private var bodyRow: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .center, spacing: 10) {
             // 左:主要额度大百分比 + 动态窗口标签
             VStack(alignment: .center, spacing: 4) {
                 // 与 Codex / Claude 的「数值 + 窗口标签」同构：这里放值，下面的
@@ -454,7 +454,9 @@ private struct ServiceBlockView: View {
                     .font(.system(size: 9, weight: .semibold))
                     .kerning(0.5)
                     .foregroundStyle(.quaternary)
+                    .lineLimit(1)
             }
+            .frame(width: 72, alignment: .center)
 
             // 右:主要额度进度条 + 两行(数值 / label)
             VStack(alignment: .leading, spacing: 8) {
@@ -505,14 +507,13 @@ private struct ServiceBlockView: View {
     private func compactLimitRow(_ limit: QuotaLimit) -> some View {
         let remaining = limit.window.remainingPercent
         let color = statusColor(remainingPercent: remaining, tint: tint)
-        let labelWidth: CGFloat = app == .antigravity ? 88 : 70 // 官方组名“CLAUDE 5H”比 5HOUR 宽
         return HStack(spacing: 10) {
             Text(compactLimitLabel(limit))
                 .font(.system(size: 9, weight: .semibold))
                 .kerning(0.6)
                 .foregroundStyle(.quaternary)
                 .lineLimit(1)
-                .frame(width: labelWidth, alignment: .leading)
+                .frame(width: 72, alignment: .leading)
 
             ProgressBar(value: remaining / 100, tint: color, height: 2.5)
 
@@ -520,8 +521,10 @@ private struct ServiceBlockView: View {
                 .font(.system(size: 10.5, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(color)
+                .frame(width: 32, alignment: .trailing)
 
             compactLimitStatus(limit)
+                .frame(width: 52, alignment: .trailing)
         }
     }
 
@@ -534,14 +537,17 @@ private struct ServiceBlockView: View {
             Text(tr("Unused", "尚未使用"))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.quaternary)
+                .lineLimit(1)
         } else if let resetsAt = limit.window.resetsAt {
             ResetTimeText(resetsAt: resetsAt)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.quaternary)
+                .lineLimit(1)
         } else {
             Text(tr("Unknown", "未知"))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.quaternary)
+                .lineLimit(1)
         }
     }
 
