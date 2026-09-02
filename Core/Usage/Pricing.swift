@@ -44,7 +44,9 @@ nonisolated enum Pricing {
     /// `anthropic/` / `deepseek/` / `opencode-go/` / `commandcode/` / `command-code/`
     /// 和末尾 `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
     static let table: [String: ModelPrice] = [
-        // —— Claude 4.x 系（input 已不含 cache_read）——
+        // —— Claude 4.x / 5.x 系（input 已不含 cache_read）——
+        "claude-fable-5.1":  .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
+        "claude-fable-5-1":  .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
         "claude-fable-5":    .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
         "claude-opus-5":     .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-8":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
@@ -53,6 +55,7 @@ nonisolated enum Pricing {
         "claude-opus-4-5":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-1":   .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
         "claude-opus-4":     .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
+        // Sonnet 5 官方已确认 / 为固定标准价（原定 2026-09-01 涨价 / 已取消），列入 fixedLocalOverrideKeys 锁死。
         // Sonnet 5 官方已确认 $2/$10 为固定标准价（原定 2026-09-01 涨价 $3/$15 已取消），列入 fixedLocalOverrideKeys 锁死。
         "claude-sonnet-5":   .init(input: 2,   output: 10,  cacheRead: 0.20, cacheCreation: 2.50),
         "claude-sonnet-4-7": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
@@ -61,33 +64,65 @@ nonisolated enum Pricing {
         "claude-sonnet-4":   .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
         "claude-haiku-4-5":  .init(input: 1,   output: 5,   cacheRead: 0.10, cacheCreation: 1.25),
         "claude-haiku-4":    .init(input: 0.8, output: 4,   cacheRead: 0.08, cacheCreation: 1.0),
+        // —— Claude 3.5 / 3 经典系 ——
+        "claude-3-5-sonnet": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
+        "claude-3-5-haiku":  .init(input: 0.8, output: 4,   cacheRead: 0.08, cacheCreation: 1.0),
+        "claude-3-opus":     .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
 
         // —— Codex / GPT-5 系（input 含 cache_read，调用侧已扣 billable）。
-        "gpt-5":             .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
-        "gpt-5-mini":        .init(input: 0.25, output: 2,   cacheRead: 0.025, cacheCreation: 0),
-        "gpt-5-nano":        .init(input: 0.05, output: 0.40, cacheRead: 0.005, cacheCreation: 0),
-        "gpt-5-codex":       .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
-        "gpt-5.1":           .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
-        "gpt-5.1-codex":     .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
-        "gpt-5.2":           .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
-        "gpt-5.3":           .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
-        "gpt-5.4":           .init(input: 2.50, output: 15,  cacheRead: 0.25,  cacheCreation: 0),
-        "gpt-5.4-codex":     .init(input: 2.50, output: 15,  cacheRead: 0.25,  cacheCreation: 0),
+        "gpt-5.6":           .init(input: 5,    output: 30,  cacheRead: 0.50, cacheCreation: 6.25),
+        "gpt-5.6-sol":       .init(input: 5,    output: 30,  cacheRead: 0.50, cacheCreation: 6.25),
+        "gpt-5.6-terra":     .init(input: 2,    output: 12,  cacheRead: 0.20, cacheCreation: 2.5),
+        "gpt-5.6-luna":      .init(input: 0.20, output: 1.20, cacheRead: 0.02, cacheCreation: 0.25),
+        "gpt-5.6-cyber":     .init(input: 12.5, output: 75,  cacheRead: 1.25, cacheCreation: 15.625),
         "gpt-5.5":           .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "gpt-5.5-codex":     .init(input: 5,    output: 30,  cacheRead: 0.50,  cacheCreation: 0),
         "gpt-5.5-pro":       .init(input: 30,   output: 180, cacheRead: 30,    cacheCreation: 0),
+        "gpt-5.4":           .init(input: 2.50, output: 15,  cacheRead: 0.25,  cacheCreation: 0),
+        "gpt-5.4-codex":     .init(input: 2.50, output: 15,  cacheRead: 0.25,  cacheCreation: 0),
+        "gpt-5.4-mini":      .init(input: 0.25, output: 2,   cacheRead: 0.025, cacheCreation: 0),
+        "gpt-5.3":           .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5.3-codex":     .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5.2":           .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5.2-codex":     .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5.1":           .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5.1-codex":     .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5":             .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5-codex":       .init(input: 1.25, output: 10,  cacheRead: 0.125, cacheCreation: 0),
+        "gpt-5-mini":        .init(input: 0.25, output: 2,   cacheRead: 0.025, cacheCreation: 0),
+        "gpt-5-nano":        .init(input: 0.05, output: 0.40, cacheRead: 0.005, cacheCreation: 0),
         "codex-mini-latest": .init(input: 1.50, output: 6,   cacheRead: 0.375, cacheCreation: 0),
+
+        // —— OpenAI 经典常用与推理模型 ——
+        "gpt-4o":            .init(input: 2.50, output: 10,  cacheRead: 1.25,  cacheCreation: 0),
+        "gpt-4o-mini":       .init(input: 0.15, output: 0.60, cacheRead: 0.075, cacheCreation: 0),
+        "o1":                .init(input: 15,   output: 60,  cacheRead: 7.50,  cacheCreation: 0),
+        "o1-mini":           .init(input: 1.10, output: 4.40, cacheRead: 0.55,  cacheCreation: 0),
+        "o3":                .init(input: 2.00, output: 8.00, cacheRead: 1.00,  cacheCreation: 0),
+        "o3-mini":           .init(input: 1.10, output: 4.40, cacheRead: 0.55,  cacheCreation: 0),
+        "o4-mini":           .init(input: 1.10, output: 4.40, cacheRead: 0.55,  cacheCreation: 0),
+
+        // —— Cursor 官方模型 ——
+        "composer-2.5":         .init(input: 3,    output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
+        "cursor-composer-2-5":  .init(input: 3,    output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
+        "grok-4-6":             .init(input: 2,    output: 6,   cacheRead: 0.50, cacheCreation: 0),
+        "grok-4-5":             .init(input: 2,    output: 6,   cacheRead: 0.50, cacheCreation: 0),
+
+        // —— Google Gemini 系列 ——
+        "gemini-3.7-flash":  .init(input: 0.10, output: 0.40, cacheRead: 0.025,  cacheCreation: 0),
+        "gemini-3.1-pro":    .init(input: 1.25, output: 5.00, cacheRead: 0.3125, cacheCreation: 0),
 
         // —— DeepSeek 系列（与 cc-switch seed_model_pricing 对齐）——
         // 缓存语义：通过 Anthropic 兼容端点使用时 input 不含 cache_read，直接乘价。
         // V4 系列官方 CNY 按 1 USD ≈ 7.14 折算。
-        "deepseek-v4-pro":    .init(input: 0.435, output: 0.87,  cacheRead: 0.003625, cacheCreation: 0),
-        "deepseek-v4-flash":  .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
-        "deepseek-v3.2":      .init(input: 0.28,  output: 0.42,  cacheRead: 0.028,    cacheCreation: 0),
-        "deepseek-v3.1":      .init(input: 0.55,  output: 1.67,  cacheRead: 0.055,    cacheCreation: 0),
-        "deepseek-v3":        .init(input: 0.28,  output: 1.11,  cacheRead: 0.028,    cacheCreation: 0),
-        "deepseek-chat":      .init(input: 0.27,  output: 1.10,  cacheRead: 0.07,     cacheCreation: 0),
-        "deepseek-reasoner":  .init(input: 0.55,  output: 2.19,  cacheRead: 0.14,     cacheCreation: 0),
+        "deepseek-v4-pro":              .init(input: 0.435, output: 0.87,  cacheRead: 0.003625, cacheCreation: 0),
+        "deepseek-v4-flash":            .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
+        "deepseek-v4-flash-vision-exp": .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
+        "deepseek-v3.2":                .init(input: 0.28,  output: 0.42,  cacheRead: 0.028,    cacheCreation: 0),
+        "deepseek-v3.1":                .init(input: 0.55,  output: 1.67,  cacheRead: 0.055,    cacheCreation: 0),
+        "deepseek-v3":                  .init(input: 0.28,  output: 1.11,  cacheRead: 0.028,    cacheCreation: 0),
+        "deepseek-chat":                .init(input: 0.27,  output: 1.10,  cacheRead: 0.07,     cacheCreation: 0),
+        "deepseek-reasoner":            .init(input: 0.55,  output: 2.19,  cacheRead: 0.14,     cacheCreation: 0),
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
     ]
 
