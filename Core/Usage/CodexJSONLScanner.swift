@@ -7,6 +7,13 @@ import Foundation
 ///   - `type=event_msg`，`payload.type=token_count`，`payload.info.last_token_usage` 是本次调用的真实 token；
 ///     使用 last_token_usage 直接累计；累计 total_token_usage 未变化的设置回显事件跳过。
 /// Codex `input_tokens` 含 cache_read；GPT-5.6 若日志提供 `cache_write_tokens` 也需从普通输入扣掉。
+///
+/// fork 会话（`session_meta.payload.forked_from_id`）的 JSONL 会把父会话已有的整段历史
+/// **逐字节重放**进新文件（只改写 timestamp），其中包含父会话全部 `token_count`；同一份历史
+/// 因此出现在多个文件里。重放段没有任何事件级标记，也不能靠「`session_meta.id` 与文件自身
+/// 不符」判定——fork 之后的新调用不会再写自己的 `session_meta`，同样挂在父 id 下。
+/// 唯一可靠的判据是跨文件按 `(发出该记录的会话 id, 累计用量签名)` 去重：重放行与父文件里
+/// 的原始行同键，fork 之后的新调用累计值更高、键不同，正常入账（做法同 Pi 的 `/fork` 去重）。
 enum CodexJSONLScanner {
     struct ThreadSettings: Sendable, Equatable {
         var model: String?
@@ -17,6 +24,7 @@ enum CodexJSONLScanner {
         var entries: [UsageEntry]
         var conversationSeeds: [ConversationSeed]
         var newState: [String: ScanFileState]
+        var newSeenIds: [String]
         var filesScanned: Int
         var linesParsed: Int
         var failedFileCount: Int
@@ -28,6 +36,7 @@ enum CodexJSONLScanner {
 
     nonisolated static func scan(
         previous: [String: ScanFileState],
+        seenTokenIds: [String],
         onProgress: ScanProgressCallback? = nil
     ) async -> Result {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -37,6 +46,7 @@ enum CodexJSONLScanner {
         ]
         return await scan(
             previous: previous,
+            seenTokenIds: seenTokenIds,
             roots: roots,
             indexedTitles: ConversationTitleIndex.codexTitles(),
             onProgress: onProgress
@@ -44,12 +54,15 @@ enum CodexJSONLScanner {
     }
 
     /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
-    /// 文件间并行解析（`maxConcurrentFiles` 路），结果按原始顺序合并，
+    /// 文件间并行解析（`maxConcurrentFiles` 路），结果按会话 UUID 升序合并，
     /// 解析结果与串行实现完全一致。
+    /// - Parameter seenTokenIds: 上一轮持久化的跨文件去重键；缺省为空表示本轮从零建集合
+    ///   （全量重扫走这条，测试同理）。
     /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter onProgress: 非 nil 时按批回报一次扫描进度。
     nonisolated static func scan(
         previous: [String: ScanFileState],
+        seenTokenIds: [String] = [],
         roots: [URL],
         indexedTitles: [String: String],
         minimumMtime: Date? = nil,
@@ -74,20 +87,32 @@ enum CodexJSONLScanner {
                 }
             }
         }
-        let files = Array(filesByID.values)
+        // 按会话 ID 升序：Codex 会话 ID 是 UUIDv7，前 48 位就是创建时刻的毫秒时间戳，
+        // 字典序即会话创建序，父会话一定排在由它 fork 出的会话之前。跨文件去重只保留
+        // 首次出现的那条，顺序不确定时会改成丢掉父文件里的原始记录、留下 fork 重放的
+        // 副本——后者的 timestamp 被改写成 fork 时刻，用量会归错天。
+        let files = filesByID.values.sorted { lhs, rhs in
+            let l = conversationID(from: lhs.url) ?? lhs.path
+            let r = conversationID(from: rhs.url) ?? rhs.path
+            return l == r ? lhs.path < rhs.path : l < r
+        }
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []
         var seeds: [String: ConversationSeed] = [:]
         var linesParsed = 0
         var failedFileCount = failedRootCount
+        // 跨文件去重：fork 会话把父会话的整段 token_count 历史重放进自己的 JSONL，
+        // 同一条记录因此出现在多个文件里。键为 `发出该记录的会话 id#累计用量签名`。
+        var seen = SeenIDSet(seenTokenIds)
         // 本批次内出现过 cache_write 的会话 key；避免每个文件收尾时对全部
         // 已累积 entries 做线性 contains（全量重扫时是平方级开销）。
         var cacheCreationKeys: Set<String> = []
 
         // 文件间并行解析：每批 maxConcurrentFiles 个，批内结果合并后再取下一批。
-        // 合并按文件原始顺序进行，跨文件共享的 cacheCreationKeys 语义不变——
-        // 本批次任意文件写过的会话，最终统一补标到 seed。
+        // 合并严格按文件原始顺序进行：跨文件去重只保留首次出现的记录，顺序必须确定，
+        // 否则 fork 重放行与父文件原始行谁被保留会随机漂移。cacheCreationKeys 同样在
+        // 合并阶段收集——只有真正入账的记录才给会话补标。
         let totalFiles = files.count
         let maxConcurrent = Self.maxConcurrentFiles
         var offset = 0
@@ -129,16 +154,21 @@ enum CodexJSONLScanner {
                     continue
                 }
                 newState[result.stateKey] = result.state
-                entries.append(contentsOf: result.entries)
                 linesParsed += result.linesParsed
                 if result.readFailed { failedFileCount += 1 }
-                for key in result.cacheCreationKeys {
-                    cacheCreationKeys.insert(key)
-                }
-                if let seedKey = result.seedKey, var seed = result.seed {
-                    if seed.cacheCreationAvailable {
-                        cacheCreationKeys.insert(seedKey)
+                // 去重放在合并阶段：单文件解析是并发的，不能共享 seen 集合；
+                // batchResults 已按文件原始顺序排好，这里的插入顺序仍是确定的。
+                for pending in result.entries {
+                    if let key = pending.dedupeKey {
+                        if seen.contains(key) { continue }
+                        seen.insert(key)
                     }
+                    entries.append(pending.entry)
+                    if pending.hasCacheCreation {
+                        cacheCreationKeys.insert(pending.entry.conversationKey)
+                    }
+                }
+                if let seedKey = result.seedKey, let seed = result.seed {
                     seeds[seedKey] = seed
                 }
             }
@@ -177,29 +207,39 @@ enum CodexJSONLScanner {
             entries: entries,
             conversationSeeds: Array(seeds.values),
             newState: newState,
+            // 控制集合大小：按插入顺序保留最近 N 条（见 SeenIDSet）。
+            newSeenIds: seen.capped(to: SeenIDSet.defaultLimit),
             filesScanned: files.count,
             linesParsed: linesParsed,
             failedFileCount: failedFileCount
         )
     }
 
+    /// 单文件解析出的一条待入账记录。是否真正入账由合并阶段的跨文件去重决定，
+    /// 因此 `hasCacheCreation` 也要跟着记录走——被去掉的重放行不该给会话打上
+    /// 「有 cache_creation」的标记，那条信息由保留下来的原始记录提供。
+    private nonisolated struct PendingCodexEntry: Sendable {
+        var entry: UsageEntry
+        /// `发出该记录的会话 id#累计用量签名`；签名缺失时为 nil（不参与去重）。
+        var dedupeKey: String?
+        var hasCacheCreation: Bool
+    }
+
     /// 单个文件的解析结果，供并发批处理合并。
     private nonisolated struct CodexFileScanResult: Sendable {
         var stateKey: String
         var state: ScanFileState
-        var entries: [UsageEntry]
+        var entries: [PendingCodexEntry]
         var seedKey: String?
         var seed: ConversationSeed?
-        var cacheCreationKeys: [String]
         var linesParsed: Int
         var readFailed: Bool
         var fileDisappeared: Bool = false
     }
 
     /// 解析单个 JSONL 文件（无共享可变状态，可并发执行）。
-    /// 原串行实现中每个文件收尾时用"全局 cacheCreationKeys"判断 seed 的
-    /// cacheCreationAvailable；并发版把本文件写过的会话 key 放进
-    /// `cacheCreationKeys` 返回，由调用方合并后统一补标，语义等价。
+    /// seed 的 cacheCreationAvailable 一律留给调用方在合并后统一补标：
+    /// 本文件是否写过 cache_creation，要等跨文件去重筛掉重放行之后才算数。
     private nonisolated static func scanSingleFile(
         file: JSONLFileDescriptor,
         previous: [String: ScanFileState],
@@ -233,7 +273,6 @@ enum CodexJSONLScanner {
                         includesSubtasks: false,
                         cacheCreationAvailable: false
                     ),
-                    cacheCreationKeys: [],
                     linesParsed: 0,
                     readFailed: false
                 )
@@ -244,7 +283,6 @@ enum CodexJSONLScanner {
                 entries: [],
                 seedKey: nil,
                 seed: nil,
-                cacheCreationKeys: [],
                 linesParsed: 0,
                 readFailed: false
             )
@@ -258,11 +296,15 @@ enum CodexJSONLScanner {
         var currentModel = state.lastModel
         var currentSpeed = state.lastServiceTier ?? .standard
         var lastTotalUsageSignature = state.lastCodexTotalUsageSignature
-        var sessionID = state.conversationID ?? filenameID
+        // 本文件自身的会话 ID：只由首条 session_meta（或文件名 UUID）决定，
+        // 决定用量与会话种子的归属，绝不被 fork 重放进来的父会话 session_meta 覆盖。
+        var ownSessionID = state.conversationID ?? filenameID
+        // 发出当前这批记录的会话 ID：跟随每条 session_meta 变化，重放段里指向父会话。
+        // 只用于生成跨文件去重键，让重放行与父文件里的原始行同键。
+        var emittingSessionID = state.lastCodexEmittingSessionID ?? ownSessionID
         var sessionCwd = state.conversationCwd ?? ""
         var fallbackTitle = state.fallbackTitle
-        var entries: [UsageEntry] = []
-        var fileCacheCreationKeys: [String] = []
+        var entries: [PendingCodexEntry] = []
         // 按批流式解析：单文件不再把整份内容和全部行同时读进内存。
         let outcome = JSONLLineReader.streamLines(url: url, fromOffset: state.offset) { batch in
             for line in batch {
@@ -272,8 +314,13 @@ enum CodexJSONLScanner {
                 let type = root["type"] as? String
 
                 if type == "session_meta", let payload = root["payload"] as? [String: Any] {
-                    sessionID = (payload["id"] as? String) ?? (payload["session_id"] as? String) ?? sessionID
-                    sessionCwd = (payload["cwd"] as? String) ?? sessionCwd
+                    let metaID = (payload["id"] as? String) ?? (payload["session_id"] as? String)
+                    if ownSessionID == nil { ownSessionID = metaID }
+                    if let metaID { emittingSessionID = metaID }
+                    // fork 文件里混着父会话原样重放的 session_meta，只有自身那条能定义会话元数据。
+                    if metaID == nil || metaID == ownSessionID {
+                        sessionCwd = (payload["cwd"] as? String) ?? sessionCwd
+                    }
                     continue
                 }
 
@@ -325,7 +372,7 @@ enum CodexJSONLScanner {
                     ts = Date()
                 }
                 let model = currentModel ?? "unknown"
-                guard let resolvedID = sessionID else { continue }
+                guard let resolvedID = ownSessionID else { continue }
                 if let totalSignature { lastTotalUsageSignature = totalSignature }
                 let cost = Pricing.costBreakdown(
                     app: .codex,
@@ -338,10 +385,7 @@ enum CodexJSONLScanner {
                     at: ts,
                     inputTotal: inputTotal
                 )
-                if cacheWrite > 0 {
-                    fileCacheCreationKeys.append("codex:\(resolvedID)")
-                }
-                entries.append(UsageEntry(
+                let entry = UsageEntry(
                     app: .codex,
                     conversationKey: "codex:\(resolvedID)",
                     model: Pricing.normalize(model: model),
@@ -354,6 +398,14 @@ enum CodexJSONLScanner {
                     cacheCreationTokens: cacheWrite,
                     costUSD: cost?.total,
                     costBreakdown: cost
+                )
+                entries.append(PendingCodexEntry(
+                    entry: entry,
+                    dedupeKey: dedupeKey(
+                        emittingSessionID: emittingSessionID,
+                        totalUsageSignature: totalSignature
+                    ),
+                    hasCacheCreation: cacheWrite > 0
                 ))
             }
         }
@@ -369,7 +421,6 @@ enum CodexJSONLScanner {
                 entries: [],
                 seedKey: nil,
                 seed: nil,
-                cacheCreationKeys: [],
                 linesParsed: 0,
                 readFailed: false,
                 fileDisappeared: true
@@ -381,7 +432,6 @@ enum CodexJSONLScanner {
                 entries: [],
                 seedKey: nil,
                 seed: nil,
-                cacheCreationKeys: [],
                 linesParsed: 0,
                 readFailed: true
             )
@@ -392,13 +442,14 @@ enum CodexJSONLScanner {
         state.lastModel = currentModel
         state.lastServiceTier = currentSpeed
         state.lastCodexTotalUsageSignature = lastTotalUsageSignature
-        state.conversationID = sessionID
+        state.lastCodexEmittingSessionID = emittingSessionID
+        state.conversationID = ownSessionID
         state.conversationCwd = sessionCwd
         state.fallbackTitle = fallbackTitle
 
         var seedKey: String?
         var seed: ConversationSeed?
-        if let id = sessionID {
+        if let id = ownSessionID {
             seedKey = "codex:\(id)"
             var projectResolver = ConversationProjectResolver()
             seed = ConversationSeed(
@@ -410,7 +461,8 @@ enum CodexJSONLScanner {
                 gitBranch: nil,
                 sourcePath: path,
                 includesSubtasks: false,
-                cacheCreationAvailable: fileCacheCreationKeys.contains(seedKey!)
+                // 由调用方在跨文件去重之后统一补标（见 scan 收尾）。
+                cacheCreationAvailable: false
             )
         }
         return CodexFileScanResult(
@@ -419,7 +471,6 @@ enum CodexJSONLScanner {
             entries: entries,
             seedKey: seedKey,
             seed: seed,
-            cacheCreationKeys: fileCacheCreationKeys,
             linesParsed: linesParsed,
             readFailed: false
         )
@@ -486,11 +537,30 @@ enum CodexJSONLScanner {
         return values.joined(separator: ":")
     }
 
+    /// 跨文件去重键：`发出该记录的会话 id#累计用量签名`。
+    ///
+    /// 用 `totalUsageSignature` 的完整六字段而不是单个 `total_tokens`：会话内累计值本该单调
+    /// 递增（切换设置时回显的重复记录已由 `lastCodexTotalUsageSignature` 在解析阶段滤掉），
+    /// 但 compact / 上下文重置若让累计值回落，单字段键就可能让两条真实记录撞键、误删其一。
+    /// 六字段全部相同才判为同一条记录，代价只是每个键多约 35 字节。
+    ///
+    /// fork 重放的行连同父会话的 session_meta 一起搬过来，`emittingSessionID` 与累计签名都与
+    /// 父文件里的原始行一致，因此天然同键。签名缺失（累计用量全 0 或没有该字段）时返回 nil，
+    /// 不参与去重——宁可重复也不误删。
+    nonisolated static func dedupeKey(
+        emittingSessionID: String?,
+        totalUsageSignature: String?
+    ) -> String? {
+        guard let emittingSessionID, let totalUsageSignature else { return nil }
+        return "\(emittingSessionID)#\(totalUsageSignature)"
+    }
+
     /// 文件被截断后，offset 与依赖前文的 Codex 解析上下文必须一起重置。
     nonisolated static func resetForTruncation(_ state: inout ScanFileState) {
         state.offset = 0
         state.lastModel = nil
         state.lastServiceTier = nil
         state.lastCodexTotalUsageSignature = nil
+        state.lastCodexEmittingSessionID = nil
     }
 }

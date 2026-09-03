@@ -10,6 +10,9 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var lastServiceTier: UsageSpeed?
     /// Codex 用：最近一次累计 total_token_usage 的稳定签名，过滤切换设置时重复发出的旧 token_count。
     var lastCodexTotalUsageSignature: String?
+    /// Codex 用：最近一条 `session_meta` 的会话 ID。fork 会话的 JSONL 里混有父会话原样重放的
+    /// session_meta，它与文件自身的会话 ID 不同；续扫时要接上这个上下文才能生成正确的跨文件去重键。
+    var lastCodexEmittingSessionID: String?
     /// 对话元数据：Codex 用于跨 active/archive 复用 watermark；Claude 用于未变化文件的轻量项目重解析。
     var conversationID: String?
     var conversationCwd: String?
@@ -28,7 +31,9 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// v11: 新增 opencode 扫描 watermark（`opencodeLastMessageTime` / `opencodeSeenMessageIds`）。
     /// v12: Pi/OpenCode 统一费用解析规则改变，旧扫描结果必须全量重算。
     /// v13: 项目归属隐私分级——受 TCC 保护目录不再做文件系统检查，旧项目归组必须全量重算。
-    static let currentVersion: Int = 13
+    /// v14: Codex fork 会话重放父会话历史导致的重复计费（`codexSeenTokenIds`），
+    ///      且 fork 文件的用量此前错归到父会话 key；旧桶已被污染，必须全量重建。
+    static let currentVersion: Int = 14
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致失效（价格变化不自动重算）。
@@ -37,6 +42,9 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     var codex: [String: ScanFileState] = [:]
     /// 跨文件的 Claude message.id 去重集合（同一条 assistant 消息可能被 sidechain / subagent 在多个 jsonl 里重复引用）。
     var claudeSeenMessageIds: [String] = []
+    /// 跨文件的 Codex token_count 去重集合，键为 `发出该记录的会话 id#累计用量签名`；
+    /// 覆盖 fork 会话把父会话整段历史重放进新 JSONL 导致的重复计费。
+    var codexSeenTokenIds: [String] = []
     /// pi 扫描 watermark；pi 会话树分支/复制场景按 (entryID@ISO timestamp) 全局去重。
     var pi: [String: ScanFileState] = [:]
     var piSeenEntryIds: [String] = []

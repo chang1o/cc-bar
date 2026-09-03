@@ -244,6 +244,141 @@ final class ScannerIncrementalTests: XCTestCase {
         }
     }
 
+    // MARK: - Codex fork 重放去重
+
+    private static let forkParentID = "019daa2f-0000-7000-8000-000000000001"
+    private static let forkChildID = "019daa54-0000-7000-8000-000000000002"
+    private static let forkFreshID = "019daa77-0000-7000-8000-000000000003"
+
+    /// 三条真实调用；子会话 fork 时会把它们原样重放进自己的 JSONL。
+    private static func forkParentBody() -> String {
+        """
+        {"timestamp":"2026-07-16T00:00:00Z","type":"session_meta","payload":{"id":"\(forkParentID)","cwd":"/tmp/ccbar-fixture"}}
+        {"timestamp":"2026-07-16T00:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-07-16T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}}}}
+        {"timestamp":"2026-07-16T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":250,"cached_input_tokens":50,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":280},"last_token_usage":{"input_tokens":150,"cached_input_tokens":30,"output_tokens":20,"reasoning_output_tokens":3,"total_tokens":170}}}}
+        {"timestamp":"2026-07-16T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":350,"cached_input_tokens":70,"output_tokens":45,"reasoning_output_tokens":7,"total_tokens":395},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":15,"reasoning_output_tokens":2,"total_tokens":115}}}}
+
+        """
+    }
+
+    /// 真实 fork 文件的形状：自身 session_meta（带 forked_from_id）→ 父会话 session_meta 原样重放
+    /// → 父会话全部 token_count 原样重放（只改写 timestamp）→ fork 之后的新调用。
+    /// 关键点是新调用之后**不会**再写一条自身的 session_meta，因此它们同样处在父会话 id 之下。
+    private static func forkChildBody() -> String {
+        """
+        {"timestamp":"2026-07-16T01:00:00Z","type":"session_meta","payload":{"id":"\(forkChildID)","forked_from_id":"\(forkParentID)","cwd":"/tmp/ccbar-fixture"}}
+        {"timestamp":"2026-07-16T01:00:00Z","type":"session_meta","payload":{"id":"\(forkParentID)","cwd":"/tmp/ccbar-fixture"}}
+        {"timestamp":"2026-07-16T01:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-07-16T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}}}}
+        {"timestamp":"2026-07-16T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":250,"cached_input_tokens":50,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":280},"last_token_usage":{"input_tokens":150,"cached_input_tokens":30,"output_tokens":20,"reasoning_output_tokens":3,"total_tokens":170}}}}
+        {"timestamp":"2026-07-16T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":350,"cached_input_tokens":70,"output_tokens":45,"reasoning_output_tokens":7,"total_tokens":395},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":15,"reasoning_output_tokens":2,"total_tokens":115}}}}
+        {"timestamp":"2026-07-16T01:05:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":470,"cached_input_tokens":95,"output_tokens":63,"reasoning_output_tokens":9,"total_tokens":533},"last_token_usage":{"input_tokens":120,"cached_input_tokens":25,"output_tokens":18,"reasoning_output_tokens":2,"total_tokens":138}}}}
+        {"timestamp":"2026-07-16T01:10:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":585,"cached_input_tokens":115,"output_tokens":79,"reasoning_output_tokens":11,"total_tokens":664},"last_token_usage":{"input_tokens":115,"cached_input_tokens":20,"output_tokens":16,"reasoning_output_tokens":2,"total_tokens":131}}}}
+
+        """
+    }
+
+    /// 同样带 forked_from_id，但 Codex 没有重放任何历史（累计值从 0 起算）——真实日志里存在这种
+    /// fork。按 forked_from_id 一刀切排除会把它整段真实用量删掉。
+    private static func forkFreshBody() -> String {
+        """
+        {"timestamp":"2026-07-16T02:00:00Z","type":"session_meta","payload":{"id":"\(forkFreshID)","forked_from_id":"\(forkParentID)","cwd":"/tmp/ccbar-fixture"}}
+        {"timestamp":"2026-07-16T02:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-07-16T02:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":10,"reasoning_output_tokens":1,"total_tokens":90},"last_token_usage":{"input_tokens":80,"cached_input_tokens":10,"output_tokens":10,"reasoning_output_tokens":1,"total_tokens":90}}}}
+
+        """
+    }
+
+    @discardableResult
+    private func writeSession(_ body: String, id: String, at hour: String, in directory: URL) throws -> URL {
+        let url = directory.appendingPathComponent("rollout-2026-07-16T\(hour)-00-00-\(id).jsonl")
+        try Data(body.utf8).write(to: url)
+        return url
+    }
+
+    /// fork 会话重放的父会话历史不能重复计费，fork 之后的新调用必须照常入账，
+    /// 且新调用要归到 fork 自己的会话 key（旧实现会被重放进来的父 session_meta 串走）。
+    func testCodexForkReplayNotDoubleCounted() async throws {
+        let sessions = tempDir.appendingPathComponent("sessions", isDirectory: true)
+        let archived = tempDir.appendingPathComponent("archived", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+        try writeSession(Self.forkParentBody(), id: Self.forkParentID, at: "00", in: sessions)
+        try writeSession(Self.forkChildBody(), id: Self.forkChildID, at: "01", in: sessions)
+
+        let result = await CodexJSONLScanner.scan(previous: [:], roots: [sessions, archived], indexedTitles: [:])
+
+        XCTAssertEqual(result.entries.count, 5, "父会话 3 条 + fork 后新增 2 条，重放的 3 条必须被去掉")
+        let parentEntries = result.entries.filter { $0.conversationKey == "codex:\(Self.forkParentID)" }
+        let childEntries = result.entries.filter { $0.conversationKey == "codex:\(Self.forkChildID)" }
+        XCTAssertEqual(parentEntries.count, 3)
+        XCTAssertEqual(childEntries.count, 2, "fork 之后的新调用应归到 fork 自己的会话")
+        XCTAssertEqual(childEntries.map(\.inputTokens).sorted(), [95, 95])
+        XCTAssertEqual(childEntries.map(\.outputTokens).sorted(), [16, 18])
+        // 重放行的 timestamp 被改写成 fork 时刻；保留下来的必须是父文件里的原始时间。
+        XCTAssertTrue(
+            parentEntries.allSatisfy { $0.timestamp < Date(timeIntervalSince1970: 1_784_161_800) },
+            "保留的应是父文件里带原始时间的记录，而不是 fork 时刻的副本"
+        )
+    }
+
+    /// 扫描顺序不能影响结果：父会话按 UUIDv7 排序永远先于它的 fork。
+    /// 若顺序漂移，被保留的会变成 timestamp 已被改写的重放副本，用量会归错天。
+    func testCodexForkDedupIsOrderIndependent() async throws {
+        let sessions = tempDir.appendingPathComponent("sessions", isDirectory: true)
+        let archived = tempDir.appendingPathComponent("archived", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+        // 先写 fork，再写父会话，让目录枚举顺序与会话创建顺序相反。
+        try writeSession(Self.forkChildBody(), id: Self.forkChildID, at: "01", in: sessions)
+        try writeSession(Self.forkParentBody(), id: Self.forkParentID, at: "00", in: sessions)
+
+        let result = await CodexJSONLScanner.scan(previous: [:], roots: [sessions, archived], indexedTitles: [:])
+
+        XCTAssertEqual(result.entries.count, 5)
+        XCTAssertEqual(result.entries.filter { $0.conversationKey == "codex:\(Self.forkParentID)" }.count, 3)
+    }
+
+    /// 带 forked_from_id 但没有重放历史的 fork，用量一条都不能少。
+    func testCodexForkWithoutReplayKeepsAllUsage() async throws {
+        let sessions = tempDir.appendingPathComponent("sessions", isDirectory: true)
+        let archived = tempDir.appendingPathComponent("archived", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+        try writeSession(Self.forkParentBody(), id: Self.forkParentID, at: "00", in: sessions)
+        try writeSession(Self.forkFreshBody(), id: Self.forkFreshID, at: "02", in: sessions)
+
+        let result = await CodexJSONLScanner.scan(previous: [:], roots: [sessions, archived], indexedTitles: [:])
+
+        XCTAssertEqual(result.entries.count, 4)
+        XCTAssertEqual(result.entries.filter { $0.conversationKey == "codex:\(Self.forkFreshID)" }.count, 1)
+    }
+
+    /// 增量场景：父会话上一轮已扫完，本轮才出现 fork 文件——去重必须靠持久化的 seen 集合。
+    func testCodexForkReplayDedupedAcrossIncrementalScans() async throws {
+        let sessions = tempDir.appendingPathComponent("sessions", isDirectory: true)
+        let archived = tempDir.appendingPathComponent("archived", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+        try writeSession(Self.forkParentBody(), id: Self.forkParentID, at: "00", in: sessions)
+
+        let first = await CodexJSONLScanner.scan(previous: [:], roots: [sessions, archived], indexedTitles: [:])
+        XCTAssertEqual(first.entries.count, 3)
+        XCTAssertEqual(first.newSeenIds.count, 3)
+
+        try writeSession(Self.forkChildBody(), id: Self.forkChildID, at: "01", in: sessions)
+        let second = await CodexJSONLScanner.scan(
+            previous: first.newState,
+            seenTokenIds: first.newSeenIds,
+            roots: [sessions, archived],
+            indexedTitles: [:]
+        )
+
+        XCTAssertEqual(second.entries.count, 2, "重放段已在上一轮记入 seen，本轮只应收到 fork 后的新调用")
+        XCTAssertTrue(second.entries.allSatisfy { $0.conversationKey == "codex:\(Self.forkChildID)" })
+    }
+
     // MARK: - Claude
 
     /// Claude 同样按 alive 清理已删除文件的 watermark。

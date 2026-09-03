@@ -465,6 +465,10 @@ final class UsageService {
         async let codexTask = Task.detached(priority: .utility) {
             await CodexJSONLScanner.scan(
                 previous: [:],
+                // 本轮从空 seen 起扫，跨文件去重只在本次扫到的文件之间生效。
+                // 若 fork 会话的父文件 mtime 落在窗口外没被扫到，其重放段会重复计入本周期桶；
+                // 主界面的日用量/费用走全量增量路径，不受影响。
+                seenTokenIds: [],
                 roots: codexRoots,
                 indexedTitles: [:],
                 minimumMtime: dateFrom,
@@ -726,7 +730,7 @@ final class UsageService {
             : nil
         let codexTask: Task<CodexJSONLScanner.Result, Never>? = pendingApps.contains(.codex)
             ? Task.detached(priority: .utility) {
-                await CodexJSONLScanner.scan(previous: [:], onProgress: progress)
+                await CodexJSONLScanner.scan(previous: [:], seenTokenIds: [], onProgress: progress)
             }
             : nil
         let claude = await claudeTask?.value
@@ -866,7 +870,11 @@ final class UsageService {
             )
         }.value
         async let codexTask = Task.detached(priority: .utility) {
-            await CodexJSONLScanner.scan(previous: prev.codex, onProgress: progress)
+            await CodexJSONLScanner.scan(
+                previous: prev.codex,
+                seenTokenIds: prev.codexSeenTokenIds,
+                onProgress: progress
+            )
         }.value
         async let piTask = Task.detached(priority: .utility) {
             PiJSONLScanner.scan(
@@ -967,6 +975,7 @@ final class UsageService {
             claude: claude.newState,
             codex: codex.newState,
             claudeSeenMessageIds: claude.newSeenIds,
+            codexSeenTokenIds: codex.newSeenIds,
             pi: pi.newState,
             piSeenEntryIds: pi.newSeenIds,
             opencodeLastMessageTime: opencode.newLastMessageTime,
