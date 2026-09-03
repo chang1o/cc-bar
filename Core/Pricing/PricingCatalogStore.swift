@@ -116,6 +116,19 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         }
     }
 
+    #if DEBUG
+    /// 单元测试隔离用：丢弃内存中的远端目录快照。测试进程宿主是 CCBar.app，会加载开发者机器
+    /// Application Support 下的真实磁盘缓存，使计价断言漂移；先清空内存态并删除磁盘缓存，
+    /// 保证断言只基于内置本地表（在线优先的模型在无缓存时回落到本地兜底价）。
+    func resetCatalogForTesting() {
+        refreshRunning.withLock { $0 = false }
+        state.withLock {
+            $0 = CatalogState(active: PricingCatalogCachePayload(), pending: nil)
+        }
+        try? PricingCatalogCache.save(PricingCatalogCachePayload())
+    }
+    #endif
+
     /// 用户手动更新：绕过 24 小时与失败退避。若常规刷新正在进行，等它完成后再强制刷新，
     /// 避免只复用「其中一个源到期」的常规结果而漏掉另一个源。
     func forceRefresh() async -> Bool {

@@ -2,6 +2,13 @@ import XCTest
 @testable import CCBar
 
 final class QuotaParsingTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        // 测试宿主是 CCBar.app，PricingCatalogStore 单例启动时会读开发者机器的磁盘缓存；
+        // 清空内存态与磁盘缓存，让计价断言稳定基于内置本地表，不被本机远端价格目录漂移。
+        PricingCatalogStore.shared.resetCatalogForTesting()
+    }
+
     func testCodexNormalResponseKeepsFiveHourPrimaryAndWeeklySecondary() {
         let fetched = CodexQuotaClient.parse(root: codexRoot(
             primarySeconds: 18_000,
@@ -2604,6 +2611,7 @@ final class QuotaParsingTests: XCTestCase {
             entries: [],
             conversationSeeds: [],
             newState: [:],
+            newSeenIds: [],
             filesScanned: 0,
             linesParsed: 0,
             failedFileCount: 0
@@ -3651,7 +3659,7 @@ final class QuotaParsingTests: XCTestCase {
     }
 
     func testFastCacheSchemaVersionsAreUpgradedTogether() {
-        XCTAssertEqual(ScanState.currentVersion, 13)
+        XCTAssertEqual(ScanState.currentVersion, 14)
         XCTAssertEqual(UsageRollupPayload.currentVersion, 9)
         XCTAssertEqual(ConversationRollupPayload.currentVersion, 7)
         XCTAssertEqual(QuotaCyclePayload.currentVersion, 4)

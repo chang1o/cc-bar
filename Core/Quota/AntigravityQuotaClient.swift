@@ -468,10 +468,15 @@ nonisolated enum AntigravityQuotaClient {
             guard let remaining = remainingFraction(in: bucket) else { continue }
             let family = bucketFamily(bucket)
             guard family != .internalPlaceholder else { continue }
-            var reset = resetDate(value: bucket["resetTime"] ?? bucket["reset_time"], description: nil, relativeTo: fetchedAt)
+            let reset = resetDate(value: bucket["resetTime"] ?? bucket["reset_time"], description: nil, relativeTo: fetchedAt)
+            // remaining=1 且无 reset 的未消耗桶（如新账号从未用过的模型）不是真实额度窗口，
+            // 不能合成未来重置时间后当成 0% 窗口展示，直接跳过。
+            if remaining >= 1.0, reset == nil { continue }
+            var reset = reset
             let isWeekly = family == .weekly || family == .geminiWeekly
             let windowSecs: Int = isWeekly ? 7 * 24 * 3600 : 5 * 3600
-            if remaining >= 1.0, reset == nil || (reset != nil && reset! <= fetchedAt) {
+            // 重置时间已过但额度仍未消耗（滑动周期尚未启动）时，按窗口标准时长预估未来重置时间。
+            if remaining >= 1.0, reset != nil && reset! <= fetchedAt {
                 reset = fetchedAt.addingTimeInterval(Double(windowSecs))
             }
             // 语义：第三方模型一律视为 5h 轮换（实测），Gemini 轮换同理；

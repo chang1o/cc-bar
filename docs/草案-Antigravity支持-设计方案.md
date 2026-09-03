@@ -65,7 +65,7 @@
     - `gemini-weekly` → 副条 `secondaryLimit`（displayName "Gemini WK"）；
     - `3p-5h` / `3p-weekly` → `auxiliaryLimits` 两行（displayName "Claude 5H" / "Claude WK"）；
   - 无分组源（仅 buckets/models 兜底）时退化为旧行为：5h 主条 + weekly 副条，Gemini 窗口保留 `geminiWindow` / `geminiWeekly` 供细行展示；
-  - remaining=1 且无 reset 的未消费占位桶忽略；
+  - `retrieveUserQuota`（端点 4）按模型分桶解析时：`remaining=1` 且无 `reset` 的未消费占位桶直接忽略，不合成重置时间（仅该端点模型桶；`reset` 已过期但额度未消耗时仍按窗口标准时长预估未来重置时间）；
   - 提取账户订阅层级（Tier / Plan）——取 `currentTier.id`（真实生效层级，如 `free-tier`），`paidTier.id` 仅当无 currentTier 时兜底；
 
 #### [MODIFY] [`Core/Quota/QuotaModels.swift`](file:///Users/nanvon/Code/cc-bar/Core/Quota/QuotaModels.swift)
