@@ -92,9 +92,8 @@ struct SettingsRootView: View {
                         email: appState.codexAccount?.email,
                         plan: appState.codexAccount?.planType,
                         availability: appState.codexAccount == nil ? .notDetected : .connected,
-                        canToggle: appState.codexAccount != nil,
                         isOn: Binding(
-                            get: { appState.codexAccount == nil ? false : settings.showCodex },
+                            get: { settings.showCodex },
                             set: { settings.showCodex = $0 }
                         ),
                         accessory: appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
@@ -112,9 +111,8 @@ struct SettingsRootView: View {
                     email: appState.claudeAccount?.email,
                     plan: appState.claudeAccount?.subscriptionType,
                     availability: appState.claudeAccount == nil ? .notDetected : .connected,
-                    canToggle: appState.claudeAccount != nil,
                     isOn: Binding(
-                        get: { appState.claudeAccount == nil ? false : settings.showClaude },
+                        get: { settings.showClaude },
                         set: { settings.showClaude = $0 }
                     )
                 )
@@ -127,9 +125,8 @@ struct SettingsRootView: View {
                     email: appState.antigravityAccount?.email,
                     plan: appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType,
                     availability: appState.antigravityAccount == nil ? .notDetected : .connected,
-                    canToggle: appState.antigravityAccount != nil,
                     isOn: Binding(
-                        get: { appState.antigravityAccount == nil ? false : settings.showAntigravity },
+                        get: { settings.showAntigravity },
                         set: { newValue in
                             settings.showAntigravity = newValue
                             if newValue {
@@ -147,11 +144,8 @@ struct SettingsRootView: View {
                     email: appState.cursorAccount?.email,
                     plan: appState.cursorQuota?.planType,
                     availability: appState.cursorAccount == nil ? .notDetected : .connected,
-                    canToggle: appState.cursorAccount != nil,
                     isOn: Binding(
-                        get: {
-                            appState.cursorAccount != nil && settings.isProviderEnabled(.cursor)
-                        },
+                        get: { settings.isProviderEnabled(.cursor) },
                         set: { setCursorProviderEnabled($0, settings: settings) }
                     )
                 )
@@ -164,11 +158,8 @@ struct SettingsRootView: View {
                     email: appState.commandCodeAccount?.login,
                     plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
                     availability: appState.commandCodeAccount == nil ? .notDetected : .connected,
-                    canToggle: appState.commandCodeAccount != nil,
                     isOn: Binding(
-                        get: {
-                            appState.commandCodeAccount != nil && settings.isProviderEnabled(.commandCode)
-                        },
+                        get: { settings.isProviderEnabled(.commandCode) },
                         set: { setCommandCodeProviderEnabled($0, settings: settings) }
                     ),
                     accessory: AnyView(commandCodeCredentialButton)
@@ -801,7 +792,6 @@ private struct AccountRow: View {
     let email: String?
     let plan: String?
     let availability: AccountAvailability
-    let canToggle: Bool
     @Binding var isOn: Bool
     /// 可选的额外控件(如 Codex 主账号的重置次数入口),放在状态徽标与开关之间。
     var accessory: AnyView? = nil
@@ -834,7 +824,6 @@ private struct AccountRow: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
-                    .disabled(!canToggle)
             }
         }
         .padding(.vertical, 12)
