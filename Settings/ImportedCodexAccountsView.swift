@@ -166,6 +166,7 @@ struct ImportedCodexAccountsView: View {
                     .foregroundStyle(expandedResetCreditsId == account.id ? Color.accentColor : Color.secondary)
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
             .help(tr("Extra reset credits", "额外重置次数"))
 
             // 显示开关
@@ -188,6 +189,7 @@ struct ImportedCodexAccountsView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
@@ -316,6 +318,7 @@ struct AddImportedCodexAccountSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .focusEffectDisabled()
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)

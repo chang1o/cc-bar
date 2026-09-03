@@ -22,6 +22,7 @@ struct CommandCodeCredentialSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .focusEffectDisabled()
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)

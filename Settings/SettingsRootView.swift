@@ -203,6 +203,7 @@ struct SettingsRootView: View {
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .help(tr("Command Code credentials", "Command Code 凭据设置"))
     }
 
@@ -216,6 +217,7 @@ struct SettingsRootView: View {
                 .foregroundStyle(codexResetCreditsExpanded ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .help(tr("Extra reset credits", "额外重置次数"))
     }
 
