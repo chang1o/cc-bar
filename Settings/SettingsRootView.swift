@@ -35,9 +35,7 @@ struct SettingsRootView: View {
         )
     }
 
-    /// 主账号额外重置 credit 的展开状态与懒加载结果(nil = 尚未加载)。
-    @State private var codexResetCreditsExpanded = false
-    @State private var codexResetCreditsState: CodexResetCreditsState?
+    @State private var showCodexResetCreditsSheet = false
     @State private var showCommandCodeSheet = false
 
     var body: some View {
@@ -59,6 +57,12 @@ struct SettingsRootView: View {
         }
         .sheet(isPresented: $showCommandCodeSheet) {
             CommandCodeCredentialSheet()
+        }
+        .sheet(isPresented: $showCodexResetCreditsSheet) {
+            CodexResetCreditsSheet(
+                accountTitle: appState.codexAccount?.email ?? "Codex",
+                fetchCredits: { await appState.fetchCodexResetCredits() }
+            )
         }
         .onAppear {
             settings.syncLaunchAtLoginStatus()
@@ -82,26 +86,21 @@ struct SettingsRootView: View {
                 desc: "Auto-detected on your Mac. Toggle which services to display.",
                 chineseDesc: "自动检测,自行勾选要显示的"
             ) {
-                VStack(spacing: 0) {
-                    AccountRow(
-                        title: "Codex",
-                        subtitle: "OpenAI",
-                        tint: .codexAccent,
-                        logoName: "codex",
-                        fallback: "C",
-                        email: appState.codexAccount?.email,
-                        plan: appState.codexAccount?.planType,
-                        availability: appState.codexAccount == nil ? .notDetected : .connected,
-                        isOn: Binding(
-                            get: { settings.showCodex },
-                            set: { settings.showCodex = $0 }
-                        ),
-                        accessory: appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
-                    )
-                    if codexResetCreditsExpanded, let state = codexResetCreditsState {
-                        CodexResetCreditsDetailView(state: state)
-                    }
-                }
+                AccountRow(
+                    title: "Codex",
+                    subtitle: "OpenAI",
+                    tint: .codexAccent,
+                    logoName: "codex",
+                    fallback: "C",
+                    email: appState.codexAccount?.email,
+                    plan: appState.codexAccount?.planType,
+                    availability: appState.codexAccount == nil ? .notDetected : .connected,
+                    isOn: Binding(
+                        get: { settings.showCodex },
+                        set: { settings.showCodex = $0 }
+                    ),
+                    accessory: appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
+                )
                 AccountRow(
                     title: "Claude Code",
                     subtitle: "Anthropic",
@@ -207,39 +206,18 @@ struct SettingsRootView: View {
         .help(tr("Command Code credentials", "Command Code 凭据设置"))
     }
 
-    /// 主账号「额外重置次数」入口(🎁),点击展开懒加载明细。
+    /// 主账号「使用限额重置」入口(🎁),点击打开弹窗。
     private var codexResetCreditsButton: some View {
         Button {
-            toggleCodexResetCredits()
+            showCodexResetCreditsSheet = true
         } label: {
             Image(systemName: "gift")
                 .font(.system(size: 12))
-                .foregroundStyle(codexResetCreditsExpanded ? Color.accentColor : Color.secondary)
+                .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .help(tr("Extra reset credits", "额外重置次数"))
-    }
-
-    private func toggleCodexResetCredits() {
-        if codexResetCreditsExpanded {
-            codexResetCreditsExpanded = false
-            return
-        }
-        codexResetCreditsExpanded = true
-        // 已有成功缓存则直接复用,不重复联网;失败态允许重新展开时重试。
-        switch codexResetCreditsState {
-        case nil, .failure: break
-        default: return
-        }
-        codexResetCreditsState = .loading
-        Task {
-            let result = await appState.fetchCodexResetCredits()
-            switch result {
-            case .success(let fetched): codexResetCreditsState = .success(fetched)
-            case .failure(let err): codexResetCreditsState = .failure(err.description)
-            }
-        }
+        .help(tr("Reset credits", "使用限额重置"))
     }
 
     // MARK: Stats services

@@ -13,15 +13,7 @@ struct ImportedCodexAccountsView: View {
     @State private var draggingId: String?
     @State private var dropTargetId: String?
 
-    /// 额外「Full reset」credit 明细的展开状态(懒加载,按账号 id 缓存,不持久化)。
-    /// 结果未就位(`resetCreditsById[id] == nil`)即视为加载中,无需单独的 loading 标记。
-    @State private var expandedResetCreditsId: String?
-    @State private var resetCreditsById: [String: ResetCreditsLoadResult] = [:]
-
-    private enum ResetCreditsLoadResult {
-        case success(CodexResetCreditsClient.Fetched)
-        case failure(String)
-    }
+    @State private var selectedResetAccount: ImportedCodexAccount?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -56,10 +48,6 @@ struct ImportedCodexAccountsView: View {
                         } isTargeted: { isTargeted in
                             dropTargetId = isTargeted ? account.id : (dropTargetId == account.id ? nil : dropTargetId)
                         }
-
-                    if expandedResetCreditsId == account.id {
-                        resetCreditsDetail(account: account)
-                    }
                 }
             }
 
@@ -85,6 +73,12 @@ struct ImportedCodexAccountsView: View {
         }
         .sheet(isPresented: $showAddSheet) {
             AddImportedCodexAccountSheet { appState.reloadImportedCodexAccounts() }
+        }
+        .sheet(item: $selectedResetAccount) { account in
+            CodexResetCreditsSheet(
+                accountTitle: rowTitle(account),
+                fetchCredits: { await appState.fetchImportedCodexResetCredits(account: account) }
+            )
         }
         .confirmationDialog(
             tr("Remove account?", "删除此账号？"),
@@ -157,17 +151,17 @@ struct ImportedCodexAccountsView: View {
 
             Spacer()
 
-            // 额外重置 credit 明细(懒加载)
+            // 使用限额重置
             Button {
-                toggleResetCredits(account: account)
+                selectedResetAccount = account
             } label: {
                 Image(systemName: "gift")
                     .font(.system(size: 12))
-                    .foregroundStyle(expandedResetCreditsId == account.id ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
-            .help(tr("Extra reset credits", "额外重置次数"))
+            .help(tr("Reset credits", "使用限额重置"))
 
             // 显示开关
             Toggle("", isOn: Binding(
@@ -208,44 +202,6 @@ struct ImportedCodexAccountsView: View {
         if let email = account.email, !email.isEmpty { parts.append(email) }
         if let plan = account.planType, !plan.isEmpty { parts.append(plan.capitalized) }
         return parts.joined(separator: " · ")
-    }
-
-    // MARK: 额外重置 credit(懒加载)
-
-    private func toggleResetCredits(account: ImportedCodexAccount) {
-        if expandedResetCreditsId == account.id {
-            expandedResetCreditsId = nil
-            return
-        }
-        expandedResetCreditsId = account.id
-        // 已有成功缓存则直接复用,不重复联网;失败态允许重新展开时重试。
-        switch resetCreditsById[account.id] {
-        case nil, .failure: break
-        default: return
-        }
-        Task {
-            let result = await appState.fetchImportedCodexResetCredits(account: account)
-            switch result {
-            case .success(let fetched):
-                resetCreditsById[account.id] = .success(fetched)
-            case .failure(let err):
-                resetCreditsById[account.id] = .failure(err.description)
-            }
-        }
-    }
-
-    private func resetCreditsDetail(account: ImportedCodexAccount) -> some View {
-        let state: CodexResetCreditsState
-        if let result = resetCreditsById[account.id] {
-            switch result {
-            case .success(let fetched): state = .success(fetched)
-            case .failure(let message): state = .failure(message)
-            }
-        } else {
-            // 尚无缓存 → 正在懒加载
-            state = .loading
-        }
-        return CodexResetCreditsDetailView(state: state)
     }
 
     // MARK: 重排序
