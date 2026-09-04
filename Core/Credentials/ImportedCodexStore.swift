@@ -10,7 +10,7 @@ import Security
 // 用 SecItem 直接读写本进程自己的 Keychain 条目,不弹用户授权(与读 Claude/Codex CLI 凭据的
 // `/usr/bin/security` 通道完全分离)。
 
-struct ImportedCodexTokens: Sendable, Equatable, Codable {
+nonisolated struct ImportedCodexTokens: Sendable, Equatable, Codable {
     var accessToken: String
     var refreshToken: String?
     var idToken: String?
@@ -23,7 +23,7 @@ enum ImportedCodexStore {
 
     // MARK: - 元数据 (JSON)
 
-    private struct Payload: Codable, Equatable {
+    nonisolated private struct Payload: Codable, Equatable {
         var version: Int = 1
         var accounts: [ImportedCodexAccount] = []
     }
