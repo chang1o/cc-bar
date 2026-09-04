@@ -43,7 +43,9 @@ enum StatsRange: Hashable, CaseIterable {
         }
     }
 
-    private static var weekStartMondayCalendar: Calendar {
+    /// 周一为一周起点的公历；`StatsGranularity` 的周桶起点与 `weekRange` 文案共用同一份，
+    /// 避免「本周」和周粒度出现两个周起点真相。
+    static var weekStartMondayCalendar: Calendar {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = .current
         cal.firstWeekday = 2
@@ -101,6 +103,83 @@ enum StatsRange: Hashable, CaseIterable {
         let length = current.to.timeIntervalSince(current.from)
         guard length > 0, length.isFinite else { return nil }
         return (current.from.addingTimeInterval(-length), current.from)
+    }
+}
+
+// MARK: - StatsGranularity
+
+/// 「每日用量」图表的 X 轴聚合粒度。与 `StatsRange` 正交：range 决定看多长时间，
+/// 粒度决定每根柱覆盖多久。底层用量桶始终是日桶，周 / 月只在渲染前做二次归并。
+enum StatsGranularity: Hashable, CaseIterable {
+    case day
+    case week
+    case month
+
+    var englishLabel: String {
+        switch self {
+        case .day: return "Day"
+        case .week: return "Week"
+        case .month: return "Month"
+        }
+    }
+
+    var chineseLabel: String {
+        switch self {
+        case .day: return "日"
+        case .week: return "周"
+        case .month: return "月"
+        }
+    }
+
+    var panelTitleEnglish: String {
+        switch self {
+        case .day: return "Daily usage"
+        case .week: return "Weekly usage"
+        case .month: return "Monthly usage"
+        }
+    }
+
+    var panelTitleChinese: String {
+        switch self {
+        case .day: return "每日用量"
+        case .week: return "每周用量"
+        case .month: return "每月用量"
+        }
+    }
+
+    /// 把日桶的本地 0 点日期归并到所属周期起点。周起点为周一，月起点为自然月 1 号；
+    /// range 边界处的不完整周 / 月不补全，直接落进对应桶。
+    func bucketStart(for day: Date) -> Date {
+        let cal = StatsRange.weekStartMondayCalendar
+        switch self {
+        case .day:
+            return day
+        case .week:
+            let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: day)
+            return cal.date(from: comps) ?? day
+        case .month:
+            let comps = cal.dateComponents([.year, .month], from: day)
+            return cal.date(from: comps) ?? day
+        }
+    }
+
+    /// X 轴刻度文案：日 / 周显示月日(周为该周起始日),月显示年月。
+    var axisDateFormat: Date.FormatStyle {
+        switch self {
+        case .day, .week:
+            return Date.FormatStyle.dateTime.month(.abbreviated).day()
+        case .month:
+            return Date.FormatStyle.dateTime.year().month(.abbreviated)
+        }
+    }
+
+    /// 悬浮明细的标题：日 `2026-09-03`,周 `2026-09-01 – 09-07`,月 `2026-09`。
+    func periodLabel(_ start: Date) -> String {
+        switch self {
+        case .day: return StatsFormatter.day(start)
+        case .week: return StatsFormatter.weekRange(start)
+        case .month: return StatsFormatter.month(start)
+        }
     }
 }
 
@@ -206,6 +285,7 @@ struct StatsView: View {
         for: Date().addingTimeInterval(-7 * 86400)
     )
     @State private var customTo: Date = Calendar.current.startOfDay(for: Date())
+    @State private var granularity: StatsGranularity = .day
     @State private var providerSort: ProviderSort = .cost
     @State private var expandedProvider: ModelProvider?
     /// 时间线窗口视角全局统一，避免 Codex 与 Claude 默认落在不同口径。
@@ -605,18 +685,30 @@ struct StatsView: View {
     // MARK: Daily usage panel
 
     private var dailyUsagePanel: some View {
-        Panel(title: "Daily usage", chinese: "每日用量", right: AnyView(
-            HStack(spacing: 8) {
-                if chartUsesContextWindow {
-                    Text(tr("Last 14 days · highlighted = selected", "近 14 天 · 高亮为所选范围"))
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.tertiary)
+        Panel(
+            title: granularity.panelTitleEnglish,
+            chinese: granularity.panelTitleChinese,
+            right: AnyView(
+                HStack(spacing: 8) {
+                    if chartUsesContextWindow {
+                        Text(tr("Last 14 days · highlighted = selected", "近 14 天 · 高亮为所选范围"))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Picker(tr("Granularity", "粒度"), selection: $granularity) {
+                        ForEach(StatsGranularity.allCases, id: \.self) { item in
+                            Text(tr(item.englishLabel, item.chineseLabel)).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    ForEach(visibleUsageApps, id: \.self) { app in
+                        LegendChip(color: app.tintColor, label: app.displayName)
+                    }
                 }
-                ForEach(visibleUsageApps, id: \.self) { app in
-                    LegendChip(color: app.tintColor, label: app.displayName)
-                }
-            }
-        )) {
+            )
+        ) {
             VStack(spacing: 6) {
                 if dailySamples.isEmpty {
                     if appState.usageService.isScanning {
@@ -649,14 +741,18 @@ struct StatsView: View {
                                     spacing: 6,
                                     overflowResolution: .init(x: .fit(to: .plot), y: .disabled)
                                 ) {
-                                    DailyTooltip(sample: selected, visibleApps: visibleUsageApps)
+                                    DailyTooltip(
+                                        sample: selected,
+                                        visibleApps: visibleUsageApps,
+                                        granularity: granularity
+                                    )
                                 }
                         }
                     }
                     .chartXSelection(value: $selectedDay)
                     .chartXAxis {
-                        AxisMarks(values: .stride(by: .day, count: max(1, dailySamples.count / 5))) { value in
-                            AxisValueLabel(format: .dateTime.month(.abbreviated).day(),
+                        AxisMarks(values: chartAxisDates) { _ in
+                            AxisValueLabel(format: granularity.axisDateFormat,
                                            centered: true)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.tertiary)
@@ -667,6 +763,7 @@ struct StatsView: View {
                     .animation(.easeOut(duration: 0.12), value: selectedDay)
                     .onChange(of: range) { _, _ in selectedDay = nil }
                     .onChange(of: serviceFilter) { _, _ in selectedDay = nil }
+                    .onChange(of: granularity) { _, _ in selectedDay = nil }
                 }
             }
         }
@@ -1214,7 +1311,9 @@ struct StatsView: View {
 
     /// 所选范围只有一天(今天 / 昨天 / 单日自定义)时,每日用量图表扩展为近 14 天上下文,
     /// 范围内柱子高亮、范围外降透明;KPI 与其他面板口径不变。
+    /// 仅日粒度生效——周 / 月粒度下这个窗口只会多画出半根相邻周期的柱子,反而误导。
     private var chartUsesContextWindow: Bool {
+        guard granularity == .day else { return false }
         let (from, to) = rangeBounds
         // 单日跨度按 ≤1.5 天判断,容忍夏令时导致的 23/25 小时。
         return to > from && to.timeIntervalSince(from) <= 86400 * 1.5
@@ -1291,11 +1390,14 @@ struct StatsView: View {
         return deltaPercent(current: current.costUSD.doubleValue, previous: previous.costUSD.doubleValue)
     }
 
+    /// 底层永远是日桶,这里按 `granularity` 把日桶再归并到周期起点。
+    /// 周 / 月桶在 range 边界被截断时不补全、不标注,首尾柱天然偏矮。
     private var dailySamples: [DailySample] {
         let (from, to) = chartBounds
         var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, cursor: UsageTotals, pi: UsageTotals, opencode: UsageTotals)] = [:]
         for b in filteredBuckets(from: from, to: to) {
-            var pair = byDay[b.day] ?? (.zero, .zero, .zero, .zero, .zero)
+            let bucketDay = granularity.bucketStart(for: b.day)
+            var pair = byDay[bucketDay] ?? (.zero, .zero, .zero, .zero, .zero)
             switch b.app {
             case .codex: pair.codex.add(b)
             case .claude: pair.claude.add(b)
@@ -1303,7 +1405,7 @@ struct StatsView: View {
             case .pi: pair.pi.add(b)
             case .opencode: pair.opencode.add(b)
             }
-            byDay[b.day] = pair
+            byDay[bucketDay] = pair
         }
         return byDay
             .map {
@@ -1319,7 +1421,16 @@ struct StatsView: View {
             .sorted { $0.day < $1.day }
     }
 
-    /// 把 chartXSelection 吸附到的连续 Date 映射到最近的那一天。
+    /// X 轴刻度直接取自桶起点,而不是按日历 stride:周 / 月粒度下 Swift Charts 会用
+    /// `Calendar.current` 的周起点(可能是周日)推算刻度,和本项目的周一口径对不上。
+    private var chartAxisDates: [Date] {
+        let days = dailySamples.map(\.day)
+        guard days.count > 5 else { return days }
+        let step = max(1, days.count / 5)
+        return stride(from: 0, to: days.count, by: step).map { days[$0] }
+    }
+
+    /// 把 chartXSelection 吸附到的连续 Date 映射到最近的那个周期起点。
     private var selectedSample: DailySample? {
         guard let selectedDay else { return nil }
         return dailySamples.min {
@@ -1449,14 +1560,15 @@ private struct LegendChip: View {
 
 // MARK: - Daily usage tooltip
 
-/// 每日用量柱状图的悬浮浮层:展示某天各服务花费、合计花费与合计 tokens。
+/// 用量柱状图的悬浮浮层:展示该周期内各服务花费、合计花费与合计 tokens。
 private struct DailyTooltip: View {
     let sample: DailySample
     let visibleApps: [UsageApp]
+    let granularity: StatsGranularity
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(StatsFormatter.day(sample.day))
+            Text(granularity.periodLabel(sample.day))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
@@ -2262,6 +2374,8 @@ private struct QuotaTimelineTable: View {
 
 // MARK: - Daily / Model row models
 
+/// 图表的一根柱。`day` 是该柱所属周期的起点(日粒度即当天,周粒度为周一,月粒度为 1 号),
+/// 命名沿用历史,不随粒度改名。
 private struct DailySample: Identifiable {
     var id: Date { day }
     let day: Date
@@ -2513,6 +2627,31 @@ enum StatsFormatter {
 
     static func day(_ date: Date) -> String {
         dayFormatter.string(from: date)
+    }
+
+    private static let monthDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM-dd"
+        return f
+    }()
+
+    private static let monthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM"
+        return f
+    }()
+
+    /// 周桶标题:起始日全写、结束日省年份,控制在 200pt 浮层宽度内(如 `2026-09-01 – 09-07`)。
+    static func weekRange(_ start: Date) -> String {
+        let end = StatsRange.weekStartMondayCalendar.date(byAdding: .day, value: 6, to: start) ?? start
+        return "\(day(start)) – \(monthDayFormatter.string(from: end))"
+    }
+
+    /// 月桶标题(如 `2026-09`)。
+    static func month(_ start: Date) -> String {
+        monthFormatter.string(from: start)
     }
 
     private static let timeFormatter: DateFormatter = {
