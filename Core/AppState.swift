@@ -29,11 +29,17 @@ final class AppState {
     var commandCodeAccount: CommandCodeAuthSession? {
         didSet { SettingsStore.shared.commandCodeAccountDetected = commandCodeAccount != nil }
     }
+    /// Ollama Cloud identity (`POST /api/me`) signed with the local `~/.ollama/id_ed25519`.
+    var ollamaAccount: OllamaCloudQuotaClient.Identity?
+    /// The signing key exists, i.e. Ollama has run on this Mac at least once.
+    var ollamaInstalled = false
+    private var ollamaKey: OllamaLocalKey?
     var codexError: String?
     var claudeError: String?
     var antigravityError: String?
     var cursorError: String?
     var commandCodeError: String?
+    var ollamaError: String?
 
     // MARK: 导入的 Codex 副账号
     //
@@ -144,6 +150,22 @@ final class AppState {
         get { refreshState(for: .commandCode) }
         set { updatePrimaryState(.commandCode) { $0.refresh = newValue } }
     }
+    var ollamaQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .ollama) }
+        set { updatePrimaryState(.ollama) { $0.snapshot = newValue } }
+    }
+    var ollamaQuotaError: String? {
+        get { quotaError(for: .ollama) }
+        set { updatePrimaryState(.ollama) { $0.error = newValue } }
+    }
+    var ollamaQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .ollama) }
+        set { updatePrimaryState(.ollama) { $0.source = newValue } }
+    }
+    var ollamaRefreshState: QuotaRefreshState {
+        get { refreshState(for: .ollama) }
+        set { updatePrimaryState(.ollama) { $0.refresh = newValue } }
+    }
     var quotaHistory = QuotaHistoryPayload()
     var quotaCycles = QuotaCyclePayload()
 
@@ -213,6 +235,7 @@ final class AppState {
         // 是否请求其远端额度仍由 Provider / Stats 开关控制。
         await loadCursor()
         await loadCommandCode()
+        await loadOllama()
         await discoverCCPMAccounts()
         recordCachedQuotaCycleObservations()
         logCredentialSummary()
@@ -297,6 +320,7 @@ final class AppState {
             showCursor: SettingsStore.shared.isProviderEnabled(.cursor)
                 || SettingsStore.shared.isUsageServiceVisible(.cursor),
             showCommandCode: SettingsStore.shared.isProviderEnabled(.commandCode),
+            showOllama: SettingsStore.shared.isProviderEnabled(.ollama) && OllamaInstall.isPresent(),
             hasVisibleImported: importedCodexAccounts.contains(where: \.visibleInPopover)
         )
         if plan.refreshCodex {
@@ -322,6 +346,10 @@ final class AppState {
         if plan.refreshCommandCode {
             await loadCommandCode()
             await loadCommandCodeQuota(reason: reason)
+        }
+        if plan.refreshOllama {
+            await loadOllama()
+            await loadOllamaQuota(reason: reason)
         }
         if plan.refreshImported {
             await loadAllImportedCodexQuotas(
@@ -513,9 +541,11 @@ final class AppState {
     }
 
     /// Upstream shows a primary block for every enabled provider that has a machine-level
-    /// login path; the block itself reports a missing account. Kimi / GLM / Ollama have none.
+    /// login path; the block itself reports a missing account. Kimi / GLM have none, and
+    /// Ollama only counts once its signing key exists on this Mac.
     func hasPrimaryAccount(_ app: QuotaApp) -> Bool {
-        app.supportsPrimaryAccount
+        guard app.supportsPrimaryAccount else { return false }
+        return app == .ollama ? ollamaInstalled : true
     }
 
     func hasAnyAccount(_ app: QuotaApp) -> Bool {
@@ -558,34 +588,6 @@ final class AppState {
 
     func refreshCCPMAccount(_ account: CCPMAccount, reason: QuotaRefreshReason) async {
         await loadCCPMQuota(account: account, reason: reason)
-        scheduleQuotaPersistenceFlush()
-    }
-
-    /// Stores (nil / empty deletes) the manual ollama.com cookie, then re-fetches that account.
-    func setOllamaCookie(_ cookie: String?, profile: String) async {
-        let trimmed = cookie?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let saveError: String? = await Task.detached(priority: .userInitiated) {
-            do {
-                if trimmed.isEmpty {
-                    OllamaCookieStore.delete(profile: profile)
-                } else {
-                    try OllamaCookieStore.save(trimmed, profile: profile)
-                }
-                return nil
-            } catch {
-                return "\(error)"
-            }
-        }.value
-        if let saveError {
-            print("[ccpm] ollama cookie save failed: \(saveError)")
-        }
-        // A new cookie starts from a clean fetch; a stale error must not linger next to it.
-        let id = "\(QuotaApp.ollama.rawValue):ccpm:\(profile)"
-        ccpmQuotaStates[id] = nil
-        await discoverCCPMAccounts()
-        if let account = ccpmAccounts.first(where: { $0.id == id }) {
-            await loadCCPMQuota(account: account, reason: .userInitiated)
-        }
         scheduleQuotaPersistenceFlush()
     }
 
@@ -652,8 +654,8 @@ final class AppState {
             result = account.app == .kimi
                 ? await KimiQuotaClient.fetch(apiKey: key, baseURL: baseURL)
                 : await GLMQuotaClient.fetch(apiKey: key, baseURL: baseURL)
-        case .ollamaCookie(let cookie):
-            result = await OllamaCloudQuotaClient.fetch(cookieHeader: cookie)
+        case .ollamaAPIKey(let key):
+            result = await fetchOllamaUsage(.apiKey(key), fallbackPlan: account.planType)
         case .none:
             result = .failure(.missingToken)
         }
@@ -685,6 +687,20 @@ final class AppState {
             accessToken: activeToken,
             accountId: codex.isPersonalAccessToken ? nil : codex.accountId
         ).map(\.snapshot)
+    }
+
+    /// Identity first for the plan name (best effort), then the usage limits.
+    private func fetchOllamaUsage(
+        _ credential: OllamaCloudQuotaClient.Credential,
+        fallbackPlan: String?
+    ) async -> Result<QuotaSnapshot, QuotaError> {
+        let plan: String?
+        switch await OllamaCloudQuotaClient.fetchIdentity(credential) {
+        case .success(let identity): plan = identity.plan ?? fallbackPlan
+        case .failure(let error) where error.isAuthFailure: return .failure(error)
+        case .failure: plan = fallbackPlan
+        }
+        return await OllamaCloudQuotaClient.fetchUsage(credential, planType: plan)
     }
 
     /// ccpm Claude profiles are read-only like the primary login: an expired token is
@@ -791,7 +807,8 @@ final class AppState {
             case .antigravity: return antigravityAccount?.email
             case .cursor: return cursorAccount?.email
             case .commandCode: return commandCodeAccount?.email ?? commandCodeAccount?.login
-            case .kimi, .glm, .ollama: return nil
+            case .ollama: return ollamaAccount?.email ?? ollamaAccount?.name
+            case .kimi, .glm: return nil
             }
         }()
         if SettingsStore.shared.privacyMode { who = nil }
@@ -1646,6 +1663,68 @@ final class AppState {
         saveQuotaCache()
     }
 
+    /// Reads `~/.ollama/id_ed25519` off the main actor and asks ollama.com who the key
+    /// belongs to. A missing key means Ollama never ran here; 401 means `ollama signin`
+    /// has not been done. Network blips keep the last known identity.
+    func loadOllama() async {
+        let loaded: Result<OllamaLocalKey, Error>? = await Task.detached(priority: .utility) {
+            guard OllamaInstall.isPresent() else { return nil }
+            return Result { try OllamaLocalKey.load() }
+        }.value
+
+        guard let loaded else {
+            ollamaInstalled = false
+            ollamaKey = nil
+            ollamaAccount = nil
+            ollamaError = "Ollama not installed (no ~/.ollama/id_ed25519)"
+            return
+        }
+        ollamaInstalled = true
+        let key: OllamaLocalKey
+        switch loaded {
+        case .failure(let error):
+            ollamaKey = nil
+            ollamaAccount = nil
+            ollamaError = "\(error)"
+            return
+        case .success(let loadedKey):
+            key = loadedKey
+        }
+        ollamaKey = key
+
+        switch await OllamaCloudQuotaClient.fetchIdentity(.localKey(key)) {
+        case .success(let identity):
+            let changedFromRuntime = ollamaAccount.map { $0.accountKey != identity.accountKey } ?? false
+            let changedFromCache: Bool = {
+                guard ollamaAccount == nil,
+                      let cachedID = quotaCache.providers[.ollama]?.accountID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !cachedID.isEmpty
+                else { return false }
+                return cachedID != identity.accountKey
+            }()
+            if changedFromRuntime || changedFromCache {
+                resetOllamaQuotaState()
+            }
+            ollamaAccount = identity
+            ollamaError = nil
+        case .failure(let error):
+            if error.isAuthFailure {
+                if ollamaAccount != nil { resetOllamaQuotaState() }
+                ollamaAccount = nil
+            }
+            ollamaError = error.description
+        }
+    }
+
+    private func resetOllamaQuotaState() {
+        ollamaQuota = nil
+        ollamaQuotaSource = nil
+        ollamaQuotaError = nil
+        ollamaRefreshState = QuotaRefreshState()
+        quotaCache.providers[.ollama] = nil
+        saveQuotaCache()
+    }
+
     private func loadCodexQuota(reason: QuotaRefreshReason) async {
         guard beginCodexRefresh(reason: reason) else { return }
         defer { codexRefreshState.inFlight = false }
@@ -1885,6 +1964,45 @@ final class AppState {
         commandCodeRefreshState.inFlight = true
         commandCodeRefreshState.lastAttemptAt = now
         return true
+    }
+
+    private func beginOllamaRefresh(reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        guard !ollamaRefreshState.inFlight else { return false }
+        if let backoffUntil = ollamaRefreshState.backoffUntil, backoffUntil > now {
+            markOllamaFailure(backoffMessage(until: backoffUntil))
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = ollamaRefreshState.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        ollamaRefreshState.inFlight = true
+        ollamaRefreshState.lastAttemptAt = now
+        return true
+    }
+
+    private func loadOllamaQuota(reason: QuotaRefreshReason) async {
+        guard beginOllamaRefresh(reason: reason) else { return }
+        defer { ollamaRefreshState.inFlight = false }
+
+        guard let key = ollamaKey else {
+            markOllamaFailure(ollamaError ?? "Ollama signing key not found")
+            return
+        }
+        guard let identity = ollamaAccount else {
+            markOllamaFailure(ollamaError ?? "ollama: not signed in (run `ollama signin`)")
+            return
+        }
+
+        switch await OllamaCloudQuotaClient.fetchUsage(.localKey(key), planType: identity.plan) {
+        case .success(let snapshot):
+            storeOllama(snapshot: snapshot, source: .api)
+        case .failure(let error):
+            markOllamaFailure(error.description, error: error)
+        }
     }
 
     private func loadCommandCodeQuota(reason: QuotaRefreshReason) async {
@@ -2141,6 +2259,41 @@ final class AppState {
         didStorePrimary(.commandCode, snapshot: mergedSnapshot, source: source)
     }
 
+    private func storeOllama(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: ollamaQuota, now: updatedAt)
+        ollamaQuota = mergedSnapshot
+        ollamaQuotaSource = source
+        ollamaQuotaError = nil
+        ollamaRefreshState.lastSuccessAt = updatedAt
+        ollamaRefreshState.lastError = nil
+        ollamaRefreshState.backoffUntil = nil
+        ollamaRefreshState.source = source
+        quotaCache.providers[.ollama] = QuotaCacheRecord(
+            snapshot: mergedSnapshot,
+            source: source,
+            updatedAt: updatedAt,
+            accountID: ollamaAccount?.accountKey
+        )
+        saveQuotaCache()
+        didStorePrimary(.ollama, snapshot: mergedSnapshot, source: source)
+        recordQuotaHistory(
+            accountKey: QuotaHistoryAccountKey.ollamaPrimary(name: ollamaAccount?.accountKey),
+            app: .ollama,
+            kind: .ollamaPrimary,
+            snapshot: mergedSnapshot,
+            sampledAt: updatedAt
+        )
+    }
+
+    private func markOllamaFailure(_ message: String, error: QuotaError? = nil) {
+        ollamaQuotaError = message
+        ollamaRefreshState.lastError = message
+        if error?.isRateLimited == true {
+            ollamaRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+    }
+
     private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
         codexQuotaError = message
         codexRefreshState.lastError = message
@@ -2202,6 +2355,11 @@ final class AppState {
             print("[Credentials 凭据] Command Code: login=\(c.login ?? "—") source=\(c.source.displayName) plan=\(c.planType ?? "—")")
         } else {
             print("[Credentials 凭据] Command Code 未加载: error=\(commandCodeError ?? "unknown")")
+        }
+        if let c = ollamaAccount {
+            print("[Credentials 凭据] Ollama: name=\(c.name ?? "—") email=\(c.email ?? "—") plan=\(c.plan ?? "—") key=~/.ollama/id_ed25519")
+        } else {
+            print("[Credentials 凭据] Ollama 未加载: error=\(ollamaError ?? "unknown")")
         }
     }
 

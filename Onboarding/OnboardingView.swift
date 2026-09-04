@@ -236,7 +236,14 @@ private struct DetectAccountsStep: View {
                 source: commandCodeSource,
                 isDetected: appState.commandCodeAccount != nil
             )
-        case .kimi, .glm, .ollama:
+        case .ollama:
+            detection = Detection(
+                plan: appState.ollamaQuota?.planType ?? appState.ollamaAccount?.plan,
+                email: appState.ollamaAccount?.email ?? appState.ollamaAccount?.name,
+                source: "~/.ollama/id_ed25519",
+                isDetected: appState.ollamaAccount != nil
+            )
+        case .kimi, .glm:
             detection = Detection(plan: nil, email: nil, source: "~/.ccpm/config.json", isDetected: false)
         }
         guard !detection.isDetected else { return detection }

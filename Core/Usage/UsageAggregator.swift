@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// 按 (day, app, model, speed) 聚合的内存表。
+/// 按 (day, app, account, model, speed) 聚合的内存表。
 ///
 /// 本地日志和远端 Dashboard 结果使用独立分区：本地仅追加，远端按完整自然日替换。
 /// 标记为 `@Observable`：`snapshot()` / `todayCost(...)` / `totals(...)` 在 SwiftUI
@@ -15,15 +15,28 @@ final class UsageAggregator {
     struct BucketKey: Hashable {
         let day: Date
         let app: UsageApp
+        /// nil = primary account; see `UsageEntry.account`.
+        let account: String?
         let model: String
         let speed: UsageSpeed
+
+        init(day: Date, app: UsageApp, account: String? = nil, model: String, speed: UsageSpeed) {
+            self.day = day
+            self.app = app
+            self.account = account
+            self.model = model
+            self.speed = speed
+        }
+
+        init(_ bucket: UsageBucket) {
+            self.init(day: bucket.day, app: bucket.app, account: bucket.account, model: bucket.model, speed: bucket.speed)
+        }
     }
 
     func load(from snapshot: [UsageBucket]) {
         localBuckets.removeAll(keepingCapacity: true)
         for b in snapshot where b.app != .cursor {
-            let key = BucketKey(day: b.day, app: b.app, model: b.model, speed: b.speed)
-            localBuckets[key] = b
+            localBuckets[BucketKey(b)] = b
         }
     }
 
@@ -31,15 +44,14 @@ final class UsageAggregator {
     func loadRemote(from snapshot: [UsageBucket]) {
         remoteBuckets.removeAll(keepingCapacity: true)
         for bucket in snapshot where bucket.app == .cursor {
-            let key = BucketKey(day: bucket.day, app: bucket.app, model: bucket.model, speed: bucket.speed)
-            remoteBuckets[key] = bucket
+            remoteBuckets[BucketKey(bucket)] = bucket
         }
     }
 
     /// 本地扫描器的累计入口。远端数据不得调用此方法，以免重复拉取重复累计。
     func ingestLocal(_ entries: [UsageEntry]) {
         for e in entries where e.app != .cursor {
-            let key = BucketKey(day: e.day, app: e.app, model: e.model, speed: e.speed)
+            let key = BucketKey(day: e.day, app: e.app, account: e.account, model: e.model, speed: e.speed)
             if var b = localBuckets[key] {
                 b.inputTokens += e.inputTokens
                 b.outputTokens += e.outputTokens
@@ -53,6 +65,7 @@ final class UsageAggregator {
             } else {
                 localBuckets[key] = UsageBucket(
                     app: e.app,
+                    account: e.account,
                     model: e.model,
                     speed: e.speed,
                     day: e.day,
@@ -82,13 +95,7 @@ final class UsageAggregator {
         for bucket in buckets where bucket.app == app
             && bucket.day >= dayRange.lowerBound && bucket.day < dayRange.upperBound
         {
-            let key = BucketKey(
-                day: bucket.day,
-                app: bucket.app,
-                model: bucket.model,
-                speed: bucket.speed
-            )
-            remoteBuckets[key] = bucket
+            remoteBuckets[BucketKey(bucket)] = bucket
         }
     }
 
@@ -119,13 +126,23 @@ final class UsageAggregator {
         return sum
     }
 
-    /// 给 M6 复用：按时间范围 / 应用聚合。
+    /// 给 M6 复用：按时间范围 / 应用聚合（所有账号）。
     func totals(app: UsageApp, from: Date, to: Date) -> UsageTotals {
+        totals(app: app, account: .all, from: from, to: to)
+    }
+
+    /// Per-account totals for the popover cards. Remote (Cursor) buckets have no account
+    /// tag and therefore count as the primary account.
+    func totals(app: UsageApp, account: UsageAccountFilter, from: Date, to: Date) -> UsageTotals {
         var totals = UsageTotals.zero
-        for b in localBuckets.values where b.app == app && b.day >= from && b.day < to {
+        for b in localBuckets.values
+            where b.app == app && account.matches(b.account) && b.day >= from && b.day < to
+        {
             totals.add(b)
         }
-        for b in remoteBuckets.values where b.app == app && b.day >= from && b.day < to {
+        for b in remoteBuckets.values
+            where b.app == app && account.matches(b.account) && b.day >= from && b.day < to
+        {
             totals.add(b)
         }
         return totals

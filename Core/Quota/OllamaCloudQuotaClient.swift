@@ -1,191 +1,163 @@
 import Foundation
 
-/// Ollama Cloud exposes no quota API; the numbers live on the signed-in settings page.
-/// We fetch it with a user-pasted `Cookie:` header and parse the "Included usage" /
-/// "Monthly usage" / "Weekly usage" blocks.
+/// Ollama Cloud identity and usage through the same signed API the Ollama desktop app uses:
+/// `POST /api/me` for the account, `GET /api/usage` for the plan limits. The local
+/// `~/.ollama/id_ed25519` key signs each request; ccpm profiles use a Bearer API key.
 nonisolated enum OllamaCloudQuotaClient {
-    nonisolated static let settingsURL = URL(string: "https://ollama.com/settings")!
+    nonisolated static let baseURL = URL(string: "https://ollama.com")!
 
-    nonisolated static func fetch(cookieHeader: String) async -> Result<QuotaSnapshot, QuotaError> {
-        var request = URLRequest(url: settingsURL)
-        request.httpMethod = "GET"
-        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        request.setValue(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-            forHTTPHeaderField: "User-Agent"
-        )
-        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-        request.setValue("https://ollama.com", forHTTPHeaderField: "Origin")
-        request.setValue(settingsURL.absoluteString, forHTTPHeaderField: "Referer")
+    enum Credential: Sendable {
+        case localKey(OllamaLocalKey)
+        case apiKey(String)
+    }
+
+    struct Identity: Sendable, Equatable {
+        var name: String?
+        var email: String?
+        var plan: String?
+
+        var accountKey: String? { email?.lowercased() ?? name }
+    }
+
+    nonisolated static func fetchIdentity(_ credential: Credential) async -> Result<Identity, QuotaError> {
+        await request(credential, method: "POST", path: "/api/me").flatMap { data in
+            do { return .success(try parseIdentity(data: data)) }
+            catch let error as QuotaError { return .failure(error) }
+            catch { return .failure(.decode("\(error)")) }
+        }
+    }
+
+    nonisolated static func fetchUsage(
+        _ credential: Credential,
+        planType: String?,
+        now: Date = Date()
+    ) async -> Result<QuotaSnapshot, QuotaError> {
+        await request(credential, method: "GET", path: "/api/usage").flatMap { data in
+            do { return .success(try parseUsage(data: data, planType: planType, now: now)) }
+            catch let error as QuotaError { return .failure(error) }
+            catch { return .failure(.decode("\(error)")) }
+        }
+    }
+
+    // MARK: - Transport
+
+    nonisolated private static func request(
+        _ credential: Credential,
+        method: String,
+        path: String
+    ) async -> Result<Data, QuotaError> {
+        let ts = String(Int(Date().timeIntervalSince1970))
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = path
+        let authorization: String
+        switch credential {
+        case .localKey(let key):
+            components.queryItems = [URLQueryItem(name: "ts", value: ts)]
+            do { authorization = try key.authorization(method: method, path: path, ts: ts) }
+            catch { return .failure(.tokenRefreshFailed("ollama key signing failed: \(error)")) }
+        case .apiKey(let apiKey):
+            authorization = "Bearer \(apiKey)"
+        }
+        guard let url = components.url else { return .failure(.transport("ollama: bad url")) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 30
 
         let data: Data, response: URLResponse
         do { (data, response) = try await URLSession.shared.data(for: request) }
         catch { return .failure(.transport("\(error)")) }
         guard let http = response as? HTTPURLResponse else { return .failure(.transport("non-http")) }
-        if isSignInRedirect(http.url) {
-            return .failure(.http(401, "ollama session expired; paste a fresh cookie"))
-        }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 401 || http.statusCode == 403 {
-                return .failure(.http(http.statusCode, "ollama session rejected; paste a fresh cookie"))
+                return .failure(.http(http.statusCode, "ollama: not signed in (run `ollama signin`)"))
             }
-            return .failure(.http(http.statusCode, ""))
+            return .failure(.http(http.statusCode, String(data: data, encoding: .utf8) ?? ""))
         }
-        let html = String(data: data, encoding: .utf8) ?? ""
-        do {
-            return .success(try parse(html: html))
-        } catch let error as QuotaError {
-            return .failure(error)
-        } catch {
-            return .failure(.decode("\(error)"))
-        }
+        return .success(data)
     }
 
-    nonisolated static func isSignInRedirect(_ url: URL?) -> Bool {
-        guard let url else { return false }
-        let path = url.path.lowercased()
-        let host = url.host?.lowercased() ?? ""
-        return path.contains("signin") || path.contains("login") || host.contains("authkit")
+    // MARK: - Parsing
+
+    /// `/api/me` answers with capitalised keys from ollama.com and lowercase ones through the
+    /// local server proxy; both are accepted.
+    nonisolated static func parseIdentity(data: Data) throws -> Identity {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw QuotaError.decode("ollama: /api/me is not a json object")
+        }
+        let lowered = Dictionary(uniqueKeysWithValues: root.map { ($0.key.lowercased(), $0.value) })
+        func text(_ key: String) -> String? {
+            guard let value = lowered[key] as? String else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        let identity = Identity(name: text("name"), email: text("email"), plan: text("plan"))
+        guard identity.name != nil || identity.email != nil else {
+            throw QuotaError.decode("ollama: /api/me has no name or email")
+        }
+        return identity
     }
 
-    private static let monthlyLabel = "Monthly usage"
-    private static let legacyPrimaryLabels = ["Session usage", "Hourly usage"]
-    private static let weeklyLabel = "Weekly usage"
-    private static var allLabels: [String] { [monthlyLabel] + legacyPrimaryLabels + [weeklyLabel] }
-
-    nonisolated static func parse(html: String, now: Date = Date()) throws -> QuotaSnapshot {
-        let monthly = usageBlock(labels: [monthlyLabel], html: html)
-        let session = usageBlock(labels: legacyPrimaryLabels, html: html)
-        let weekly = usageBlock(labels: [weeklyLabel], html: html)
-
-        if monthly == nil, session == nil, weekly == nil {
-            if looksSignedOut(html) {
-                throw QuotaError.http(401, "ollama session expired; paste a fresh cookie")
+    /// `limits` is keyed by window name; each entry carries `usage` as a fraction (0.108 =
+    /// 10.8 % used) and the per-model request counts of that window.
+    nonisolated static func parseUsage(data: Data, planType: String?, now: Date = Date()) throws -> QuotaSnapshot {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw QuotaError.decode("ollama: /api/usage is not a json object")
+        }
+        guard let limits = root["limits"] as? [String: Any] else {
+            throw QuotaError.decode("ollama: missing limits")
+        }
+        var lanes: [QuotaLimit] = []
+        for (rawKey, rawValue) in limits {
+            guard let block = rawValue as? [String: Any], let fraction = QuotaJSON.double(block["usage"]) else { continue }
+            let key = rawKey.lowercased()
+            let window = QuotaWindow(
+                usedPercent: max(0, min(100, fraction * 100)),
+                resetsAt: QuotaJSON.isoDate(block["resets_at"] ?? block["reset_at"] ?? block["ends_at"]),
+                windowSeconds: nil,
+                detail: requestsDetail(block["models"])
+            )
+            switch key {
+            case "monthly":
+                lanes.append(QuotaLimit(id: "monthly", kind: .unknown, displayName: "Monthly", window: window, isActive: nil))
+            case "weekly":
+                lanes.append(QuotaLimit.standard(kind: .weekly, window: window))
+            case "hourly", "five_hour", "session":
+                lanes.append(QuotaLimit.standard(kind: .fiveHour, window: window))
+            default:
+                lanes.append(QuotaLimit(id: key, kind: .unknown, displayName: rawKey.capitalized, window: window, isActive: nil))
             }
-            throw QuotaError.decode("ollama: usage blocks not found on settings page")
         }
-
-        let monthlyLimit = monthly.map {
-            QuotaLimit(
-                id: "monthly",
-                kind: .unknown,
-                displayName: "Monthly",
-                window: QuotaWindow(usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: nil, detail: $0.detail),
-                isActive: nil
-            )
+        guard !lanes.isEmpty else {
+            throw QuotaError.decode("ollama: limits has no usage entries")
         }
-        let sessionLimit = session.map {
-            QuotaLimit.standard(
-                kind: .fiveHour,
-                window: QuotaWindow(usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: 5 * 3600)
-            )
+        // Stable order: monthly (the plan allowance) first, then shorter windows.
+        let rank: (QuotaLimit) -> Int = { limit in
+            switch limit.id {
+            case "monthly": return 0
+            case "weekly": return 1
+            case "five-hour": return 2
+            default: return 3
+            }
         }
-        let weeklyLimit = weekly.map {
-            QuotaLimit.standard(
-                kind: .weekly,
-                window: QuotaWindow(usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: 7 * 86400)
-            )
-        }
-
-        let primary = monthlyLimit ?? sessionLimit
-        let auxiliary = (monthlyLimit != nil ? sessionLimit : nil).map { [$0] } ?? []
+        lanes.sort { (rank($0), $0.id) < (rank($1), $1.id) }
 
         return QuotaSnapshot(
             app: .ollama,
-            primaryLimit: primary ?? weeklyLimit,
-            secondaryLimit: primary == nil ? nil : weeklyLimit,
-            auxiliaryLimits: auxiliary,
-            planType: planName(html),
+            primaryLimit: lanes[0],
+            secondaryLimit: lanes.count > 1 ? lanes[1] : nil,
+            auxiliaryLimits: Array(lanes.dropFirst(2)),
+            planType: planType,
             fetchedAt: now
         )
     }
 
-    private struct Block {
-        var usedPercent: Double
-        var resetsAt: Date?
-        var detail: String?
-    }
-
-    nonisolated private static func usageBlock(labels: [String], html: String) -> Block? {
-        for label in labels {
-            guard let range = html.range(of: label) else { continue }
-            let tail = String(html[range.upperBound...])
-            let boundary = allLabels
-                .filter { $0 != label }
-                .compactMap { tail.range(of: $0)?.lowerBound }
-                .min()
-            let window = String((boundary.map { String(tail[..<$0]) } ?? tail).prefix(4000))
-            guard let percent = percent(in: window) else { continue }
-            return Block(usedPercent: percent.value, resetsAt: isoDate(in: window), detail: percent.detail)
-        }
-        return nil
-    }
-
-    nonisolated private static func percent(in text: String) -> (value: Double, detail: String?)? {
-        if let raw = firstCapture(in: text, pattern: #"([0-9]+(?:\.[0-9]+)?)\s*%\s*used"#, options: [.caseInsensitive]),
-           let value = Double(raw) {
-            return (value, nil)
-        }
-        let amount = #"((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)"#
-        if let regex = try? NSRegularExpression(pattern: #"\$"# + amount + #"\s+of\s+\$"# + amount + #"\s+used"#, options: [.caseInsensitive]) {
-            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            if let match = regex.firstMatch(in: text, range: range), match.numberOfRanges > 2,
-               let usedRange = Range(match.range(at: 1), in: text),
-               let limitRange = Range(match.range(at: 2), in: text),
-               let used = Double(text[usedRange].replacingOccurrences(of: ",", with: "")),
-               let limit = Double(text[limitRange].replacingOccurrences(of: ",", with: "")),
-               limit > 0 {
-                return (used / limit * 100, "$\(text[usedRange]) of $\(text[limitRange])")
-            }
-        }
-        if let raw = firstCapture(in: text, pattern: #"width:\s*([0-9]+(?:\.[0-9]+)?)%"#, options: [.caseInsensitive]),
-           let value = Double(raw) {
-            return (value, nil)
-        }
-        return nil
-    }
-
-    nonisolated private static func isoDate(in text: String) -> Date? {
-        guard let raw = firstCapture(in: text, pattern: #"data-time=\"([^\"]+)\""#, options: []) else { return nil }
-        return QuotaJSON.isoDate(raw)
-    }
-
-    nonisolated private static func planName(_ html: String) -> String? {
-        let patterns = [
-            #"Included usage\s*</span>\s*<span[^>]*>([^<]+)</span"#,
-            #"Cloud Usage\s*</span>\s*<span[^>]*>([^<]+)</span>"#,
-        ]
-        for pattern in patterns {
-            if let raw = firstCapture(in: html, pattern: pattern, options: [.dotMatchesLineSeparators]) {
-                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
-            }
-        }
-        return nil
-    }
-
-    nonisolated static func looksSignedOut(_ html: String) -> Bool {
-        let lower = html.lowercased()
-        let hasSignInHeading = lower.contains("sign in to ollama") || lower.contains("log in to ollama")
-        let hasAuthEndpoint = lower.contains("/api/auth/signin") || lower.contains("/auth/signin")
-            || lower.contains("action=\"/login\"") || lower.contains("href=\"/login\"")
-            || lower.contains("action=\"/signin\"") || lower.contains("href=\"/signin\"")
-        let hasPasswordField = lower.contains("type=\"password\"") || lower.contains("name=\"password\"")
-        let hasEmailField = lower.contains("type=\"email\"") || lower.contains("name=\"email\"")
-        let hasForm = lower.contains("<form")
-        if hasSignInHeading, hasForm, hasEmailField || hasPasswordField || hasAuthEndpoint { return true }
-        if hasForm, hasAuthEndpoint { return true }
-        return hasForm && hasPasswordField && hasEmailField
-    }
-
-    nonisolated private static func firstCapture(in text: String, pattern: String, options: NSRegularExpression.Options) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let match = regex.firstMatch(in: text, range: range), match.numberOfRanges > 1,
-              let captureRange = Range(match.range(at: 1), in: text)
-        else { return nil }
-        return String(text[captureRange])
+    nonisolated private static func requestsDetail(_ models: Any?) -> String? {
+        guard let models = models as? [[String: Any]] else { return nil }
+        let total = models.compactMap { QuotaJSON.int($0["request_count"]) }.reduce(0, +)
+        guard total > 0 else { return nil }
+        return "\(total) requests"
     }
 }

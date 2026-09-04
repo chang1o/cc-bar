@@ -3,8 +3,9 @@ import SwiftUI
 // MARK: - CCPMAccountsSection
 //
 // ccpm profiles of one provider inside its popover section. Profiles that share the
-// primary account's identity collapse into a caption under the primary card; every
-// other profile is a full `ServiceBlockView` card (muted when it cannot be monitored).
+// primary account's identity collapse into a caption under the primary card (their
+// logs count towards the primary card); every other profile is a full `ServiceBlockView`
+// card (muted when it cannot be monitored) with the cost of its own log directory.
 
 struct CCPMAccountsSection: View {
     @Environment(AppState.self) private var appState
@@ -69,7 +70,7 @@ struct CCPMAccountsSection: View {
             fallback: descriptor?.fallback ?? "?",
             state: state,
             error: state.error,
-            usage: nil,
+            usage: usage(for: account),
             serviceStatus: nil,
             planBadge: ServiceBlockView.formatPlan(state.snapshot?.planType),
             dashboardURL: descriptor?.dashboardURL,
@@ -77,6 +78,20 @@ struct CCPMAccountsSection: View {
             ccpmAccount: account,
             unavailableReason: reason,
             onProfilesChanged: { Task { await appState.rediscoverCCPMAccounts() } }
+        )
+    }
+
+    /// Cost scanned from the profile's own directory (`<profile>/projects` for Claude,
+    /// `<profile>/sessions` for Codex); providers without local logs show no cost row.
+    private func usage(for account: CCPMAccount) -> ServiceBlockView.Usage? {
+        guard let descriptor = QuotaProviderDescriptor.descriptor(for: app),
+              descriptor.showsCost,
+              let usageApp = app.usageApp
+        else { return nil }
+        return PopoverRootView.localUsage(
+            app: usageApp,
+            account: .ccpm(account.profile.name),
+            aggregator: appState.usageService.aggregator
         )
     }
 

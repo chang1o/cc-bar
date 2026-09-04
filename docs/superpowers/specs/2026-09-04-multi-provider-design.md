@@ -11,7 +11,7 @@
 |---|---|
 | 第三方账号来源 | 只走 ccpm profile 自动发现，cc-bar 不提供独立填 key 的入口 |
 | provider 标识 | ccpm `config.json` 显式 `provider` 字段；cc-bar 不按 URL 推断 |
-| Ollama 形态 | Ollama Cloud（ollama.com）。额度靠用户手动粘贴 Cookie 头抓 settings 页；不做浏览器 Cookie 自动导入 |
+| Ollama 形态 | Ollama Cloud（ollama.com）。**2026-09-05 修订**：主账号从本机 `~/.ollama/id_ed25519` 自动识别，用与 Ollama 桌面端相同的密钥签名调用 `POST /api/me` 与 `GET /api/usage`，不再需要 Cookie；ccpm ollama profile 用 API key（Bearer）调同一接口。原「手动粘贴 Cookie 抓 settings 页」方案作废 |
 | 架构路线 | Descriptor 驱动的统一账号模型，一次性重写 AppState / Popover；缓存与汇总文件升版触发全量重扫 |
 | 代码落点 | `~/Code/cc-bar`、`~/Code/claude-code-profile-manager`；只做本地改动，不提交 |
 | 不做 | GLM team scope、Kimi 网页 Cookie 增强、z.ai 全球站余额、Ollama 浏览器导入、App 内登录 |
@@ -152,7 +152,7 @@ struct AccountQuotaState: Sendable, Equatable {
 | claude | 缺省 / anthropic | oauth | Claude OAuth，沿用 profile Keychain service 规则 |
 | claude | anthropic | api_key | `.unavailable`（只做本地用量） |
 | claude | kimi / glm | api_key | key 读 ccpm keystore；baseURL 取 `env.ANTHROPIC_BASE_URL`，缺失用 descriptor 默认 |
-| claude | ollama | api_key | cookie 读 cc-bar Keychain（service `com.cc-bar.ollama.cookie`，account = profile 名），可为空 |
+| claude | ollama | api_key | ccpm keystore 里的 API key，`Authorization: Bearer`（2026-09-05 修订；原 cookie 方案作废） |
 | 其他组合 | | | 忽略并打日志 |
 
 `usageRoots`：默认 Claude → `~/.claude/projects`；默认 Codex → `~/.codex/sessions` + `~/.codex/archived_sessions`；ccpm claude 运行时 → `<dir>/projects`；ccpm codex → `<dir>/sessions` + `<dir>/archived_sessions`；导入 Codex 账号 → 空。
@@ -164,7 +164,7 @@ struct AccountQuotaState: Sendable, Equatable {
 | `quota-cache.json` | v2：`records: [String: QuotaCacheRecord]`，键 `AccountID.raw` |
 | `quota-history-today.json` | v2：`accountKey = AccountID.raw`，字段 `provider`；删除 `QuotaHistoryAccountKind` |
 | `usage-rollup.json` / `scan-state.json` | v5：桶键 `(day, accountId, provider, model)`；旧版本直接丢弃触发全量重扫 |
-| cc-bar Keychain | 新增 `com.cc-bar.ollama.cookie` |
+| cc-bar Keychain | 无新增（2026-09-05 修订：Ollama 不再存 cookie） |
 | UserDefaults | `showCodex/showClaude` 等布尔对改为 `enabledProviders / menuBarProviders / floatingProviders: Set<Provider>`；新增 `menuBarMode: all | lowestOnly`；首次启动从旧键迁移 |
 
 ---
@@ -243,7 +243,10 @@ Provider 默认 base URL（写入 `Env["ANTHROPIC_BASE_URL"]`，用户已设置�
 - 映射：token / credit 类按窗口长度排序，最短为 `primary`（kind 按窗口长度判：300 分钟 → fiveHour，否则 weekly），最长为 `secondary`；`TIME_LIMIT` 作为 `extra` 的 `mcp` 窗（`unit=5,number=1` 视为月窗）。百分比优先按 `usage` 与 `currentValue/remaining` 计算，否则用 `percentage`。5 小时窗的 reset 若超过当前时间 5 小时零 1 分钟则丢弃 reset，保留百分比。
 - `planName` → `planType`。
 
-### 3.4 Ollama Cloud
+### 3.4 Ollama Cloud（2026-09-05 修订：密钥签名 API，替代 Cookie 方案）
+
+- 主账号：`~/.ollama/id_ed25519` 存在即视为已安装。`OllamaLocalKey` 解析未加密的 OpenSSH ed25519 私钥，对 `"<METHOD>,<PATH>?ts=<unix>"` 签名，`Authorization: <pubkey>:<sig>`，URL 带同一 `ts`。`POST /api/me` → name / email / plan（401 = 未 `ollama signin`）；`GET /api/usage` → `limits.<window>.usage`（比例），`monthly` 为主 lane，detail 为各模型请求数之和。ccpm ollama profile 走 `Authorization: Bearer <api key>`。
+- 以下为作废的 Cookie 方案原文，仅供追溯：
 
 - 无 cookie → `AccountQuotaState.error = "Paste ollama.com cookie in Settings"`，不发请求。
 - 有 cookie → `GET https://ollama.com/settings`，请求头：`Cookie`、浏览器 UA、`accept: text/html`。301/302 到 `/signin` 或 200 但页面含登录表单 → `QuotaError.http(401)`，提示 cookie 过期。
@@ -320,7 +323,7 @@ struct QuotaPace: Equatable {
 ### 5.4 设置
 
 - 「账号」组：按 `Provider.allCases` 生成一行 toggle，副标题为 vendor 与发现到的账号数；未发现账号的 provider 置灰。
-- 「ccpm Profiles」组：统一列表（替换 Codex / Claude 两个组），每行 provider tile、profile 名、身份、auth、当前主窗百分比；Ollama 行右侧 "Cookie…" 按钮弹出粘贴 sheet，写入 Keychain 后立即刷新。
+- 「ccpm Profiles」组：统一列表（替换 Codex / Claude 两个组），每行 provider tile、profile 名、身份、auth、当前主窗百分比；Ollama 主账号在「账号」组显示本机密钥对应的账号与计划（2026-09-05 修订：无 Cookie 入口）。
 - 「其他 Codex 账号」组不变。
 - 「菜单栏」组：provider toggle 列表 + 显示模式 picker + 主副窗 picker。
 - 「悬浮窗」组：provider toggle 列表。
@@ -366,7 +369,7 @@ struct QuotaPace: Equatable {
 
 - 无第三方 profile 时，Popover / 菜单栏 / HUD / 统计与改造前一致。
 - `ccpm add kimi-work --provider kimi` 后重启 cc-bar，Kimi 分区出现，5H 与 WK 有百分比与 requests 明细。
-- Ollama profile 未贴 cookie 时显示提示；贴入后显示 MO / WK。
+- 本机装过 Ollama 且 `ollama signin` 过：Ollama Cloud 卡片显示账号、计划与月度用量；未登录时卡片提示 `run ollama signin`。
 - 关闭某 provider 后菜单栏、HUD、统计均不再出现该 provider，且不再请求其接口。
 - 价格表变化时 v5 汇总缓存被丢弃并重扫。
 
@@ -382,7 +385,7 @@ struct QuotaPace: Equatable {
 
 - `Core/Providers/Provider.swift`、`MonitoredAccount.swift`、`AccountCatalog.swift`
 - `Core/Quota/QuotaFetcher.swift`、`QuotaPace.swift`、`KimiQuotaClient.swift`、`GLMQuotaClient.swift`、`OllamaCloudQuotaClient.swift`
-- `Core/Credentials/CCPMKeystore.swift`、`OllamaCookieStore.swift`
+- `Core/Credentials/CCPMKeystore.swift`、`OllamaLocalKey.swift`（2026-09-05 修订，原 `OllamaCookieStore.swift` 已删除）
 - `MenuBar/ProviderSection.swift`、`CompactAccountRow.swift`
 - `Resources/Logos/kimi.svg`、`glm.svg`、`ollama.svg`
 - `scripts/selfcheck.sh`、`scripts/selfcheck/main.swift`

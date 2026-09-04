@@ -172,7 +172,9 @@ nonisolated struct UsageRollupPayload: Sendable, Codable {
     /// version 管「结构变更或费用口径改变」；价格变化不触发自动失效，由手动重算对齐。
     /// v8: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
     /// v9: Pi/OpenCode 统一费用解析规则改变，旧聚合结果必须全量重算。
-    static let currentVersion: Int = 9
+    /// v10: buckets gained the `account` dimension; older rollups folded ccpm profile
+    ///      directories into the primary account and must be rebuilt from the logs.
+    static let currentVersion: Int = 10
     var version: Int = UsageRollupPayload.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致丢弃（价格变化不自动重算）。

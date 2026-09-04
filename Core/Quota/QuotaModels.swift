@@ -19,12 +19,12 @@ nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
         }
     }
 
-    /// Apps with a machine-level primary login (auth.json, Keychain, Cursor DB...).
-    /// Kimi / GLM / Ollama are reachable only through ccpm profiles.
+    /// Apps with a machine-level primary login (auth.json, Keychain, Cursor DB, the Ollama
+    /// signing key...). Kimi / GLM are reachable only through ccpm profiles.
     var supportsPrimaryAccount: Bool {
         switch self {
-        case .codex, .claude, .antigravity, .cursor, .commandCode: return true
-        case .kimi, .glm, .ollama: return false
+        case .codex, .claude, .antigravity, .cursor, .commandCode, .ollama: return true
+        case .kimi, .glm: return false
         }
     }
 }

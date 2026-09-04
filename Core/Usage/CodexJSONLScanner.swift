@@ -34,12 +34,13 @@ enum CodexJSONLScanner {
     /// 全量重扫 / 强制重算是主要耗时场景，多核并行收益明显；受限为 4 避免 IO 争抢过激。
     nonisolated private static let maxConcurrentFiles = 4
 
-    /// `~/.codex/{sessions,archived_sessions}` plus the same directories of every ccpm Codex profile.
-    nonisolated static func defaultRoots() -> [URL] {
+    /// `~/.codex/{sessions,archived_sessions}` (primary account) plus the same directories of
+    /// every ccpm Codex profile, tagged with that profile's account.
+    nonisolated static func defaultRoots() -> [UsageScanRoot] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let roots = [
-            home.appendingPathComponent(".codex/sessions", isDirectory: true),
-            home.appendingPathComponent(".codex/archived_sessions", isDirectory: true)
+            UsageScanRoot(url: home.appendingPathComponent(".codex/sessions", isDirectory: true)),
+            UsageScanRoot(url: home.appendingPathComponent(".codex/archived_sessions", isDirectory: true)),
         ]
         return CCPMUsageRoots.merged(roots, with: CCPMUsageRoots.codex())
     }
@@ -65,6 +66,7 @@ enum CodexJSONLScanner {
     ///   （全量重扫走这条，测试同理）。
     /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter onProgress: 非 nil 时按批回报一次扫描进度。
+    /// Untagged roots: every entry belongs to the primary account (tests and one-off scans).
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenTokenIds: [String] = [],
@@ -73,11 +75,31 @@ enum CodexJSONLScanner {
         minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) async -> Result {
+        await scan(
+            previous: previous,
+            seenTokenIds: seenTokenIds,
+            roots: roots.map { UsageScanRoot(url: $0) },
+            indexedTitles: indexedTitles,
+            minimumMtime: minimumMtime,
+            onProgress: onProgress
+        )
+    }
+
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        seenTokenIds: [String] = [],
+        roots: [UsageScanRoot],
+        indexedTitles: [String: String],
+        minimumMtime: Date? = nil,
+        onProgress: ScanProgressCallback? = nil
+    ) async -> Result {
         var filesByID: [String: JSONLFileDescriptor] = [:]
+        // The root a file was found under decides which account its entries belong to.
+        var accountByPath: [String: String?] = [:]
         var failedRootCount = 0
         for root in roots {
             let enumeration = JSONLDirectoryEnumerator.enumerate(
-                at: root,
+                at: root.url,
                 minimumMtime: minimumMtime
             )
             if enumeration.accessFailed { failedRootCount += 1 }
@@ -86,9 +108,11 @@ enum CodexJSONLScanner {
                 if let existing = filesByID[id] {
                     if file.modificationTime > existing.modificationTime {
                         filesByID[id] = file
+                        accountByPath[file.path] = root.account
                     }
                 } else {
                     filesByID[id] = file
+                    accountByPath[file.path] = root.account
                 }
             }
         }
@@ -127,17 +151,24 @@ enum CodexJSONLScanner {
             await withTaskGroup(of: (Int, CodexFileScanResult).self) { group in
                 for index in offset..<end {
                     let file = files[index]
+                    let account = accountByPath[file.path] ?? nil
                     let stateKey = conversationID(from: file.url) ?? file.path
                     let state = previous[stateKey]
                     if state?.mtime == file.modificationTime, state?.offset == file.size {
                         batchResults.append((
                             index,
-                            scanSingleFile(file: file, previous: previous, indexedTitles: indexedTitles)
+                            scanSingleFile(
+                                file: file,
+                                account: account,
+                                previous: previous,
+                                indexedTitles: indexedTitles
+                            )
                         ))
                     } else {
                         group.addTask {
                             (index, scanSingleFile(
                                 file: file,
+                                account: account,
                                 previous: previous,
                                 indexedTitles: indexedTitles
                             ))
@@ -247,6 +278,7 @@ enum CodexJSONLScanner {
     /// 本文件是否写过 cache_creation，要等跨文件去重筛掉重放行之后才算数。
     private nonisolated static func scanSingleFile(
         file: JSONLFileDescriptor,
+        account: String?,
         previous: [String: ScanFileState],
         indexedTitles: [String: String]
     ) -> CodexFileScanResult {
@@ -392,6 +424,7 @@ enum CodexJSONLScanner {
                 )
                 let entry = UsageEntry(
                     app: .codex,
+                    account: account,
                     conversationKey: "codex:\(resolvedID)",
                     model: Pricing.normalize(model: model),
                     speed: currentSpeed,

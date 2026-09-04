@@ -426,3 +426,118 @@ final class ScannerIncrementalTests: XCTestCase {
         XCTAssertNotNil(filtered.newState[newer.path])
     }
 }
+
+// MARK: - Account attribution
+
+extension ScannerIncrementalTests {
+    private static func claudeLine(session: String, id: String, at timestamp: String, input: Int) -> String {
+        """
+        {"type":"assistant","sessionId":"\(session)","cwd":"/tmp/ccbar-fixture","timestamp":"\(timestamp)","message":{"id":"\(id)","model":"claude-opus-4-8","stop_reason":"end_turn","usage":{"input_tokens":\(input),"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+
+        """
+    }
+
+    private static func codexBody(sessionID: String, input: Int, cached: Int) -> String {
+        let total = input + 10
+        return """
+        {"timestamp":"2026-07-16T00:00:00Z","type":"session_meta","payload":{"id":"\(sessionID)","cwd":"/tmp/ccbar-fixture"}}
+        {"timestamp":"2026-07-16T00:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-07-16T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":\(input),"cached_input_tokens":\(cached),"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":\(total)},"last_token_usage":{"input_tokens":\(input),"cached_input_tokens":\(cached),"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":\(total)}}}}
+
+        """
+    }
+
+    private func makeDirectory(_ path: String) throws -> URL {
+        let url = tempDir.appendingPathComponent(path, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// Entries take the account of the root they were scanned from; the aggregator splits
+    /// totals per account while the untagged `totals(app:from:to:)` still sums every account.
+    @MainActor
+    func testClaudeMultiRootScanAttributesEntriesToRootAccount() throws {
+        let primaryRoot = try makeDirectory("claude-primary/projects")
+        let profileRoot = try makeDirectory("ccpm/zxliu/projects")
+        try Data(Self.claudeLine(session: "s-primary", id: "msg-primary", at: "2026-07-16T01:00:00Z", input: 100).utf8)
+            .write(to: try makeDirectory("claude-primary/projects/p").appendingPathComponent("a.jsonl"))
+        try Data(Self.claudeLine(session: "s-profile", id: "msg-profile", at: "2026-07-16T01:00:01Z", input: 40).utf8)
+            .write(to: try makeDirectory("ccpm/zxliu/projects/p").appendingPathComponent("b.jsonl"))
+
+        let result = ClaudeJSONLScanner.scan(
+            previous: [:],
+            seenMessageIds: [],
+            roots: [
+                UsageScanRoot(url: primaryRoot),
+                UsageScanRoot(url: profileRoot, account: UsageAccountFilter.tag(ccpmProfile: "zxliu")),
+            ],
+            conversationIndex: ConversationTitleIndex.ClaudeIndex(titles: [:], projects: [:])
+        )
+        XCTAssertEqual(result.entries.count, 2)
+        XCTAssertNil(result.entries.first { $0.conversationKey == "claude:s-primary" }?.account)
+        XCTAssertEqual(result.entries.first { $0.conversationKey == "claude:s-profile" }?.account, "ccpm:zxliu")
+
+        let aggregator = UsageAggregator()
+        aggregator.ingestLocal(result.entries)
+        let from = Date(timeIntervalSince1970: 0)
+        let to = Date(timeIntervalSinceNow: 365 * 86_400)
+        XCTAssertEqual(aggregator.totals(app: .claude, account: .primary, from: from, to: to).inputTokens, 100)
+        XCTAssertEqual(aggregator.totals(app: .claude, account: .ccpm("zxliu"), from: from, to: to).inputTokens, 40)
+        XCTAssertEqual(aggregator.totals(app: .claude, account: .ccpm("other"), from: from, to: to).inputTokens, 0)
+        XCTAssertEqual(aggregator.totals(app: .claude, account: .tags([nil, "ccpm:zxliu"]), from: from, to: to).inputTokens, 140)
+        XCTAssertEqual(aggregator.totals(app: .claude, from: from, to: to).inputTokens, 140)
+
+        // Buckets keep the tag through the rollup round trip.
+        let restored = UsageAggregator()
+        restored.load(from: aggregator.snapshotLocal())
+        XCTAssertEqual(restored.totals(app: .claude, account: .ccpm("zxliu"), from: from, to: to).inputTokens, 40)
+    }
+
+    /// Codex merges the files of every root before parsing; the account must follow the
+    /// file, not the parse order.
+    @MainActor
+    func testCodexMultiRootScanAttributesEntriesToRootAccount() async throws {
+        let primaryRoot = try makeDirectory("codex-primary/sessions")
+        let profileRoot = try makeDirectory("ccpm/czxliu/sessions")
+        try Data(Self.codexBody(sessionID: "019daa2f-0000-7000-8000-00000000aa01", input: 100, cached: 20).utf8)
+            .write(to: primaryRoot.appendingPathComponent("rollout-primary.jsonl"))
+        try Data(Self.codexBody(sessionID: "019daa2f-0000-7000-8000-00000000aa02", input: 60, cached: 20).utf8)
+            .write(to: profileRoot.appendingPathComponent("rollout-profile.jsonl"))
+
+        let result = await CodexJSONLScanner.scan(
+            previous: [:],
+            roots: [
+                UsageScanRoot(url: primaryRoot),
+                UsageScanRoot(url: profileRoot, account: UsageAccountFilter.tag(ccpmProfile: "czxliu")),
+            ],
+            indexedTitles: [:]
+        )
+        XCTAssertEqual(result.entries.count, 2)
+        let byAccount = Dictionary(grouping: result.entries, by: { $0.account })
+        XCTAssertEqual(byAccount[nil]?.map(\.inputTokens), [80])
+        XCTAssertEqual(byAccount["ccpm:czxliu"]?.map(\.inputTokens), [40])
+
+        let aggregator = UsageAggregator()
+        aggregator.ingestLocal(result.entries)
+        let from = Date(timeIntervalSince1970: 0)
+        let to = Date(timeIntervalSinceNow: 365 * 86_400)
+        XCTAssertEqual(aggregator.totals(app: .codex, account: .primary, from: from, to: to).inputTokens, 80)
+        XCTAssertEqual(aggregator.totals(app: .codex, account: .ccpm("czxliu"), from: from, to: to).inputTokens, 40)
+    }
+
+    /// Rollups written before v10 have no `account` key and decode as primary-account buckets.
+    func testUsageBucketDecodesLegacyJSONWithoutAccount() throws {
+        let legacy = """
+        {"app":"claude","model":"claude-opus-4-8","speed":"standard","day":0,"inputTokens":1,"outputTokens":2,"cacheReadTokens":3,"cacheCreationTokens":4,"costUSD":"1.5","requestCount":1,"hasUnpricedUsage":false}
+        """
+        let bucket = try JSONDecoder().decode(UsageBucket.self, from: Data(legacy.utf8))
+        XCTAssertNil(bucket.account)
+        XCTAssertEqual(bucket.costUSD, Decimal(string: "1.5"))
+
+        var tagged = bucket
+        tagged.account = "ccpm:zxliu"
+        let roundTrip = try JSONDecoder().decode(UsageBucket.self, from: JSONEncoder().encode(tagged))
+        XCTAssertEqual(roundTrip.account, "ccpm:zxliu")
+        XCTAssertEqual(roundTrip, tagged)
+    }
+}

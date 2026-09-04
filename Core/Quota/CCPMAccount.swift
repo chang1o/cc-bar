@@ -1,7 +1,7 @@
 import Foundation
 
 /// A quota-bearing account discovered from a ccpm profile. Layered on top of the primary
-/// (machine-level) account of each `QuotaApp`; Kimi / GLM / Ollama exist only this way.
+/// (machine-level) account of each `QuotaApp`; Kimi / GLM exist only this way.
 nonisolated struct CCPMAccount: Identifiable, Sendable, Hashable {
     enum Availability: Sendable, Hashable {
         case ready
@@ -14,7 +14,7 @@ nonisolated struct CCPMAccount: Identifiable, Sendable, Hashable {
         case codexOAuth(CodexAccount)
         case claudeOAuth(ClaudeAccount)
         case apiKey(String, baseURL: URL)
-        case ollamaCookie(String)
+        case ollamaAPIKey(String)
         case none
     }
 
@@ -128,13 +128,16 @@ nonisolated enum CCPMAccountCatalog {
                            availability: .ready, mirrorsPrimary: false, credential: .apiKey(key, baseURL: baseURL))
     }
 
+    /// ccpm ollama profiles carry an ollama.com API key (Bearer); the primary account uses
+    /// the local signing key instead and is discovered by `AppState.loadOllama`.
     private static func ollama(_ profile: CCPMProfile) -> CCPMAccount {
-        guard let cookie = OllamaCookieStore.load(profile: profile.name) else {
+        guard let key = CCPMKeystore.credential(for: profile) else {
             return CCPMAccount(profile: profile, app: .ollama, detail: "ollama.com", planType: nil,
-                               availability: .unavailable(reason: "Cookie not set"), mirrorsPrimary: false, credential: .none)
+                               availability: .unavailable(reason: "No API key in ccpm keystore"),
+                               mirrorsPrimary: false, credential: .none)
         }
         return CCPMAccount(profile: profile, app: .ollama, detail: "ollama.com", planType: nil,
-                           availability: .ready, mirrorsPrimary: false, credential: .ollamaCookie(cookie))
+                           availability: .ready, mirrorsPrimary: false, credential: .ollamaAPIKey(key))
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

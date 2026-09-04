@@ -1,10 +1,8 @@
 import SwiftUI
 
 /// Read-only list of every ccpm profile cc-bar discovered, across providers.
-/// Ollama Cloud rows expose the cookie paste sheet.
 struct CCPMProfilesView: View {
     @Environment(AppState.self) private var appState
-    @State private var cookieTarget: CCPMAccount?
     @State private var binaryPath: String?
     @State private var binaryResolved = false
     @State private var isRediscovering = false
@@ -22,9 +20,6 @@ struct CCPMProfilesView: View {
                     profileRow(account)
                 }
             }
-        }
-        .sheet(item: $cookieTarget) { account in
-            OllamaCookieSheet(account: account)
         }
         .task {
             // `resolveBinary` may spawn a login shell; keep it off the main actor.
@@ -112,16 +107,6 @@ struct CCPMProfilesView: View {
 
             Spacer()
 
-            if account.app == .ollama {
-                Button {
-                    cookieTarget = account
-                } label: {
-                    Text(hasCookie(account) ? "Cookie…" : tr("Paste cookie…", "粘贴 Cookie…"))
-                        .font(.system(size: 11))
-                }
-                .controlSize(.small)
-            }
-
             VStack(alignment: .trailing, spacing: 2) {
                 Text(credentialLabel(account))
                     .font(.system(size: 10.5, weight: .medium))
@@ -197,9 +182,7 @@ struct CCPMProfilesView: View {
 
     private func credentialLabel(_ account: CCPMAccount) -> String {
         switch account.app {
-        case .ollama:
-            return hasCookie(account) ? "cookie" : tr("no cookie", "无 Cookie")
-        case .kimi, .glm:
+        case .kimi, .glm, .ollama:
             return "api_key"
         case .codex, .claude, .antigravity, .cursor, .commandCode:
             if case .unavailable = account.availability { return tr("unavailable", "不可用") }
@@ -207,9 +190,6 @@ struct CCPMProfilesView: View {
         }
     }
 
-    private func hasCookie(_ account: CCPMAccount) -> Bool {
-        account.app == .ollama && account.availability == .ready
-    }
 }
 
 private struct CCPMProfilesEmptyState: View {
@@ -231,70 +211,5 @@ private struct CCPMProfilesEmptyState: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-    }
-}
-
-// MARK: - Ollama cookie sheet
-
-private struct OllamaCookieSheet: View {
-    @Environment(AppState.self) private var appState
-    @Environment(\.dismiss) private var dismiss
-    let account: CCPMAccount
-    @State private var text: String = ""
-    @State private var isSaving = false
-
-    private var profile: String { account.profile.name }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(tr("Ollama Cloud cookie", "Ollama Cloud Cookie"))
-                .font(.system(size: 14, weight: .semibold))
-            Text(tr(
-                "Sign in at ollama.com, open DevTools → Network, copy the Cookie request header of any ollama.com request and paste it here. It is stored in your login Keychain and only sent to ollama.com/settings.",
-                "登录 ollama.com 后打开开发者工具 → Network,复制任意 ollama.com 请求的 Cookie 请求头粘贴到这里。它保存在你的登录钥匙串中,只会发送到 ollama.com/settings。"
-            ))
-            .font(.system(size: 11.5))
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-
-            TextEditor(text: $text)
-                .font(.system(size: 11, design: .monospaced))
-                .frame(minHeight: 120)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
-                )
-
-            HStack {
-                Button(tr("Remove", "移除"), role: .destructive) {
-                    apply(nil)
-                }
-                .disabled(isSaving || account.availability != .ready)
-                Spacer()
-                Button(tr("Cancel", "取消")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(tr("Save", "保存")) {
-                    apply(text.trimmingCharacters(in: .whitespacesAndNewlines))
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(isSaving || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20)
-        .frame(width: 460)
-        .onAppear {
-            text = OllamaCookieStore.load(profile: profile) ?? ""
-        }
-    }
-
-    /// nil removes the stored cookie; an empty string is treated the same way.
-    private func apply(_ cookie: String?) {
-        isSaving = true
-        let value = (cookie?.isEmpty ?? true) ? nil : cookie
-        Task {
-            await appState.setOllamaCookie(value, profile: profile)
-            isSaving = false
-            dismiss()
-        }
     }
 }

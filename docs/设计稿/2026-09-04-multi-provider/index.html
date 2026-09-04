@@ -302,25 +302,23 @@
 
 <section id="settings">
   <h2>④ 设置</h2>
-  <p class="lead">「账号」组按 <code>Provider.allCases</code> 生成，每行显示识别到的身份与账号数；「ccpm Profiles」统一列出所有运行时和 provider 的 profile，Ollama 行带 Cookie 粘贴入口；「菜单栏」「悬浮窗」组也按 provider 生成。</p>
+  <p class="lead">「账号」组按 <code>Provider.allCases</code> 生成，每行显示识别到的身份与账号数；「ccpm Profiles」统一列出所有运行时和 provider 的 profile；Ollama Cloud 主账号从本机 <code>~/.ollama/id_ed25519</code> 自动识别，账号行显示 <code>/api/me</code> 返回的账号与计划；「菜单栏」「悬浮窗」组也按 provider 生成。</p>
   <div class="win" style="max-width:1100px">
     <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><div class="tabs2"><span>Statistics</span><span class="on">Settings</span></div></div>
     <div class="prefs" id="prefs"></div>
   </div>
   <div class="grid two" style="margin-top:22px">
-    <div class="plate"><div class="lbl">Ollama Cloud · cookie sheet</div>
+    <div class="plate"><div class="lbl">Ollama Cloud · 本机密钥签名（2026-09-05 替代 cookie sheet）</div>
       <div class="sheet">
-        <h4>Ollama Cloud cookie</h4>
-        <p>Sign in at ollama.com, open DevTools → Network, copy the Cookie request header of any ollama.com request and paste it here. It is stored in your login Keychain and only sent to ollama.com/settings.</p>
-        <textarea readonly>wos-session=eyJhbGciOiJIUzI1NiJ9...; _ga=GA1.1.1234567890; __cf_bm=...</textarea>
-        <div class="acts"><span class="b d">Remove</span><span class="sp"></span><span class="b">Cancel</span><span class="b p">Save</span></div>
+        <h4>Ollama Cloud</h4>
+        <p>No cookie. cc-bar reads <code>~/.ollama/id_ed25519</code>, signs <code>"&lt;METHOD&gt;,&lt;PATH&gt;?ts=&lt;unix&gt;"</code> like the Ollama desktop app and calls <code>POST /api/me</code> (name · email · plan) and <code>GET /api/usage</code> (<code>limits.monthly.usage</code>). Not signed in → the card says <code>run ollama signin</code>.</p>
       </div>
     </div>
     <div class="note"><b>设置项变化</b><br>
       · <code>showCodex / showClaude</code> 等布尔对 → <code>enabledProviders / menuBarProviders / floatingProviders</code> 三个集合，首次启动从旧键迁移。<br>
       · 新增 <code>menuBarMode</code>：All / Lowest only。<br>
       · 「额度周期」语义改为主/副窗口：Codex、Claude、Kimi、GLM 主窗是 5H，Ollama Cloud 主窗是 MO。<br>
-      · Ollama Cookie 存 cc-bar 自己的 Keychain（service <code>com.cc-bar.ollama.cookie</code>，account = profile 名），不走浏览器自动导入。<br>
+      · Ollama Cloud 不存任何凭据：每次请求用本机 <code>~/.ollama/id_ed25519</code> 现签，密钥不离开本机；ccpm ollama profile 用 keystore 里的 API key（Bearer）。<br>
       · ccpm keystore 读取：<code>security find-generic-password -s ccpm -a &lt;profile&gt; -w</code>，解 go-keyring 的 base64 / hex 前缀。</div>
   </div>
 </section>
@@ -356,7 +354,7 @@
     <div class="step"><span class="who">ccpm</span><div class="n">STEP 1</div><b>建 profile</b><code>ccpm add kimi-work --provider kimi</code><br>强制 runtime=claude、auth=api_key，提示输入 Kimi Code API key；保留 import wizard。</div>
     <div class="step"><span class="who">ccpm</span><div class="n">STEP 2</div><b>落盘</b>config.json 写 <code>provider: "kimi"</code> 与 <code>env.ANTHROPIC_BASE_URL</code>；key 存 Keychain（service <code>ccpm</code>，account = profile）。</div>
     <div class="step"><span class="who">ccpm</span><div class="n">STEP 3</div><b>启动注入</b><code>ccpm run / use / set-default</code> 对非 Anthropic provider 注入 <code>ANTHROPIC_AUTH_TOKEN</code>（Bearer），Anthropic 仍用 <code>ANTHROPIC_API_KEY</code>。</div>
-    <div class="step"><span class="who">cc-bar</span><div class="n">STEP 4</div><b>发现</b><code>AccountCatalog.discover()</code> 按 runtime × provider × auth_method 映射成 <code>MonitoredAccount</code>；key 从 keystore 读，Ollama cookie 从 cc-bar Keychain 读。</div>
+    <div class="step"><span class="who">cc-bar</span><div class="n">STEP 4</div><b>发现</b><code>AccountCatalog.discover()</code> 按 runtime × provider × auth_method 映射成 <code>MonitoredAccount</code>；key 从 keystore 读；Ollama Cloud 主账号另由本机签名密钥发现。</div>
     <div class="step"><span class="who">cc-bar</span><div class="n">STEP 5</div><b>刷新 + 扫描</b>Kimi <code>/coding/v1/usages</code>，GLM <code>/api/monitor/usage/quota/limit</code>，Ollama 抓 settings 页；本地用量扫 <code>&lt;profile&gt;/projects</code>。</div>
   </div>
   <div class="grid two" style="margin-top:22px">
@@ -396,7 +394,7 @@ $ ccpm list
         claude + anthropic + oauth → Claude OAuth（profile 专属 Keychain service）<br>
         claude + anthropic + api_key → 不查额度，只扫本地用量<br>
         claude + kimi / glm + api_key → keystore key + base URL<br>
-        claude + ollama + api_key → cc-bar Keychain 里的 cookie</div>
+        claude + ollama + api_key → ccpm keystore 里的 API key（Bearer）</div>
     </div>
   </div>
 </section>
@@ -559,16 +557,16 @@ function prefs(el) {
       <div class="tr"><span class="badge g"><span class="dot" style="background:#30D158"></span>Connected</span>${toggle(true)}</div></div>`;
   }).join('');
   const profiles = ACCOUNTS.filter(a => a.id.includes(':ccpm:')).map(a => {
-    const name = a.id.split(':')[2]; const auth = a.p === 'ollama' ? 'cookie' : (a.p === 'codex' || a.p === 'claude') ? 'oauth' : 'api_key';
+    const name = a.id.split(':')[2]; const auth = (a.p === 'codex' || a.p === 'claude') ? 'oauth' : 'api_key';
     const detail = a.p === 'kimi' ? 'api.kimi.com · ~/.ccpm/profiles/kimi-work' : a.p === 'glm' ? 'Pro · open.bigmodel.cn · ~/.ccpm/profiles/glm-cn' : a.p === 'ollama' ? 'Pro · ollama.com · ~/.ccpm/profiles/ollama-cloud' : `${a.sub.split(' · ')[2]} · ${a.plan} · ~/.ccpm/profiles/${name}`;
     const l = a.lanes[0]; const c = cls(l.left);
     return `<div class="acct">${tile(a.p, 'lg')}<div><div class="t">${PROVIDERS[a.p].name} · ${name}${a.sub.includes('Default') ? ' <span class="chip">Default</span>' : ''}</div><div class="d">${detail}</div></div>
-      <div class="r">${a.p === 'ollama' ? '<span class="btn-sm">Cookie…</span>' : ''}<div><div class="auth">${auth}</div><div class="pct t-${c}">${pct(l.left)}</div></div></div></div>`;
+      <div class="r"><div><div class="auth">${auth}</div><div class="pct t-${c}">${pct(l.left)}</div></div></div></div>`;
   }).join('');
   const provToggles = (dis) => Object.keys(PROVIDERS).map(p => `<div class="prow"><div class="lab">Show ${PROVIDERS[p].name}${dis ? ' row' : ''}</div><div class="tr">${toggle(true)}</div></div>`).join('');
   el.innerHTML = [
     group('Accounts', 'Auto-detected on your Mac and from ccpm. Toggle which services to display.', accounts),
-    group('ccpm Profiles', 'Auto-discovered from ~/.ccpm/config.json. OAuth profiles use their own credentials; Kimi / GLM read the key from the ccpm keystore; Ollama Cloud needs a pasted cookie.', profiles),
+    group('ccpm Profiles', 'Auto-discovered from ~/.ccpm/config.json. OAuth profiles use their own credentials; Kimi / GLM / Ollama read the API key from the ccpm keystore.', profiles),
     group('Other Codex Accounts', 'Paste auth.json to monitor additional Codex accounts (view only).', `<div class="prow"><div class="lab" style="color:var(--ink-2)">No imported accounts</div><div class="tr"><span class="btn-sm">Add…</span></div></div>`),
     group('Menu Bar', 'What appears next to the icon.', provToggles(false) +
       `<div class="prow"><div class="lab">Display mode<small>All enabled providers, or only the one closest to its limit.</small></div><div class="tr"><span class="pick">All</span></div></div>
@@ -645,7 +643,7 @@ const MATRIX = [
   ['CLI 输出（usage --json / serve）', 'CodexBarCLI 跨平台', '无 CLI', 'ccpm', 'opt', '不复制 quota client 到 Go；ccpm 读 cc-bar 缓存即可（见 statusline 行）'],
   ['Sparkle 自动更新', 'Sparkle + appcast', '手动出包', 'cc-bar', 'opt', '发布流程问题，与功能无关'],
   ['诊断导出 / Debug pane', 'ProviderDiagnosticExport', 'print 日志', 'cc-bar', 'opt', '「复制诊断信息」一个按钮即可'],
-  ['浏览器 cookie 自动导入（Chrome / Safari 解密）', 'BrowserCookieImporter + Keychain Safe Storage', '不做；Ollama 用手动粘贴', '—', 'no', '与 cc-bar 边界冲突，且触发 Keychain / 全盘访问弹窗'],
+  ['浏览器 cookie 自动导入（Chrome / Safari 解密）', 'BrowserCookieImporter + Keychain Safe Storage', '不做；Ollama 用本机密钥签名 API', '—', 'no', '与 cc-bar 边界冲突，且触发 Keychain / 全盘访问弹窗'],
   ['Codex web dashboard extras（credits、code review 剩余）', 'OpenAI cookie 抓 dashboard', '不做', '—', 'no', '依赖 cookie'],
   ['Kimi 网页增强（会员月度池）', 'kimi-auth cookie 二次请求', '不做', '—', 'no', '依赖 cookie；API key 已给出周请求与 5h 速率'],
   ['App 内登录（Claude / Codex / Gemini login runner）', 'LoginRunner 系列', '不做', 'ccpm', 'no', '登录归 ccpm add / auth refresh；cc-bar 保持只读'],

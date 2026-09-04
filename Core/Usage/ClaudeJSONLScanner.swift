@@ -18,9 +18,10 @@ enum ClaudeJSONLScanner {
         return home.appendingPathComponent(".claude/projects", isDirectory: true)
     }
 
-    /// `~/.claude/projects` plus the `projects` directory of every ccpm Anthropic profile.
-    nonisolated static func defaultRoots() -> [URL] {
-        CCPMUsageRoots.merged([defaultRoot()], with: CCPMUsageRoots.claude())
+    /// `~/.claude/projects` (primary account) plus the `projects` directory of every ccpm
+    /// Anthropic profile, tagged with that profile's account.
+    nonisolated static func defaultRoots() -> [UsageScanRoot] {
+        CCPMUsageRoots.merged([UsageScanRoot(url: defaultRoot())], with: CCPMUsageRoots.claude())
     }
 
     nonisolated static func scan(
@@ -43,7 +44,7 @@ enum ClaudeJSONLScanner {
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenMessageIds: [String],
-        roots: [URL],
+        roots: [UsageScanRoot],
         conversationIndex: ConversationTitleIndex.ClaudeIndex,
         minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
@@ -58,12 +59,13 @@ enum ClaudeJSONLScanner {
             failedFileCount: 0
         )
         for root in roots {
-            let prefix = root.standardizedFileURL.path + "/"
+            let prefix = root.url.standardizedFileURL.path + "/"
             let scoped = previous.filter { $0.key.hasPrefix(prefix) }
             let result = scan(
                 previous: scoped,
                 seenMessageIds: merged.newSeenIds,
-                root: root,
+                root: root.url,
+                account: root.account,
                 conversationIndex: conversationIndex,
                 minimumMtime: minimumMtime,
                 onProgress: onProgress
@@ -80,12 +82,14 @@ enum ClaudeJSONLScanner {
     }
 
     /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
+    /// - Parameter account: usage account stamped on every entry of this root (nil = primary).
     /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter onProgress: 非 nil 时按约每 50 个文件回报一次扫描进度。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenMessageIds: [String],
         root: URL,
+        account: String? = nil,
         conversationIndex: ConversationTitleIndex.ClaudeIndex,
         minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
@@ -256,6 +260,7 @@ enum ClaudeJSONLScanner {
                 )
                 entries.append(UsageEntry(
                     app: .claude,
+                    account: account,
                     conversationKey: "claude:\(p.sessionID)",
                     model: Pricing.normalize(model: p.model),
                     speed: p.speed,

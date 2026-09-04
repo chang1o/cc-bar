@@ -10,7 +10,7 @@
 		49C1CD00000000000001AABB /* QuotaNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD00000000000001AAAA /* QuotaNotifier.swift */; };
 		49C1CD01000000000001AABB /* CCPMProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD01000000000001AAAA /* CCPMProfiles.swift */; };
 		49C1CD02000000000001AABB /* CCPMKeystore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD02000000000001AAAA /* CCPMKeystore.swift */; };
-		49C1CD03000000000001AABB /* OllamaCookieStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD03000000000001AAAA /* OllamaCookieStore.swift */; };
+		49C1CD03000000000001AABB /* OllamaLocalKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD03000000000001AAAA /* OllamaLocalKey.swift */; };
 		49C1CD04000000000001AABB /* CCPMAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD04000000000001AAAA /* CCPMAccount.swift */; };
 		49C1CD05000000000001AABB /* QuotaPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD05000000000001AAAA /* QuotaPace.swift */; };
 		49C1CD06000000000001AABB /* KimiQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD06000000000001AAAA /* KimiQuotaClient.swift */; };
@@ -131,7 +131,7 @@
 		49C1CD00000000000001AAAA /* QuotaNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaNotifier.swift; sourceTree = "<group>"; };
 		49C1CD01000000000001AAAA /* CCPMProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfiles.swift; sourceTree = "<group>"; };
 		49C1CD02000000000001AAAA /* CCPMKeystore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMKeystore.swift; sourceTree = "<group>"; };
-		49C1CD03000000000001AAAA /* OllamaCookieStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaCookieStore.swift; sourceTree = "<group>"; };
+		49C1CD03000000000001AAAA /* OllamaLocalKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaLocalKey.swift; sourceTree = "<group>"; };
 		49C1CD04000000000001AAAA /* CCPMAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMAccount.swift; sourceTree = "<group>"; };
 		49C1CD05000000000001AAAA /* QuotaPace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPace.swift; sourceTree = "<group>"; };
 		49C1CD06000000000001AAAA /* KimiQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KimiQuotaClient.swift; sourceTree = "<group>"; };
@@ -358,7 +358,7 @@
 				49C1B192000000000001AAAA /* ImportedCodexStore.swift */,
 				49C1CD01000000000001AAAA /* CCPMProfiles.swift */,
 				49C1CD02000000000001AAAA /* CCPMKeystore.swift */,
-				49C1CD03000000000001AAAA /* OllamaCookieStore.swift */,
+				49C1CD03000000000001AAAA /* OllamaLocalKey.swift */,
 			);
 			path = Credentials;
 			sourceTree = "<group>";
@@ -708,7 +708,7 @@
 				49C1CD00000000000001AABB /* QuotaNotifier.swift in Sources */,
 				49C1CD01000000000001AABB /* CCPMProfiles.swift in Sources */,
 				49C1CD02000000000001AABB /* CCPMKeystore.swift in Sources */,
-				49C1CD03000000000001AABB /* OllamaCookieStore.swift in Sources */,
+				49C1CD03000000000001AABB /* OllamaLocalKey.swift in Sources */,
 				49C1CD04000000000001AABB /* CCPMAccount.swift in Sources */,
 				49C1CD05000000000001AABB /* QuotaPace.swift in Sources */,
 				49C1CD06000000000001AABB /* KimiQuotaClient.swift in Sources */,

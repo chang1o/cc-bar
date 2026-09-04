@@ -131,30 +131,37 @@ nonisolated enum CCPMProfileCatalog {
 
 /// Extra JSONL roots contributed by ccpm profiles. Claude Code writes its logs under
 /// `CLAUDE_CONFIG_DIR/projects`, Codex under `CODEX_HOME/sessions`.
+/// Log directories of ccpm profiles, each tagged with the profile's usage account so the
+/// scanners attribute entries to the profile instead of the primary account.
 nonisolated enum CCPMUsageRoots {
-    nonisolated static func claude() -> [URL] {
+    nonisolated static func claude() -> [UsageScanRoot] {
         CCPMProfileCatalog.load()
             .filter { $0.provider == "anthropic" }
-            .map { $0.directory.appendingPathComponent("projects", isDirectory: true) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+            .map {
+                UsageScanRoot(
+                    url: $0.directory.appendingPathComponent("projects", isDirectory: true),
+                    account: UsageAccountFilter.tag(ccpmProfile: $0.name)
+                )
+            }
+            .filter { FileManager.default.fileExists(atPath: $0.url.path) }
     }
 
-    nonisolated static func codex() -> [URL] {
+    nonisolated static func codex() -> [UsageScanRoot] {
         CCPMProfileCatalog.load()
             .filter { $0.provider == "codex" }
-            .flatMap {
+            .flatMap { profile in
                 [
-                    $0.directory.appendingPathComponent("sessions", isDirectory: true),
-                    $0.directory.appendingPathComponent("archived_sessions", isDirectory: true),
-                ]
+                    profile.directory.appendingPathComponent("sessions", isDirectory: true),
+                    profile.directory.appendingPathComponent("archived_sessions", isDirectory: true),
+                ].map { UsageScanRoot(url: $0, account: UsageAccountFilter.tag(ccpmProfile: profile.name)) }
             }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+            .filter { FileManager.default.fileExists(atPath: $0.url.path) }
     }
 
     /// Appends ccpm roots to the given default roots, dropping duplicates by path.
-    nonisolated static func merged(_ defaults: [URL], with extra: [URL]) -> [URL] {
+    nonisolated static func merged(_ defaults: [UsageScanRoot], with extra: [UsageScanRoot]) -> [UsageScanRoot] {
         var seen = Set<String>()
-        return (defaults + extra).filter { seen.insert($0.standardizedFileURL.path).inserted }
+        return (defaults + extra).filter { seen.insert($0.url.standardizedFileURL.path).inserted }
     }
 }
 

@@ -1,8 +1,9 @@
+import CryptoKit
 import XCTest
 @testable import CCBar
 
 /// Parsers, pace math, keystore decoding and cache codec for the ccpm-driven
-/// providers (Kimi, GLM, Ollama Cloud) plus the Claude extra-usage lane.
+/// providers (Kimi, GLM), the key-signed Ollama Cloud API, plus the Claude extra-usage lane.
 /// Fixtures mirror real responses captured on 2026-09-04.
 final class MultiProviderTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -143,62 +144,108 @@ final class MultiProviderTests: XCTestCase {
 
     // MARK: - Ollama Cloud
 
-    func testOllamaSettingsPageParsesPlanMonthlyAndWeekly() throws {
-        let html = """
-        <html><body>
-        <span>Included usage</span> <span class="badge">Pro</span>
-        <div><h3>Monthly usage</h3><p>$7.50 of $60 used</p><span>Resets in <time data-time="2027-02-01T00:00:00Z">4 days</time></span></div>
-        <div><h3>Weekly usage</h3><p>25% used</p><span data-time="2027-01-10T00:00:00Z"></span></div>
-        </body></html>
-        """
-        let snapshot = try OllamaCloudQuotaClient.parse(html: html, now: now)
+    /// Real `GET https://ollama.com/api/usage` response captured on 2026-09-05 (signed with
+    /// the local key). `usage` is a fraction of the plan allowance.
+    private let ollamaUsageJSON = """
+    {"activity":{"cost":"0.00000","period":{"type":"last_4_weeks","starting_at":"2026-08-10T00:00:00Z","ending_at":"2026-09-04T16:41:37.866305279Z"},"models":[]},
+     "limits":{"monthly":{"usage":0.108,"models":[{"name":"glm-5.3","request_count":994},{"name":"deepseek-v4-flash:0731","request_count":334},{"name":"glm-5.3-flash","request_count":178},{"name":"web search","request_count":23}]}}}
+    """
+
+    func testOllamaUsageMonthlyLaneFromFraction() throws {
+        let snapshot = try OllamaCloudQuotaClient.parseUsage(data: Data(ollamaUsageJSON.utf8), planType: "max", now: now)
 
         XCTAssertEqual(snapshot.app, .ollama)
-        XCTAssertEqual(snapshot.planType, "Pro")
+        XCTAssertEqual(snapshot.planType, "max")
+        XCTAssertEqual(snapshot.fetchedAt, now)
+        XCTAssertNil(snapshot.secondaryLimit)
+        XCTAssertTrue(snapshot.auxiliaryLimits.isEmpty)
 
         let monthly = try XCTUnwrap(lane(snapshot, id: "monthly"))
+        XCTAssertEqual(snapshot.primaryLimit?.id, "monthly")
         XCTAssertEqual(monthly.kind, .unknown)
         XCTAssertEqual(monthly.displayName, "Monthly")
-        XCTAssertEqual(monthly.window.usedPercent, 12.5, accuracy: 0.01)
-        XCTAssertEqual(monthly.window.detail, "$7.50 of $60")
-        XCTAssertEqual(monthly.window.resetsAt, iso.date(from: "2027-02-01T00:00:00Z"))
-
-        let weekly = try XCTUnwrap(lane(snapshot, kind: .weekly))
-        XCTAssertEqual(weekly.window.usedPercent, 25, accuracy: 0.01)
-        XCTAssertEqual(weekly.window.resetsAt, iso.date(from: "2027-01-10T00:00:00Z"))
+        XCTAssertEqual(monthly.window.usedPercent, 10.8, accuracy: 0.01)
+        XCTAssertEqual(monthly.window.detail, "1529 requests")
+        XCTAssertNil(monthly.window.resetsAt)
     }
 
-    func testOllamaLegacyPageParsesSessionWidthAndWeeklyPercent() throws {
-        let html = """
-        <html><body>
-        <span>Cloud Usage</span><span>Free</span>
-        <div>Session usage <div style="width: 60%"></div><span data-time="2027-01-05T05:00:00Z"></span></div>
-        <div>Weekly usage <p>10% used</p></div>
-        </body></html>
+    func testOllamaUsageMapsAdditionalWindowsByName() throws {
+        let json = """
+        {"limits":{"weekly":{"usage":0.5,"models":[]},"monthly":{"usage":0.25,"models":[{"name":"x","request_count":3}]},"hourly":{"usage":0.9}}}
         """
-        let snapshot = try OllamaCloudQuotaClient.parse(html: html, now: now)
+        let snapshot = try OllamaCloudQuotaClient.parseUsage(data: Data(json.utf8), planType: nil, now: now)
 
-        let session = try XCTUnwrap(lane(snapshot, kind: .fiveHour))
-        XCTAssertEqual(session.window.usedPercent, 60, accuracy: 0.01)
-        XCTAssertEqual(session.window.windowSeconds, 18_000)
-        XCTAssertEqual(session.window.resetsAt, iso.date(from: "2027-01-05T05:00:00Z"))
-
-        let weekly = try XCTUnwrap(lane(snapshot, kind: .weekly))
-        XCTAssertEqual(weekly.window.usedPercent, 10, accuracy: 0.01)
+        XCTAssertEqual(snapshot.primaryLimit?.id, "monthly")
+        XCTAssertEqual(snapshot.primaryLimit?.window.detail, "3 requests")
+        let weekly = try XCTUnwrap(snapshot.secondaryLimit)
+        XCTAssertEqual(weekly.kind, .weekly)
+        XCTAssertEqual(weekly.window.usedPercent, 50, accuracy: 0.01)
+        let hourly = try XCTUnwrap(lane(snapshot, kind: .fiveHour))
+        XCTAssertEqual(hourly.window.usedPercent, 90, accuracy: 0.01)
+        XCTAssertNil(snapshot.planType)
     }
 
-    func testOllamaSignedOutPageIsAnAuthFailure() {
-        let html = """
-        <html><body><h1>Sign in to Ollama</h1><form action="/signin"><input type="email" name="email"><input type="password" name="password"></form></body></html>
-        """
-        XCTAssertThrowsError(try OllamaCloudQuotaClient.parse(html: html, now: now)) { error in
-            XCTAssertEqual((error as? QuotaError)?.httpStatusCode, 401)
+    func testOllamaUsageWithoutLimitsIsADecodeError() {
+        XCTAssertThrowsError(try OllamaCloudQuotaClient.parseUsage(data: Data("{\"activity\":{}}".utf8), planType: nil, now: now))
+        XCTAssertThrowsError(try OllamaCloudQuotaClient.parseUsage(data: Data("{\"limits\":{}}".utf8), planType: nil, now: now))
+    }
+
+    func testOllamaIdentityAcceptsCapitalisedAndLowercaseKeys() throws {
+        let remote = try OllamaCloudQuotaClient.parseIdentity(data: Data("""
+        {"ID":"7f03","CreatedAt":"2026-06-26T01:46:14Z","Email":"someone@example.com","Name":"someone","Bio":"","AvatarURL":"/x","Plan":"max"}
+        """.utf8))
+        XCTAssertEqual(remote, OllamaCloudQuotaClient.Identity(name: "someone", email: "someone@example.com", plan: "max"))
+        XCTAssertEqual(remote.accountKey, "someone@example.com")
+
+        let local = try OllamaCloudQuotaClient.parseIdentity(data: Data("""
+        {"id":"7f03","email":"someone@example.com","name":"someone","avatarurl":"/x","plan":"max"}
+        """.utf8))
+        XCTAssertEqual(local, remote)
+
+        XCTAssertThrowsError(try OllamaCloudQuotaClient.parseIdentity(data: Data("{\"Bio\":\"\"}".utf8)))
+    }
+
+    func testOllamaChallengeMatchesGoClientFormat() {
+        XCTAssertEqual(OllamaLocalKey.challenge(method: "GET", path: "/api/usage", ts: "1700000000"), "GET,/api/usage?ts=1700000000")
+        XCTAssertEqual(OllamaLocalKey.challenge(method: "POST", path: "/api/me", ts: "1"), "POST,/api/me?ts=1")
+    }
+
+    /// Throwaway key generated with `ssh-keygen -t ed25519 -N "" -C ccbar-test`; never used anywhere.
+    private let ollamaTestPrivateKey = """
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+    QyNTUxOQAAACAjM6EIcDu9XEagCxQe+8aTuZfcqVHoc3oGfrqXWQuHcgAAAJBIZiUVSGYl
+    FQAAAAtzc2gtZWQyNTUxOQAAACAjM6EIcDu9XEagCxQe+8aTuZfcqVHoc3oGfrqXWQuHcg
+    AAAECGfAiYDCf2QzIgEk54bFKP9Gz6U7K5y71XI+rgdVKLbCMzoQhwO71cRqALFB77xpO5
+    l9ypUehzegZ+updZC4dyAAAACmNjYmFyLXRlc3QBAgM=
+    -----END OPENSSH PRIVATE KEY-----
+    """
+    private let ollamaTestPublicBlob = "AAAAC3NzaC1lZDI1NTE5AAAAICMzoQhwO71cRqALFB77xpO5l9ypUehzegZ+updZC4dy"
+
+    func testOllamaLocalKeySignsLikeTheGoClient() throws {
+        let key = try OllamaLocalKey.parse(pem: ollamaTestPrivateKey)
+        XCTAssertEqual(key.publicKeyBase64, ollamaTestPublicBlob)
+
+        let token = try key.authorization(method: "GET", path: "/api/usage", ts: "1700000000")
+        let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(parts[0], ollamaTestPublicBlob)
+
+        // The SSH public key blob ends with the raw 32-byte ed25519 key.
+        let blob = try XCTUnwrap(Data(base64Encoded: ollamaTestPublicBlob))
+        let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: blob.suffix(32))
+        let signature = try XCTUnwrap(Data(base64Encoded: parts[1]))
+        let challenge = Data(OllamaLocalKey.challenge(method: "GET", path: "/api/usage", ts: "1700000000").utf8)
+        XCTAssertTrue(publicKey.isValidSignature(signature, for: challenge))
+        XCTAssertFalse(publicKey.isValidSignature(signature, for: Data("GET,/api/usage?ts=1700000001".utf8)))
+        XCTAssertTrue(key.verify(signatureBase64: parts[1], method: "GET", path: "/api/usage", ts: "1700000000"))
+    }
+
+    func testOllamaLocalKeyRejectsNonOpenSSHInput() {
+        XCTAssertThrowsError(try OllamaLocalKey.parse(pem: "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----")) { error in
+            guard case OllamaLocalKey.LoadError.notOpenSSH = error else { return XCTFail("\(error)") }
         }
-    }
-
-    func testOllamaSignInRedirectDetection() {
-        XCTAssertTrue(OllamaCloudQuotaClient.isSignInRedirect(URL(string: "https://ollama.com/signin?next=/settings")))
-        XCTAssertFalse(OllamaCloudQuotaClient.isSignInRedirect(URL(string: "https://ollama.com/settings")))
+        XCTAssertThrowsError(try OllamaLocalKey.parse(pem: "not a key"))
     }
 
     // MARK: - Claude extra usage

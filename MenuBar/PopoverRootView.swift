@@ -230,7 +230,10 @@ struct PopoverRootView: View {
         case .commandCode:
             email = appState.commandCodeAccount?.email ?? appState.commandCodeAccount?.login
             fallback = "Command Code"
-        case .kimi, .glm, .ollama:
+        case .ollama:
+            email = appState.ollamaAccount?.email ?? appState.ollamaAccount?.name
+            fallback = "Ollama"
+        case .kimi, .glm:
             email = nil
             fallback = QuotaProviderDescriptor.descriptor(for: app)?.vendor ?? ""
         }
@@ -251,7 +254,9 @@ struct PopoverRootView: View {
             raw = appState.quotaSnapshot(for: .cursor)?.planType
         case .commandCode:
             raw = appState.commandCodeAccount?.planType ?? appState.quotaSnapshot(for: .commandCode)?.planType
-        case .kimi, .glm, .ollama:
+        case .ollama:
+            raw = appState.quotaSnapshot(for: .ollama)?.planType ?? appState.ollamaAccount?.plan
+        case .kimi, .glm:
             raw = appState.quotaSnapshot(for: app)?.planType
         }
         return ServiceBlockView.formatPlan(raw)
@@ -281,14 +286,15 @@ struct PopoverRootView: View {
         return tr("refresh failed", "刷新失败")
     }
 
-    /// Local usage totals for the primary card. ccpm cards never show usage: the
-    /// scanners aggregate per app, so a per-profile split does not exist.
+    /// Local usage totals for the primary card: the app's own log directory plus the
+    /// directories of ccpm profiles that mirror the primary identity. Standalone ccpm
+    /// profiles are attributed to their own cards (`CCPMAccountsSection`).
     private func usage(for provider: QuotaProviderDescriptor) -> ServiceBlockView.Usage? {
         guard provider.showsCost else { return nil }
-        let (todayFrom, todayTo) = Self.todayBounds()
-        let (weekFrom, weekTo) = Self.weekBounds()
-        let (monthFrom, monthTo) = Self.monthBounds()
         if provider.app == .cursor {
+            let (todayFrom, todayTo) = Self.todayBounds()
+            let (weekFrom, weekTo) = Self.weekBounds()
+            let (monthFrom, monthTo) = Self.monthBounds()
             return ServiceBlockView.Usage(
                 today: cursorTotals(from: todayFrom, to: todayTo),
                 week: cursorTotals(from: weekFrom, to: weekTo),
@@ -297,11 +303,26 @@ struct PopoverRootView: View {
             )
         }
         guard let usageApp = provider.app.usageApp else { return nil }
-        let aggregator = appState.usageService.aggregator
+        var tags: Set<String?> = [nil]
+        for account in appState.ccpmAccounts(for: provider.app) where account.mirrorsPrimary {
+            tags.insert(UsageAccountFilter.tag(ccpmProfile: account.profile.name))
+        }
+        return Self.localUsage(app: usageApp, account: .tags(tags), aggregator: appState.usageService.aggregator)
+    }
+
+    /// Today / this week / last 30 days from the local JSONL aggregator for one account filter.
+    static func localUsage(
+        app: UsageApp,
+        account: UsageAccountFilter,
+        aggregator: UsageAggregator
+    ) -> ServiceBlockView.Usage {
+        let (todayFrom, todayTo) = todayBounds()
+        let (weekFrom, weekTo) = weekBounds()
+        let (monthFrom, monthTo) = monthBounds()
         return ServiceBlockView.Usage(
-            today: aggregator.totals(app: usageApp, from: todayFrom, to: todayTo),
-            week: aggregator.totals(app: usageApp, from: weekFrom, to: weekTo),
-            month: aggregator.totals(app: usageApp, from: monthFrom, to: monthTo),
+            today: aggregator.totals(app: app, account: account, from: todayFrom, to: todayTo),
+            week: aggregator.totals(app: app, account: account, from: weekFrom, to: weekTo),
+            month: aggregator.totals(app: app, account: account, from: monthFrom, to: monthTo),
             showsTokens: true
         )
     }

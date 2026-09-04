@@ -3684,7 +3684,7 @@ final class QuotaParsingTests: XCTestCase {
 
     func testFastCacheSchemaVersionsAreUpgradedTogether() {
         XCTAssertEqual(ScanState.currentVersion, 14)
-        XCTAssertEqual(UsageRollupPayload.currentVersion, 9)
+        XCTAssertEqual(UsageRollupPayload.currentVersion, 10)
         XCTAssertEqual(ConversationRollupPayload.currentVersion, 7)
         XCTAssertEqual(QuotaCyclePayload.currentVersion, 4)
         XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 4)

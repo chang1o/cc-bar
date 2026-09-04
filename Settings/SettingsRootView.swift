@@ -94,8 +94,8 @@ struct SettingsRootView: View {
             PrefsGroup(
                 title: "ccpm Profiles",
                 chinese: "ccpm 账号",
-                desc: "Auto-discovered from ~/.ccpm/config.json. OAuth profiles use their own credentials; Kimi / GLM read the key from the ccpm keystore; Ollama Cloud needs a pasted cookie.",
-                chineseDesc: "自动读取 ~/.ccpm/config.json;OAuth profile 用各自凭据,Kimi / GLM 从 ccpm keystore 取 key,Ollama Cloud 需要粘贴 Cookie"
+                desc: "Auto-discovered from ~/.ccpm/config.json. OAuth profiles use their own credentials; Kimi / GLM / Ollama read the API key from the ccpm keystore.",
+                chineseDesc: "自动读取 ~/.ccpm/config.json;OAuth profile 用各自凭据,Kimi / GLM / Ollama 从 ccpm keystore 取 API key"
             ) {
                 CCPMProfilesView()
             }
@@ -176,7 +176,13 @@ struct SettingsRootView: View {
                 plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
                 availability: appState.commandCodeAccount == nil ? .notDetected : .connected
             )
-        case .kimi, .glm, .ollama:
+        case .ollama:
+            presence = AccountPresence(
+                email: appState.ollamaAccount?.email ?? appState.ollamaAccount?.name,
+                plan: appState.ollamaQuota?.planType ?? appState.ollamaAccount?.plan,
+                availability: appState.ollamaAccount == nil ? .notDetected : .connected
+            )
+        case .kimi, .glm:
             presence = AccountPresence(email: nil, plan: nil, availability: .notDetected)
         }
         guard presence.availability == .notDetected else { return presence }
@@ -185,11 +191,15 @@ struct SettingsRootView: View {
             presence.detailOverride = ccpmCount == 1
                 ? tr("1 ccpm profile", "1 个 ccpm profile")
                 : tr("\(ccpmCount) ccpm profiles", "\(ccpmCount) 个 ccpm profile")
-        } else if app == .kimi || app == .glm || app == .ollama {
+        } else if app == .kimi || app == .glm {
             presence.detailOverride = tr(
                 "Add a ccpm profile with --provider \(app.rawValue)",
                 "用 ccpm add --provider \(app.rawValue) 添加 profile"
             )
+        } else if app == .ollama {
+            presence.detailOverride = appState.ollamaInstalled
+                ? tr("Not signed in · run `ollama signin`", "未登录 · 运行 ollama signin")
+                : tr("Ollama not installed", "未安装 Ollama")
         }
         return presence
     }

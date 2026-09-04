@@ -41,6 +41,9 @@ nonisolated enum UsageSpeedSummary: String, Sendable, Equatable {
 /// 单次 API 调用解析出的用量记录（内存中流转，不直接持久化）。
 nonisolated struct UsageEntry: Sendable, Equatable {
     var app: UsageApp
+    /// nil = the app's primary account (`~/.claude`, `~/.codex`); logs scanned from a ccpm
+    /// profile directory carry `UsageAccountFilter.tag(ccpmProfile:)`.
+    var account: String? = nil
     var conversationKey: String
     var model: String
     var speed: UsageSpeed
@@ -57,9 +60,11 @@ nonisolated struct UsageEntry: Sendable, Equatable {
     var costBreakdown: CostBreakdown?
 }
 
-/// (day, app, model, speed) 聚合桶；UsageAggregator 内存表的值。
+/// (day, app, account, model, speed) 聚合桶；UsageAggregator 内存表的值。
 nonisolated struct UsageBucket: Sendable, Equatable, Codable {
     var app: UsageApp
+    /// Same meaning as `UsageEntry.account`; absent in rollups written before v10.
+    var account: String? = nil
     var model: String
     var speed: UsageSpeed
     var day: Date
@@ -206,12 +211,13 @@ extension Decimal {
 extension UsageBucket {
     nonisolated enum CodingKeys: String, CodingKey {
         case app, model, speed, day, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, costUSD, requestCount
-        case hasUnpricedUsage, costIncomplete
+        case hasUnpricedUsage, costIncomplete, account
     }
 
     nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.app = try c.decode(UsageApp.self, forKey: .app)
+        self.account = try c.decodeIfPresent(String.self, forKey: .account)
         self.model = try c.decode(String.self, forKey: .model)
         self.speed = try c.decode(UsageSpeed.self, forKey: .speed)
         self.day = try c.decode(Date.self, forKey: .day)
@@ -229,6 +235,7 @@ extension UsageBucket {
     nonisolated func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(app, forKey: .app)
+        try c.encodeIfPresent(account, forKey: .account)
         try c.encode(model, forKey: .model)
         try c.encode(speed, forKey: .speed)
         try c.encode(day, forKey: .day)
@@ -240,6 +247,40 @@ extension UsageBucket {
         try c.encode(requestCount, forKey: .requestCount)
         try c.encode(hasUnpricedUsage, forKey: .hasUnpricedUsage)
         try c.encode(costIncomplete, forKey: .costIncomplete)
+    }
+}
+
+/// Which accounts a local-usage query covers. Entries and buckets store nil for the app's
+/// primary account and `"ccpm:<profile>"` for logs found in a ccpm profile directory.
+nonisolated enum UsageAccountFilter: Sendable, Equatable {
+    case all
+    case primary
+    case ccpm(String)
+    /// An explicit set of tags; `nil` inside the set stands for the primary account.
+    case tags(Set<String?>)
+
+    nonisolated static func tag(ccpmProfile name: String) -> String {
+        "ccpm:\(name)"
+    }
+
+    nonisolated func matches(_ account: String?) -> Bool {
+        switch self {
+        case .all: return true
+        case .primary: return account == nil
+        case .ccpm(let name): return account == Self.tag(ccpmProfile: name)
+        case .tags(let tags): return tags.contains(account)
+        }
+    }
+}
+
+/// A log directory handed to a scanner together with the account its entries belong to.
+nonisolated struct UsageScanRoot: Sendable, Hashable {
+    var url: URL
+    var account: String?
+
+    nonisolated init(url: URL, account: String? = nil) {
+        self.url = url
+        self.account = account
     }
 }
 
