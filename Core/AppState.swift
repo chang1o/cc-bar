@@ -145,9 +145,10 @@ final class AppState {
     var piTodayCost: Decimal?
     var opencodeTodayCost: Decimal?
 
-    /// OpenAI / Anthropic statuspage.io 最新快照,失败时保留上一份。
+    /// OpenAI / Anthropic / Cursor statuspage.io 最新快照,失败时保留上一份。
     var codexServiceStatus: ServiceStatus?
     var claudeServiceStatus: ServiceStatus?
+    var cursorServiceStatus: ServiceStatus?
 
     let usageService = UsageService()
     private let scheduler = Scheduler()
@@ -324,15 +325,18 @@ final class AppState {
         scheduleQuotaPersistenceFlush()
     }
 
-    /// 拉取 OpenAI / Anthropic statuspage 状态。失败保留旧快照,不清空。
-    /// 两个请求并发,任意一个失败不影响另一个。
+    /// 拉取 OpenAI / Anthropic / Cursor statuspage 状态。失败保留旧快照,不清空。
+    /// 三个请求并发,任意一个失败不影响其他。
     func refreshServiceStatus() async {
         async let codex = Self.fetchServiceStatus(url: ServiceStatusClient.openAIStatusURL, tag: "openai")
         async let claude = Self.fetchServiceStatus(url: ServiceStatusClient.anthropicStatusURL, tag: "anthropic")
+        async let cursor = Self.fetchServiceStatus(url: ServiceStatusClient.cursorStatusURL, tag: "cursor")
         let codexResult = await codex
         let claudeResult = await claude
+        let cursorResult = await cursor
         if let codexResult { codexServiceStatus = codexResult }
         if let claudeResult { claudeServiceStatus = claudeResult }
+        if let cursorResult { cursorServiceStatus = cursorResult }
     }
 
     private static func fetchServiceStatus(url: URL, tag: String) async -> ServiceStatus? {

@@ -260,7 +260,8 @@ struct PopoverRootView: View {
         return switch app {
         case .codex: appState.codexServiceStatus
         case .claude: appState.claudeServiceStatus
-        case .antigravity, .cursor, .commandCode: nil
+        case .cursor: appState.cursorServiceStatus
+        case .antigravity, .commandCode: nil
         }
     }
 
