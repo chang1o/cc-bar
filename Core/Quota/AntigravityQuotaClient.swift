@@ -589,6 +589,13 @@ nonisolated enum AntigravityQuotaClient {
         return nil
     }
 
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
     private static func resetDate(value: Any?) -> Date? {
         if let s = value as? String {
             let iso = ISO8601DateFormatter()
