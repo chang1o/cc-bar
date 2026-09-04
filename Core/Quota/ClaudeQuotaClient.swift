@@ -65,9 +65,34 @@ nonisolated enum ClaudeQuotaClient {
             app: .claude,
             primaryLimit: session ?? weekly,
             secondaryLimit: session == nil ? nil : weekly,
+            auxiliaryLimits: parseExtraUsage(root["extra_usage"] as? [String: Any]).map { [$0] } ?? [],
             modelLimits: modelLimits,
             planType: nil,
             fetchedAt: Date()
+        )
+    }
+
+    /// `extra_usage {is_enabled, monthly_limit, used_credits, utilization, currency}`:
+    /// pay-as-you-go credits on top of the plan, amounts in cents. Only shown when enabled.
+    nonisolated static func parseExtraUsage(_ dict: [String: Any]?) -> QuotaLimit? {
+        guard let dict, dict["is_enabled"] as? Bool == true else { return nil }
+        let limitCents = number(dict["monthly_limit"])
+        let usedCents = number(dict["used_credits"])
+        var utilization = number(dict["utilization"])
+        if utilization == nil, let limitCents, limitCents > 0, let usedCents {
+            utilization = usedCents / limitCents * 100
+        }
+        guard let utilization else { return nil }
+        var detail: String?
+        if let usedCents, let limitCents {
+            detail = String(format: "$%.2f / $%.2f", usedCents / 100, limitCents / 100)
+        }
+        return QuotaLimit(
+            id: "extra-usage",
+            kind: .unknown,
+            displayName: "Extra usage",
+            window: QuotaWindow(usedPercent: max(0, min(100, utilization)), resetsAt: nil, windowSeconds: nil, detail: detail),
+            isActive: nil
         )
     }
 

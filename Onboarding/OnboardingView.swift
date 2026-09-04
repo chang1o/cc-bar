@@ -81,8 +81,8 @@ private struct WelcomeStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Track Codex and Claude Code quota right from your menu bar. We'll detect local providers automatically.",
-                "在菜单栏即时查看 Codex 与 Claude Code 的额度,我们将自动检测本机服务。"
+                "Track Codex, Claude Code, Kimi, GLM and more right from your menu bar. We'll detect local logins and ccpm profiles automatically.",
+                "在菜单栏即时查看 Codex、Claude Code、Kimi、GLM 等服务的额度,我们将自动检测本机登录与 ccpm profile。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -155,62 +155,23 @@ private struct DetectAccountsStep: View {
                 .font(.system(size: 18, weight: .bold))
                 .kerning(-0.3)
 
-            VStack(spacing: 10) {
-                DetectedAccountRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    plan: appState.codexAccount?.planType,
-                    email: appState.codexAccount?.email,
-                    source: codexSource,
-                    tint: .codexAccent,
-                    logoName: "codex",
-                    fallback: "C",
-                    isDetected: appState.codexAccount != nil
-                )
-                DetectedAccountRow(
-                    title: "Claude Code",
-                    subtitle: "Anthropic",
-                    plan: appState.claudeAccount?.subscriptionType,
-                    email: appState.claudeAccount?.email,
-                    source: claudeSource,
-                    tint: .claudeAccent,
-                    logoName: "claude",
-                    fallback: "K",
-                    isDetected: appState.claudeAccount != nil
-                )
-                DetectedAccountRow(
-                    title: "Antigravity",
-                    subtitle: "Google",
-                    plan: appState.antigravityQuota?.planType ?? appState.antigravityAccount?.planType,
-                    email: appState.antigravityAccount?.email,
-                    source: "~/.gemini/jetski-standalone-oauth-token",
-                    tint: .antigravityAccent,
-                    logoName: "antigravity",
-                    fallback: "A",
-                    isDetected: appState.antigravityAccount != nil
-                )
-                DetectedAccountRow(
-                    title: "Cursor",
-                    subtitle: "Cursor",
-                    plan: appState.cursorQuota?.planType,
-                    email: appState.cursorAccount?.email,
-                    source: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
-                    tint: .gray,
-                    logoName: "cursor",
-                    fallback: "C",
-                    isDetected: appState.cursorAccount != nil
-                )
-                DetectedAccountRow(
-                    title: "Command Code",
-                    subtitle: "Command Code",
-                    plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
-                    email: appState.commandCodeAccount?.login ?? appState.commandCodeAccount?.email,
-                    source: commandCodeSource,
-                    tint: QuotaApp.commandCode.tintColor,
-                    logoName: "commandcode",
-                    fallback: "⌘",
-                    isDetected: appState.commandCodeAccount != nil
-                )
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    ForEach(QuotaProviderDescriptor.allProviders) { provider in
+                        let row = detection(for: provider.app)
+                        DetectedAccountRow(
+                            title: provider.title,
+                            subtitle: provider.vendor,
+                            plan: row.plan,
+                            email: row.email,
+                            source: row.source,
+                            tint: provider.app.tintColor,
+                            logoName: provider.logoName,
+                            fallback: provider.fallback,
+                            isDetected: row.isDetected
+                        )
+                    }
+                }
             }
             .padding(.top, 18)
 
@@ -229,8 +190,62 @@ private struct DetectAccountsStep: View {
         .padding(.vertical, 28)
     }
 
-    private var codexSource: String {
-        "~/.codex/auth.json"
+    private struct Detection {
+        var plan: String?
+        var email: String?
+        var source: String
+        var isDetected: Bool
+    }
+
+    /// Primary credentials first; providers without one fall back to ccpm profiles.
+    private func detection(for app: QuotaApp) -> Detection {
+        var detection: Detection
+        switch app {
+        case .codex:
+            detection = Detection(
+                plan: appState.codexAccount?.planType,
+                email: appState.codexAccount?.email,
+                source: "~/.codex/auth.json",
+                isDetected: appState.codexAccount != nil
+            )
+        case .claude:
+            detection = Detection(
+                plan: appState.claudeAccount?.subscriptionType,
+                email: appState.claudeAccount?.email,
+                source: claudeSource,
+                isDetected: appState.claudeAccount != nil
+            )
+        case .antigravity:
+            detection = Detection(
+                plan: appState.antigravityQuota?.planType ?? appState.antigravityAccount?.planType,
+                email: appState.antigravityAccount?.email,
+                source: "~/.gemini/jetski-standalone-oauth-token",
+                isDetected: appState.antigravityAccount != nil
+            )
+        case .cursor:
+            detection = Detection(
+                plan: appState.cursorQuota?.planType,
+                email: appState.cursorAccount?.email,
+                source: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+                isDetected: appState.cursorAccount != nil
+            )
+        case .commandCode:
+            detection = Detection(
+                plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                email: appState.commandCodeAccount?.login ?? appState.commandCodeAccount?.email,
+                source: commandCodeSource,
+                isDetected: appState.commandCodeAccount != nil
+            )
+        case .kimi, .glm, .ollama:
+            detection = Detection(plan: nil, email: nil, source: "~/.ccpm/config.json", isDetected: false)
+        }
+        guard !detection.isDetected else { return detection }
+        let profiles = appState.ccpmAccounts(for: app)
+        guard !profiles.isEmpty else { return detection }
+        detection.isDetected = true
+        detection.source = "~/.ccpm/config.json"
+        detection.email = profiles.map(\.profile.name).joined(separator: ", ")
+        return detection
     }
 
     private var claudeSource: String {
@@ -253,11 +268,7 @@ private struct DetectAccountsStep: View {
     }
 
     private var anyDetected: Bool {
-        appState.codexAccount != nil
-            || appState.claudeAccount != nil
-            || appState.antigravityAccount != nil
-            || appState.cursorAccount != nil
-            || appState.commandCodeAccount != nil
+        QuotaApp.allCases.contains { detection(for: $0).isDetected }
     }
 }
 
@@ -295,8 +306,8 @@ private struct DetectedAccountRow: View {
 
             Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
         .ccPanel(cornerRadius: 12)
         .opacity(isDetected ? 1 : 0.6)
     }
@@ -368,39 +379,16 @@ private struct ConfigureStep: View {
                              chineseTitle: "菜单栏",
                              subtitle: "Show enabled providers next to the menu bar icon.",
                              chineseSubtitle: "在菜单栏图标旁显示百分比") {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        HStack(spacing: 12) {
-                            Toggle("Codex", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
-                                .toggleStyle(.switch)
-                                .tint(.green)
-                            Toggle("Claude Code", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
-                                .toggleStyle(.switch)
-                                .tint(.green)
-                        }
-                        HStack(spacing: 12) {
-                            Toggle("Cursor", isOn: Binding(
-                                get: { settings.isProviderShownInMenuBar(.cursor) },
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 8) {
+                        ForEach(QuotaProviderDescriptor.menuBarProviders) { provider in
+                            Toggle(provider.title, isOn: Binding(
+                                get: { settings.isProviderShownInMenuBar(provider.app) },
                                 set: { shown in
-                                    settings.setProviderShownInMenuBar(shown, for: .cursor)
-                                    if shown {
-                                        settings.setProviderEnabled(true, for: .cursor)
-                                        Task {
-                                            await appState.refreshQuotas(reason: .userInitiated)
-                                        }
-                                    }
-                                }
-                            ))
-                            .toggleStyle(.switch)
-                            .tint(.green)
-                            Toggle("Command Code", isOn: Binding(
-                                get: { settings.isProviderShownInMenuBar(.commandCode) },
-                                set: { shown in
-                                    settings.setProviderShownInMenuBar(shown, for: .commandCode)
-                                    if shown {
-                                        settings.setProviderEnabled(true, for: .commandCode)
-                                        Task {
-                                            await appState.refreshQuotas(reason: .userInitiated)
-                                        }
+                                    settings.setProviderShownInMenuBar(shown, for: provider.app)
+                                    guard shown else { return }
+                                    settings.setProviderEnabled(true, for: provider.app)
+                                    Task {
+                                        await appState.refreshQuotas(reason: .userInitiated)
                                     }
                                 }
                             ))
@@ -408,6 +396,7 @@ private struct ConfigureStep: View {
                             .tint(.green)
                         }
                     }
+                    .frame(maxWidth: 300)
                 }
 
                 ConfigureRow(title: "Floating HUD",

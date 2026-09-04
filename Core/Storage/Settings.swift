@@ -86,6 +86,34 @@ enum MenuBarWindowChoice: String, CaseIterable, Identifiable {
     }
 }
 
+enum MenuBarMode: String, CaseIterable, Identifiable, Codable {
+    case all
+    case lowestOnly
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return tr("All providers", "全部服务")
+        case .lowestOnly: return tr("Lowest only", "只显示最紧张的")
+        }
+    }
+}
+
+enum MenuBarStyle: String, CaseIterable, Identifiable, Codable {
+    case percent
+    case meter
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .percent: return tr("Percent", "百分比")
+        case .meter: return tr("Meter", "刻度条")
+        }
+    }
+}
+
 struct ProviderDisplaySettings: Sendable, Codable, Equatable {
     var enabled: Bool
     var menuBar: Bool
@@ -108,6 +136,10 @@ struct ProviderDisplaySettings: Sendable, Codable, Equatable {
             ProviderDisplaySettings(enabled: false, menuBar: false, floatingHUD: false)
         case .commandCode:
             ProviderDisplaySettings(enabled: false, menuBar: true, floatingHUD: true)
+        case .kimi, .glm, .ollama:
+            // Only reachable through ccpm profiles; presence is gated by discovery, so
+            // an enabled default costs nothing on machines without such profiles.
+            enabledByDefault
         }
     }
 }
@@ -184,6 +216,13 @@ final class SettingsStore {
 
     // 菜单栏
     var menuBarWindow: MenuBarWindowChoice { didSet { defaults.set(menuBarWindow.rawValue, forKey: Keys.menuBarWindow) } }
+    /// Show every visible provider or just the most constrained one.
+    var menuBarMode: MenuBarMode { didSet { defaults.set(menuBarMode.rawValue, forKey: Keys.menuBarMode) } }
+    /// Percent text or a vertical meter next to each logo.
+    var menuBarStyle: MenuBarStyle { didSet { defaults.set(menuBarStyle.rawValue, forKey: Keys.menuBarStyle) } }
+
+    /// Local notifications when a lane runs low, hits zero or resets (fresh API snapshots only).
+    var quotaNotificationsEnabled: Bool { didSet { defaults.set(quotaNotificationsEnabled, forKey: Keys.quotaNotificationsEnabled) } }
 
     // 悬浮窗（占位，M8 接）
     var floatingEnabled: Bool { didSet { defaults.set(floatingEnabled, forKey: Keys.floatingEnabled) } }
@@ -240,6 +279,9 @@ final class SettingsStore {
         } else {
             menuBarWindow = MenuBarWindowChoice(rawValue: mbWindowRaw) ?? .primary
         }
+        menuBarMode = MenuBarMode(rawValue: defaults.string(forKey: Keys.menuBarMode) ?? "") ?? .all
+        menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: Keys.menuBarStyle) ?? "") ?? .percent
+        quotaNotificationsEnabled = defaults.object(forKey: Keys.quotaNotificationsEnabled) as? Bool ?? true
         // 悬浮窗
         floatingEnabled = defaults.object(forKey: Keys.floatingEnabled) as? Bool ?? false
         // 刷新
@@ -492,6 +534,9 @@ final class SettingsStore {
         static let menuBarShowCodex = "ccbar.settings.menuBarShowCodex"
         static let menuBarShowClaude = "ccbar.settings.menuBarShowClaude"
         static let menuBarWindow = "ccbar.settings.menuBarWindow"
+        static let menuBarMode = "ccbar.settings.menuBarMode"
+        static let menuBarStyle = "ccbar.settings.menuBarStyle"
+        static let quotaNotificationsEnabled = "ccbar.settings.quotaNotificationsEnabled"
         static let floatingEnabled = "ccbar.settings.floatingEnabled"
         static let floatingShowCodex = "ccbar.settings.floatingShowCodex"
         static let floatingShowClaude = "ccbar.settings.floatingShowClaude"

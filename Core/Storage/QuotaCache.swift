@@ -28,6 +28,9 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
     /// 用户导入的 Codex 账号配额缓存,key = ImportedCodexAccount.id (= chatgpt_account_id)。
     /// 字段缺失时解码为 nil,旧缓存文件兼容。
     var importedCodex: [String: QuotaCacheRecord]?
+    /// ccpm profile accounts, key = CCPMAccount.id (`<app>:ccpm:<profile>`). Mirrors of a
+    /// primary account are written too so the ccpm statusline can read them.
+    var ccpmAccounts: [String: QuotaCacheRecord]?
 
     var codex: QuotaCacheRecord? {
         get { providers[.codex] }
@@ -60,16 +63,19 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
         case codex
         case claude
         case importedCodex
+        case ccpmAccounts
     }
 
     init(
         version: Int = Self.currentVersion,
         providers: [QuotaApp: QuotaCacheRecord] = [:],
-        importedCodex: [String: QuotaCacheRecord]? = nil
+        importedCodex: [String: QuotaCacheRecord]? = nil,
+        ccpmAccounts: [String: QuotaCacheRecord]? = nil
     ) {
         self.version = version
         self.providers = providers
         self.importedCodex = importedCodex
+        self.ccpmAccounts = ccpmAccounts
     }
 
     init(from decoder: Decoder) throws {
@@ -78,6 +84,11 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
         importedCodex = try container.decodeIfPresent(
             [String: QuotaCacheRecord].self,
             forKey: .importedCodex
+        )
+        // Records of apps unknown to this build are dropped instead of failing the whole file.
+        ccpmAccounts = try container.decodeIfPresent(
+            [String: QuotaCacheRecord].self,
+            forKey: .ccpmAccounts
         )
 
         if decodedVersion >= 2 {
@@ -117,6 +128,7 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
             forKey: .providers
         )
         try container.encodeIfPresent(importedCodex, forKey: .importedCodex)
+        try container.encodeIfPresent(ccpmAccounts, forKey: .ccpmAccounts)
     }
 }
 

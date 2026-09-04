@@ -18,6 +18,11 @@ enum ClaudeJSONLScanner {
         return home.appendingPathComponent(".claude/projects", isDirectory: true)
     }
 
+    /// `~/.claude/projects` plus the `projects` directory of every ccpm Anthropic profile.
+    nonisolated static func defaultRoots() -> [URL] {
+        CCPMUsageRoots.merged([defaultRoot()], with: CCPMUsageRoots.claude())
+    }
+
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenMessageIds: [String],
@@ -26,10 +31,52 @@ enum ClaudeJSONLScanner {
         return scan(
             previous: previous,
             seenMessageIds: seenMessageIds,
-            root: defaultRoot(),
+            roots: defaultRoots(),
             conversationIndex: ConversationTitleIndex.claudeIndex(),
             onProgress: onProgress
         )
+    }
+
+    /// Scans several roots as one logical log set. The single-root scan prunes the states
+    /// of files it cannot find, so each root only receives its own previous states; seen
+    /// message ids chain from root to root and the results are concatenated.
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        seenMessageIds: [String],
+        roots: [URL],
+        conversationIndex: ConversationTitleIndex.ClaudeIndex,
+        minimumMtime: Date? = nil,
+        onProgress: ScanProgressCallback? = nil
+    ) -> Result {
+        var merged = Result(
+            entries: [],
+            conversationSeeds: [],
+            newState: [:],
+            newSeenIds: seenMessageIds,
+            filesScanned: 0,
+            linesParsed: 0,
+            failedFileCount: 0
+        )
+        for root in roots {
+            let prefix = root.standardizedFileURL.path + "/"
+            let scoped = previous.filter { $0.key.hasPrefix(prefix) }
+            let result = scan(
+                previous: scoped,
+                seenMessageIds: merged.newSeenIds,
+                root: root,
+                conversationIndex: conversationIndex,
+                minimumMtime: minimumMtime,
+                onProgress: onProgress
+            )
+            merged.entries += result.entries
+            merged.conversationSeeds += result.conversationSeeds
+            merged.newState.merge(result.newState) { _, next in next }
+            merged.newSeenIds = result.newSeenIds
+            merged.filesScanned += result.filesScanned
+            merged.linesParsed += result.linesParsed
+            merged.failedFileCount += result.failedFileCount
+        }
+        return merged
     }
 
     /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。

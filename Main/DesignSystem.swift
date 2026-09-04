@@ -15,6 +15,9 @@ extension QuotaApp {
         case .antigravity: .antigravityAccent
         case .cursor: .gray
         case .commandCode: Color(red: 24 / 255, green: 24 / 255, blue: 27 / 255)
+        case .kimi: Color(red: 0.15, green: 0.15, blue: 0.2)
+        case .glm: Color(red: 0.16, green: 0.42, blue: 0.94)
+        case .ollama: Color(red: 0.2, green: 0.2, blue: 0.2)
         }
     }
 }
@@ -71,6 +74,12 @@ private let quotaWarningColor = quotaAdaptiveColor(
 private let quotaLowColor = quotaAdaptiveColor(
     light: (red: 255, green: 122, blue: 47),  // #FF7A2F
     dark: (red: 255, green: 161, blue: 95)    // #FFA15F
+)
+
+/// Pace line when usage runs ahead of an even burn rate; same hue as the low tier.
+let quotaPaceAheadColor = quotaAdaptiveColor(
+    light: (red: 255, green: 122, blue: 47),
+    dark: (red: 255, green: 161, blue: 95)
 )
 
 private let quotaEmptyColor = quotaAdaptiveColor(

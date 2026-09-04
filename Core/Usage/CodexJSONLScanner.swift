@@ -34,20 +34,25 @@ enum CodexJSONLScanner {
     /// 全量重扫 / 强制重算是主要耗时场景，多核并行收益明显；受限为 4 避免 IO 争抢过激。
     nonisolated private static let maxConcurrentFiles = 4
 
-    nonisolated static func scan(
-        previous: [String: ScanFileState],
-        seenTokenIds: [String],
-        onProgress: ScanProgressCallback? = nil
-    ) async -> Result {
+    /// `~/.codex/{sessions,archived_sessions}` plus the same directories of every ccpm Codex profile.
+    nonisolated static func defaultRoots() -> [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let roots = [
             home.appendingPathComponent(".codex/sessions", isDirectory: true),
             home.appendingPathComponent(".codex/archived_sessions", isDirectory: true)
         ]
+        return CCPMUsageRoots.merged(roots, with: CCPMUsageRoots.codex())
+    }
+
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        seenTokenIds: [String],
+        onProgress: ScanProgressCallback? = nil
+    ) async -> Result {
         return await scan(
             previous: previous,
             seenTokenIds: seenTokenIds,
-            roots: roots,
+            roots: defaultRoots(),
             indexedTitles: ConversationTitleIndex.codexTitles(),
             onProgress: onProgress
         )

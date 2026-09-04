@@ -6,6 +6,7 @@ nonisolated enum QuotaHistoryAccountKind: String, Sendable, Codable {
     case codexImported
     case claudePrimary
     case antigravityPrimary
+    case ccpm
 }
 
 nonisolated struct QuotaHistorySample: Sendable, Equatable, Codable {
@@ -112,6 +113,11 @@ enum QuotaHistoryAccountKey {
         }
         let digest = SHA256.hash(data: Data(email.utf8))
         return "antigravity:primary:\(digest.map { String(format: "%02x", $0) }.joined())"
+    }
+
+    /// ccpm accounts already carry a stable `<app>:ccpm:<profile>` id.
+    nonisolated static func ccpm(_ account: CCPMAccount) -> String {
+        account.id
     }
 
     nonisolated private static func nonEmpty(_ value: String?) -> String? {

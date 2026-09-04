@@ -1,0 +1,194 @@
+/* macOS 26 Tahoe — Liquid Glass design tokens */
+
+:root {
+  /* Type */
+  --font-sf: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+  --font-rounded: -apple-system-rounded, ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+  /* Light theme — system colors */
+  --light-window-bg: #ECECEE;
+  --light-desktop: #C9CED3;
+  --light-surface: rgba(255, 255, 255, 0.72);
+  --light-surface-solid: #FFFFFF;
+  --light-surface-2: rgba(255, 255, 255, 0.55);
+  --light-fill: rgba(120, 120, 128, 0.16);
+  --light-fill-2: rgba(120, 120, 128, 0.08);
+  --light-fill-3: rgba(120, 120, 128, 0.04);
+  --light-separator: rgba(60, 60, 67, 0.12);
+  --light-separator-strong: rgba(60, 60, 67, 0.29);
+  --light-text-primary: #1D1D1F;
+  --light-text-secondary: rgba(60, 60, 67, 0.6);
+  --light-text-tertiary: rgba(60, 60, 67, 0.3);
+  --light-accent: #007AFF;
+  --light-accent-hover: #0A6FE0;
+  --light-green: #30A14E;
+  --light-orange: #F39B23;
+  --light-red: #E5484D;
+  --light-purple: #8E4EC6;
+  --light-pink: #E5489B;
+
+  /* Dark theme — system colors */
+  --dark-window-bg: #1E1E1F;
+  --dark-desktop: #15161A;
+  --dark-surface: rgba(40, 40, 42, 0.72);
+  --dark-surface-solid: #2A2A2D;
+  --dark-surface-2: rgba(60, 60, 63, 0.6);
+  --dark-fill: rgba(120, 120, 128, 0.24);
+  --dark-fill-2: rgba(120, 120, 128, 0.16);
+  --dark-fill-3: rgba(120, 120, 128, 0.08);
+  --dark-separator: rgba(255, 255, 255, 0.1);
+  --dark-separator-strong: rgba(255, 255, 255, 0.16);
+  --dark-text-primary: #F5F5F7;
+  --dark-text-secondary: rgba(235, 235, 245, 0.6);
+  --dark-text-tertiary: rgba(235, 235, 245, 0.3);
+  --dark-accent: #0A84FF;
+  --dark-green: #30D158;
+  --dark-orange: #FF9F0A;
+  --dark-red: #FF453A;
+  --dark-purple: #BF5AF2;
+
+  /* Product accents (used in both themes) */
+  --codex-color: #6C6C70;
+  --codex-color-dark: #98989D;
+  --cc-color: #D97757;
+  --cc-color-dark: #E68A6E;
+
+  /* Liquid Glass effects */
+  --lg-blur: saturate(180%) blur(40px);
+  --lg-blur-strong: saturate(180%) blur(60px);
+  --lg-blur-light: saturate(180%) blur(20px);
+
+  /* Continuous corner radii (squircle) */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-2xl: 28px;
+  --r-popover: 18px;
+  --r-window: 12px;
+
+  /* Shadows */
+  --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+  --shadow-popover: 0 14px 38px rgba(0, 0, 0, 0.22), 0 1px 4px rgba(0, 0, 0, 0.1), 0 0 0 0.5px rgba(0, 0, 0, 0.2);
+  --shadow-hud: 0 10px 28px rgba(0, 0, 0, 0.28), 0 0 0 0.5px rgba(255, 255, 255, 0.1) inset;
+}
+
+/* Theme application */
+.theme-light {
+  color-scheme: light;
+  --window-bg: var(--light-window-bg);
+  --desktop: var(--light-desktop);
+  --surface: var(--light-surface);
+  --surface-solid: var(--light-surface-solid);
+  --surface-2: var(--light-surface-2);
+  --fill: var(--light-fill);
+  --fill-2: var(--light-fill-2);
+  --fill-3: var(--light-fill-3);
+  --separator: var(--light-separator);
+  --separator-strong: var(--light-separator-strong);
+  --text-primary: var(--light-text-primary);
+  --text-secondary: var(--light-text-secondary);
+  --text-tertiary: var(--light-text-tertiary);
+  --accent: var(--light-accent);
+  --green: var(--light-green);
+  --orange: var(--light-orange);
+  --red: var(--light-red);
+  --purple: var(--light-purple);
+  --codex: var(--codex-color);
+  --cc: var(--cc-color);
+  color: var(--text-primary);
+}
+
+.theme-dark {
+  color-scheme: dark;
+  --window-bg: var(--dark-window-bg);
+  --desktop: var(--dark-desktop);
+  --surface: var(--dark-surface);
+  --surface-solid: var(--dark-surface-solid);
+  --surface-2: var(--dark-surface-2);
+  --fill: var(--dark-fill);
+  --fill-2: var(--dark-fill-2);
+  --fill-3: var(--dark-fill-3);
+  --separator: var(--dark-separator);
+  --separator-strong: var(--dark-separator-strong);
+  --text-primary: var(--dark-text-primary);
+  --text-secondary: var(--dark-text-secondary);
+  --text-tertiary: var(--dark-text-tertiary);
+  --accent: var(--dark-accent);
+  --green: var(--dark-green);
+  --orange: var(--dark-orange);
+  --red: var(--dark-red);
+  --purple: var(--dark-purple);
+  --codex: var(--codex-color-dark);
+  --cc: var(--cc-color-dark);
+  color: var(--text-primary);
+}
+
+/* Liquid Glass surface — frosted with specular sheen */
+.lg-surface {
+  background: var(--surface);
+  backdrop-filter: var(--lg-blur);
+  -webkit-backdrop-filter: var(--lg-blur);
+  position: relative;
+}
+.lg-surface::before {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 18%, rgba(255,255,255,0) 100%),
+    linear-gradient(180deg, rgba(255,255,255,0) 78%, rgba(0,0,0,0.04) 100%);
+}
+.theme-dark .lg-surface::before {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 22%, rgba(255,255,255,0) 100%),
+    linear-gradient(180deg, rgba(255,255,255,0) 78%, rgba(0,0,0,0.16) 100%);
+}
+.lg-surface::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.5),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.18),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.06);
+}
+.theme-dark .lg-surface::after {
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.4);
+}
+
+/* Bilingual label pattern: English big, Chinese small */
+.bilingual {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.05;
+}
+.bilingual > .cn {
+  font-size: 0.78em;
+  opacity: 0.6;
+  font-weight: 400;
+}
+
+/* Body defaults */
+body {
+  font-family: var(--font-sf);
+  font-feature-settings: "tnum" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+}
+
+/* Tabular nums for numeric displays */
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* Hide scrollbars universally inside artboards */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }

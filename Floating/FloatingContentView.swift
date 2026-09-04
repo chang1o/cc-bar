@@ -12,8 +12,11 @@ struct FloatingContentView: View {
     let settings: SettingsStore
 
     var body: some View {
+        // Same sources as the menu bar: present providers only, valued by the most
+        // constrained account (primary or ccpm) of each.
+        let present = appState.presentProviders
         let providers = QuotaProviderDescriptor.floatingProviders.filter {
-            settings.effectiveFloatingVisibility(for: $0.app)
+            present.contains($0.app) && settings.effectiveFloatingVisibility(for: $0.app)
         }
 
         VStack(alignment: .leading, spacing: 7) {
@@ -22,11 +25,11 @@ struct FloatingContentView: View {
                     logoName: provider.logoName,
                     fallback: provider.fallback,
                     tint: provider.app.tintColor,
-                    snapshot: appState.quotaSnapshot(for: provider.app)
+                    snapshot: appState.monitorSnapshot(for: provider.app)
                 )
             }
             if providers.isEmpty {
-                Text(tr("No services", "未启用"))
+                Text(tr("No accounts", "没有账号"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

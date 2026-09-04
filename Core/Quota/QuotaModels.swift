@@ -6,13 +6,25 @@ nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case antigravity
     case cursor
     case commandCode
+    case kimi
+    case glm
+    case ollama
 
     /// 对应的本地用量数据源；`nil` = 该服务没有可解析的本地日志。
     var usageApp: UsageApp? {
         switch self {
         case .codex: return .codex
         case .claude: return .claude
-        case .antigravity, .cursor, .commandCode: return nil
+        case .antigravity, .cursor, .commandCode, .kimi, .glm, .ollama: return nil
+        }
+    }
+
+    /// Apps with a machine-level primary login (auth.json, Keychain, Cursor DB...).
+    /// Kimi / GLM / Ollama are reachable only through ccpm profiles.
+    var supportsPrimaryAccount: Bool {
+        switch self {
+        case .codex, .claude, .antigravity, .cursor, .commandCode: return true
+        case .kimi, .glm, .ollama: return false
         }
     }
 }
@@ -28,6 +40,10 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
     let showsCost: Bool
     let supportsMenuBar: Bool
     let supportsFloatingHUD: Bool
+    /// Vendor usage / billing page opened from the card action row.
+    var dashboardURL: URL? = nil
+    /// Human-readable status page opened from the card action row.
+    var statusPageWebURL: URL? = nil
 
     var id: QuotaApp { app }
 
@@ -40,7 +56,9 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             fallback: "C",
             showsCost: true,
             supportsMenuBar: true,
-            supportsFloatingHUD: true
+            supportsFloatingHUD: true,
+            dashboardURL: URL(string: "https://chatgpt.com/codex/settings/usage"),
+            statusPageWebURL: URL(string: "https://status.openai.com")
         ),
         QuotaProviderDescriptor(
             app: .claude,
@@ -50,7 +68,9 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             fallback: "K",
             showsCost: true,
             supportsMenuBar: true,
-            supportsFloatingHUD: true
+            supportsFloatingHUD: true,
+            dashboardURL: URL(string: "https://claude.ai/settings/usage"),
+            statusPageWebURL: URL(string: "https://status.claude.com")
         ),
         QuotaProviderDescriptor(
             app: .antigravity,
@@ -82,6 +102,39 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             supportsMenuBar: true,
             supportsFloatingHUD: true
         ),
+        QuotaProviderDescriptor(
+            app: .kimi,
+            title: "Kimi Code",
+            vendor: "Moonshot",
+            logoName: "kimi",
+            fallback: "M",
+            showsCost: false,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true,
+            dashboardURL: URL(string: "https://www.kimi.com/code/console")
+        ),
+        QuotaProviderDescriptor(
+            app: .glm,
+            title: "GLM Coding Plan",
+            vendor: "Zhipu",
+            logoName: "glm",
+            fallback: "G",
+            showsCost: false,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true,
+            dashboardURL: URL(string: "https://bigmodel.cn/usercenter/proj-mgmt/rate-limits")
+        ),
+        QuotaProviderDescriptor(
+            app: .ollama,
+            title: "Ollama Cloud",
+            vendor: "Ollama",
+            logoName: "ollama",
+            fallback: "O",
+            showsCost: false,
+            supportsMenuBar: true,
+            supportsFloatingHUD: true,
+            dashboardURL: URL(string: "https://ollama.com/settings")
+        ),
     ]
 
     /// 兼容现有调用方；建议新调用方改用各子界面对应的具体集合。
@@ -101,6 +154,13 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
 
     static func descriptor(for app: QuotaApp) -> QuotaProviderDescriptor? {
         allProviders.first { $0.app == app }
+    }
+}
+
+extension QuotaApp {
+    /// Every case has a row in `QuotaProviderDescriptor.allProviders`.
+    var descriptor: QuotaProviderDescriptor {
+        QuotaProviderDescriptor.descriptor(for: self) ?? QuotaProviderDescriptor.allProviders[0]
     }
 }
 
@@ -148,6 +208,8 @@ nonisolated struct QuotaWindow: Sendable, Equatable, Codable {
     var resetsAt: Date?
     /// 窗口长度（秒），可空
     var windowSeconds: Int?
+    /// Free-form lane detail, e.g. "139/200 requests" or "$3.20 of $20.00".
+    var detail: String? = nil
 
     var remainingPercent: Double {
         max(0, min(100, 100 - usedPercent))
@@ -216,6 +278,26 @@ nonisolated struct QuotaLimit: Sendable, Equatable, Codable, Identifiable {
             .lowercased()
             .replacingOccurrences(of: " ", with: "-")
         return "model:\(normalized.isEmpty ? "unknown" : normalized)"
+    }
+
+    /// Row title used by cards and notifications.
+    var laneTitle: String {
+        switch kind {
+        case .fiveHour: return "5-hour"
+        case .weekly: return "Weekly"
+        case .modelWeekly: return displayName ?? "Weekly"
+        case .unknown: return displayName ?? "Window"
+        }
+    }
+
+    /// Explicit window length, else the kind's canonical length.
+    var defaultWindowSeconds: Int? {
+        if let seconds = window.windowSeconds, seconds > 0 { return seconds }
+        switch kind {
+        case .fiveHour: return 5 * 60 * 60
+        case .weekly, .modelWeekly: return 7 * 24 * 60 * 60
+        case .unknown: return nil
+        }
     }
 }
 
@@ -463,5 +545,44 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
     var isCredentialsExpired: Bool {
         if case .credentialsExpired = self { return true }
         return false
+    }
+}
+
+/// Loose JSON accessors shared by the third-party quota clients.
+nonisolated enum QuotaJSON {
+    nonisolated static func int(_ value: Any?) -> Int? {
+        switch value {
+        case let n as Int: return n
+        case let d as Double: return d.isFinite ? Int(d) : nil
+        case let s as String:
+            let trimmed = s.trimmingCharacters(in: .whitespaces)
+            if let n = Int(trimmed) { return n }
+            if let d = Double(trimmed), d.isFinite { return Int(d) }
+            return nil
+        default: return nil
+        }
+    }
+
+    nonisolated static func double(_ value: Any?) -> Double? {
+        switch value {
+        case let d as Double: return d.isFinite ? d : nil
+        case let n as Int: return Double(n)
+        case let s as String: return Double(s.trimmingCharacters(in: .whitespaces))
+        default: return nil
+        }
+    }
+
+    nonisolated static func isoDate(_ value: Any?) -> Date? {
+        guard let s = value as? String, !s.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: s) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: s)
+    }
+
+    nonisolated static func epochMillis(_ value: Any?) -> Date? {
+        guard let n = double(value), n > 0 else { return nil }
+        return Date(timeIntervalSince1970: n > 10_000_000_000 ? n / 1000 : n)
     }
 }

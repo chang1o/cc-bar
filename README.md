@@ -43,7 +43,10 @@
   * **Antigravity (Google)**：Cloud Mode 直连云端 API（无需运行本地 IDE/CLI），权威分组展示 Gemini 5H 主额度、Gemini 周额度及 Claude 辅助额度。
   * **Cursor**：直连官方 Usage API，展示 Total 主额度、Auto 及 API 次要额度，自动识别 Unlimited 并呈现 `∞` 标识，精确汇总今日与本周真实费用。
   * **Command Code**：支持 5 小时主额度（cap 14.0）、周额度（cap 35.0）及月度 GOAT 会员 Credits 额度。
-* **常驻菜单栏与 HUD 悬浮** — 菜单栏动态展示所选服务百分比（支持主要/周/双窗口模式）；独立桌面悬浮窗支持分服务开关、20pt 边缘自动吸附、位置记忆且不抢占键盘输入焦点。
+  * **Kimi Code / GLM Coding Plan / Ollama Cloud**：通过 [ccpm](https://github.com/chang1o/claude-code-profile-manager) profile 接入。Kimi 显示周请求数与 5 小时限速，GLM 显示 5 小时 / 周 token 额度，Ollama Cloud 显示月度美元额度与周用量（需在设置里粘贴一次 ollama.com Cookie）。
+* **ccpm 多账号联动** — 自动发现 ccpm profiles：Codex / Claude OAuth profile 直接读各自凭据，Kimi / GLM 从 ccpm keystore 取 API key；同一服务的多个账号在 Popover 分组展示，每个账号一张完整卡片，卡片底部可打开用量面板 / 状态页、在 Terminal 里 `ccpm run`、或 `ccpm set-default` 切换默认 profile；ccpm 的 `statusline` 直接读 cc-bar 缓存显示额度。
+* **消耗节奏与额度通知** — 每条额度按已用比例对比匀速消耗给出「超前 / 落后」与预计耗尽时间；剩余 10%、用尽、窗口重置三类本地通知；Claude 的 Extra usage（超额月上限）作为额外一行显示。
+* **常驻菜单栏与 HUD 悬浮** — 菜单栏动态展示所选服务百分比（支持主要/周/双窗口模式，可只显示剩余最低的服务，图标可选百分比或竖向量表）；独立桌面悬浮窗支持分服务开关、20pt 边缘自动吸附、位置记忆且不抢占键盘输入焦点。
 * **实时可用性与智能调度** — Popover 动态滚动呈现最近刷新相对时间，内嵌 OpenAI 与 Anthropic 官方服务健康状态点；后台 2 分钟额度/5 分钟日志独立循环，内置 60s 节流与 429 智能指数退避。
 
 ### 📊 本地用量与全维费用透视
@@ -116,6 +119,7 @@ cc-bar 严格遵循**本地优先与最小权限**原则，所有用量统计与
 | **Antigravity** | `~/.gemini/jetski-standalone-oauth-token`<br>`~/.gemini/oauth_creds.json` (兜底) | 读 / 写 | 优先读取独立 OAuth Token，临期自动续期回写。Cloud Mode 直连 Google 云端 API，无需本地 IDE 运行。 |
 | **Cursor** | `~/Library/Application Support/Cursor`<br>`/User/globalStorage/state.vscdb` | **严格只读** | 仅读 `cursorAuth/accessToken` 构造 Cookie 查询用量，绝不碰 refresh token/OAuth，不写回 Cursor SQLite 或 Keychain。 |
 | **Command Code** | 5 级本地配置或 macOS Keychain | 读 / Keychain | 支持 5 级只读自动探测（CLI、Pi、OpenCode、环境变量），或由用户在设置中通过 macOS Keychain 安全存储手动 Key。 |
+| **ccpm profiles** | `~/.ccpm/config.json`、各 profile 目录下的 `auth.json`<br>ccpm keystore（macOS Keychain，`go-keyring` 编码） | 读（Codex profile 续期回写自身 `auth.json`） | 只读取 profile 的 provider 与凭据；Claude profile 与主账号同样严格只读。Ollama Cloud 的 Cookie 由用户手动粘贴，存入 cc-bar 自己的 Keychain 条目。 |
 | **本地会话日志** | `~/.codex/sessions`、`~/.claude/projects`<br>`~/.pi/agent/sessions`、OpenCode SQLite | **严格只读** | 仅扫描本地 JSONL/SQLite 解析 Token 用量与模型元数据，绝不收集或上传聊天正文。受保护目录做纯文本路径分词，零权限弹窗。 |
 
 ### 系统权限与零遥测承诺
@@ -159,6 +163,7 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 | **cc-bar**（本仓库） | macOS 原生菜单栏工具 | Swift / SwiftUI |
 | [**CC Trace**](https://github.com/nanvon/cc-trace) | 桌面客户端（macOS 菜单栏 / Windows 托盘） | Tauri / Web |
 | [**CC Trace Mobile**](https://github.com/nanvon/cc-trace-mobile) | 移动端伴侣（iOS / Android） | 移动端框架 |
+| [**ccpm (fork)**](https://github.com/chang1o/claude-code-profile-manager) | Claude Code 多 profile 管理 CLI，带 `--provider kimi/glm/ollama` 与读取 cc-bar 缓存的 `statusline` | Go |
 
 ---
 

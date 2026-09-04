@@ -37,12 +37,24 @@ nonisolated enum CodexTokenRefresher {
     enum WriteBack: Sendable, Hashable {
         case codexAuthJSON
         case importedAccount(id: String)
+        /// A ccpm Codex profile's own `auth.json` (`CODEX_HOME` of that profile).
+        case codexAuthJSONAt(path: String)
 
         /// 去重键。不同导入账号必须各自独立,不能合流到同一次刷新。
         var coordinationKey: String {
             switch self {
             case .codexAuthJSON: return "auth.json"
             case .importedAccount(let id): return "imported:\(id)"
+            case .codexAuthJSONAt(let path): return "auth.json:\(path)"
+            }
+        }
+
+        /// File-backed write-back targets share one reader / writer.
+        fileprivate var authFileURL: URL? {
+            switch self {
+            case .codexAuthJSON: return CodexAuth.authFileURL()
+            case .codexAuthJSONAt(let path): return URL(fileURLWithPath: path)
+            case .importedAccount: return nil
             }
         }
     }
@@ -222,9 +234,9 @@ nonisolated enum CodexTokenRefresher {
 
     nonisolated private static func peekStored(writeBack: WriteBack) -> StoredTokens? {
         switch writeBack {
-        case .codexAuthJSON:
-            let url = CodexAuth.authFileURL()
-            guard let data = try? Data(contentsOf: url),
+        case .codexAuthJSON, .codexAuthJSONAt:
+            guard let url = writeBack.authFileURL,
+                  let data = try? Data(contentsOf: url),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tokens = root["tokens"] as? [String: Any],
                   let access = tokens["access_token"] as? String, !access.isEmpty
@@ -275,8 +287,9 @@ nonisolated enum CodexTokenRefresher {
 
     nonisolated private static func write(_ refreshed: Refreshed, writeBack: WriteBack) throws {
         switch writeBack {
-        case .codexAuthJSON:
+        case .codexAuthJSON, .codexAuthJSONAt:
             try writeBackToAuthJSON(
+                url: writeBack.authFileURL ?? CodexAuth.authFileURL(),
                 accessToken: refreshed.accessToken,
                 idToken: refreshed.idToken,
                 refreshToken: refreshed.refreshToken
@@ -294,11 +307,11 @@ nonisolated enum CodexTokenRefresher {
     }
 
     nonisolated private static func writeBackToAuthJSON(
+        url: URL,
         accessToken: String,
         idToken: String?,
         refreshToken: String
     ) throws {
-        let url = CodexAuth.authFileURL()
         var root: [String: Any] = [:]
         if let data = try? Data(contentsOf: url),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {

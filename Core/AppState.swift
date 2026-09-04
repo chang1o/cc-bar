@@ -48,6 +48,14 @@ final class AppState {
     var importedCodexErrors: [String: String] = [:]
     var importedCodexRefreshStates: [String: QuotaRefreshState] = [:]
 
+    // MARK: ccpm profile accounts
+    //
+    // Layered on top of the primary account of each provider; Kimi / GLM / Ollama only exist
+    // this way. Mirrors of a primary account (same identity) reuse `primaryQuotaStates`.
+    var ccpmAccounts: [CCPMAccount] = []
+    /// keyed by CCPMAccount.id; mirrors of a primary account have no entry.
+    var ccpmQuotaStates: [String: PrimaryQuotaState] = [:]
+
     /// 主窗口当前 tab,允许 ⌘1 / ⌘, 等命令从外部驱动切换
     var mainTab: MainTab = .stats
 
@@ -205,6 +213,7 @@ final class AppState {
         // 是否请求其远端额度仍由 Provider / Stats 开关控制。
         await loadCursor()
         await loadCommandCode()
+        await discoverCCPMAccounts()
         recordCachedQuotaCycleObservations()
         logCredentialSummary()
 
@@ -320,6 +329,9 @@ final class AppState {
                 canMirrorPrimary: plan.canMirrorPrimary
             )
         }
+        // ccpm profiles can be added / re-logged-in at any time: re-read them every round.
+        await discoverCCPMAccounts()
+        await loadAllCCPMQuotas(reason: reason)
         logQuotaSummary()
         // 批次 C：本轮标脏的额度文件统一落盘（每文件每轮最多写一次）
         scheduleQuotaPersistenceFlush()
@@ -420,6 +432,14 @@ final class AppState {
             state.source = .cache
             importedCodexRefreshStates[id] = state
         }
+        for (id, record) in quotaCache.ccpmAccounts ?? [:] {
+            var state = PrimaryQuotaState()
+            state.snapshot = record.snapshot
+            state.source = .cache
+            state.refresh.lastSuccessAt = record.updatedAt
+            state.refresh.source = .cache
+            ccpmQuotaStates[id] = state
+        }
     }
 
     func quotaSnapshot(for app: QuotaApp) -> QuotaSnapshot? {
@@ -479,6 +499,310 @@ final class AppState {
             )
         }
         // Antigravity 暂无本地用量周期，仅记录额度历史，不参与 cycle 统计
+    }
+
+    // MARK: - ccpm profile accounts
+
+    func ccpmAccounts(for app: QuotaApp) -> [CCPMAccount] {
+        ccpmAccounts.filter { $0.app == app }
+    }
+
+    func ccpmQuotaState(for account: CCPMAccount) -> PrimaryQuotaState {
+        if account.mirrorsPrimary, let primary = primaryQuotaStates[account.app] { return primary }
+        return ccpmQuotaStates[account.id] ?? PrimaryQuotaState()
+    }
+
+    /// Upstream shows a primary block for every enabled provider that has a machine-level
+    /// login path; the block itself reports a missing account. Kimi / GLM / Ollama have none.
+    func hasPrimaryAccount(_ app: QuotaApp) -> Bool {
+        app.supportsPrimaryAccount
+    }
+
+    func hasAnyAccount(_ app: QuotaApp) -> Bool {
+        hasPrimaryAccount(app) || ccpmAccounts.contains { $0.app == app }
+    }
+
+    /// Descriptor order, enabled in settings and backed by at least one account.
+    var presentProviders: [QuotaApp] {
+        let settings = SettingsStore.shared
+        return QuotaProviderDescriptor.allProviders.map(\.app).filter {
+            settings.isProviderEnabled($0) && hasAnyAccount($0)
+        }
+    }
+
+    /// Most constrained snapshot across the primary account and non-mirror ccpm accounts.
+    func monitorSnapshot(for app: QuotaApp) -> QuotaSnapshot? {
+        var candidates: [QuotaSnapshot] = []
+        if hasPrimaryAccount(app), let primary = quotaSnapshot(for: app) {
+            candidates.append(primary)
+        }
+        for account in ccpmAccounts(for: app) where !account.mirrorsPrimary {
+            if let snapshot = ccpmQuotaStates[account.id]?.snapshot {
+                candidates.append(snapshot)
+            }
+        }
+        return candidates.min { Self.headroom($0) < Self.headroom($1) }
+    }
+
+    private static func headroom(_ snapshot: QuotaSnapshot) -> Double {
+        let lanes = [snapshot.primaryLimit, snapshot.secondaryLimit].compactMap { $0 }
+        return lanes.map(\.window.remainingPercent).min() ?? 101
+    }
+
+    /// Reload profiles + credential stores, prune vanished accounts, refresh the rest.
+    func rediscoverCCPMAccounts() async {
+        await discoverCCPMAccounts()
+        await loadAllCCPMQuotas(reason: .userInitiated)
+        scheduleQuotaPersistenceFlush()
+    }
+
+    func refreshCCPMAccount(_ account: CCPMAccount, reason: QuotaRefreshReason) async {
+        await loadCCPMQuota(account: account, reason: reason)
+        scheduleQuotaPersistenceFlush()
+    }
+
+    /// Stores (nil / empty deletes) the manual ollama.com cookie, then re-fetches that account.
+    func setOllamaCookie(_ cookie: String?, profile: String) async {
+        let trimmed = cookie?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let saveError: String? = await Task.detached(priority: .userInitiated) {
+            do {
+                if trimmed.isEmpty {
+                    OllamaCookieStore.delete(profile: profile)
+                } else {
+                    try OllamaCookieStore.save(trimmed, profile: profile)
+                }
+                return nil
+            } catch {
+                return "\(error)"
+            }
+        }.value
+        if let saveError {
+            print("[ccpm] ollama cookie save failed: \(saveError)")
+        }
+        // A new cookie starts from a clean fetch; a stale error must not linger next to it.
+        let id = "\(QuotaApp.ollama.rawValue):ccpm:\(profile)"
+        ccpmQuotaStates[id] = nil
+        await discoverCCPMAccounts()
+        if let account = ccpmAccounts.first(where: { $0.id == id }) {
+            await loadCCPMQuota(account: account, reason: .userInitiated)
+        }
+        scheduleQuotaPersistenceFlush()
+    }
+
+    /// Re-reads ccpm config + credential stores off the main actor and prunes the runtime
+    /// state of accounts that disappeared.
+    private func discoverCCPMAccounts() async {
+        let codexId = codexAccount?.accountId
+        let claudeEmail = claudeAccount?.email
+        let discovered = await Task.detached(priority: .utility) {
+            CCPMAccountCatalog.discover(primaryCodexAccountId: codexId, primaryClaudeEmail: claudeEmail)
+        }.value
+        if discovered != ccpmAccounts {
+            ccpmAccounts = discovered
+        }
+        let alive = Set(discovered.map(\.id))
+        ccpmQuotaStates = ccpmQuotaStates.filter { alive.contains($0.key) }
+        if let cache = quotaCache.ccpmAccounts {
+            let pruned = cache.filter { alive.contains($0.key) }
+            if pruned.count != cache.count {
+                quotaCache.ccpmAccounts = pruned.isEmpty ? nil : pruned
+                saveQuotaCache()
+            }
+        }
+        for app in Set(discovered.map(\.app)) {
+            syncCCPMMirrorCache(for: app)
+        }
+    }
+
+    /// Non-mirror, ready accounts of enabled providers, three at a time.
+    private func loadAllCCPMQuotas(reason: QuotaRefreshReason) async {
+        let settings = SettingsStore.shared
+        let targets = ccpmAccounts.filter {
+            $0.isReady && !$0.mirrorsPrimary && settings.isProviderEnabled($0.app)
+        }
+        guard !targets.isEmpty else { return }
+        let maxConcurrent = 3
+        var index = 0
+        while index < targets.count {
+            let batch = Array(targets[index..<min(index + maxConcurrent, targets.count)])
+            await withTaskGroup(of: Void.self) { group in
+                for account in batch {
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        await self.loadCCPMQuota(account: account, reason: reason)
+                    }
+                }
+            }
+            index += maxConcurrent
+        }
+    }
+
+    private func loadCCPMQuota(account: CCPMAccount, reason: QuotaRefreshReason) async {
+        guard account.isReady, !account.mirrorsPrimary else { return }
+        guard beginCCPMRefresh(id: account.id, reason: reason) else { return }
+        defer { ccpmQuotaStates[account.id]?.refresh.inFlight = false }
+
+        let result: Result<QuotaSnapshot, QuotaError>
+        switch account.credential {
+        case .codexOAuth(let codex):
+            result = await fetchCCPMCodex(codex, authPath: account.profile.authFileURL.path)
+        case .claudeOAuth(let claude):
+            result = await fetchCCPMClaude(claude)
+        case .apiKey(let key, let baseURL):
+            result = account.app == .kimi
+                ? await KimiQuotaClient.fetch(apiKey: key, baseURL: baseURL)
+                : await GLMQuotaClient.fetch(apiKey: key, baseURL: baseURL)
+        case .ollamaCookie(let cookie):
+            result = await OllamaCloudQuotaClient.fetch(cookieHeader: cookie)
+        case .none:
+            result = .failure(.missingToken)
+        }
+        switch result {
+        case .success(let snapshot):
+            storeCCPM(account: account, snapshot: snapshot, source: .api)
+        case .failure(let error):
+            markCCPMFailure(id: account.id, message: error.description, error: error)
+        }
+    }
+
+    private func fetchCCPMCodex(_ codex: CodexAccount, authPath: String) async -> Result<QuotaSnapshot, QuotaError> {
+        guard let token = codex.accessToken else { return .failure(.missingToken) }
+        let activeToken: String
+        if codex.isPersonalAccessToken {
+            activeToken = token
+        } else {
+            let refreshed = await CodexTokenRefresher.ensureFreshAccessToken(
+                currentAccessToken: token,
+                refreshToken: codex.refreshToken,
+                writeBack: .codexAuthJSONAt(path: authPath)
+            )
+            switch refreshed {
+            case .success(let t): activeToken = t
+            case .failure(let error): return .failure(error)
+            }
+        }
+        return await CodexQuotaClient.fetch(
+            accessToken: activeToken,
+            accountId: codex.isPersonalAccessToken ? nil : codex.accountId
+        ).map(\.snapshot)
+    }
+
+    /// ccpm Claude profiles are read-only like the primary login: an expired token is
+    /// reported, never refreshed here; the next discovery re-reads the profile store.
+    private func fetchCCPMClaude(_ claude: ClaudeAccount) async -> Result<QuotaSnapshot, QuotaError> {
+        guard let token = claude.accessToken else { return .failure(.missingToken) }
+        if ClaudeTokenRefresher.isExpired(expiresAt: claude.expiresAt) {
+            return .failure(.credentialsExpired)
+        }
+        return await ClaudeQuotaClient.fetch(accessToken: token)
+    }
+
+    private func beginCCPMRefresh(id: String, reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        var state = ccpmQuotaStates[id] ?? PrimaryQuotaState()
+        guard !state.refresh.inFlight else { return false }
+        if let backoffUntil = state.refresh.backoffUntil, backoffUntil > now {
+            state.refresh.lastError = backoffMessage(until: backoffUntil)
+            state.error = state.refresh.lastError
+            ccpmQuotaStates[id] = state
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = state.refresh.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        state.refresh.inFlight = true
+        state.refresh.lastAttemptAt = now
+        ccpmQuotaStates[id] = state
+        return true
+    }
+
+    private func storeCCPM(account: CCPMAccount, snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        var state = ccpmQuotaStates[account.id] ?? PrimaryQuotaState()
+        let merged = snapshot.preservingFutureResetDates(from: state.snapshot, now: updatedAt)
+        state.snapshot = merged
+        state.source = source
+        state.error = nil
+        state.refresh.lastSuccessAt = updatedAt
+        state.refresh.lastError = nil
+        state.refresh.backoffUntil = nil
+        state.refresh.source = source
+        ccpmQuotaStates[account.id] = state
+
+        var cache = quotaCache.ccpmAccounts ?? [:]
+        cache[account.id] = QuotaCacheRecord(snapshot: merged, source: source, updatedAt: updatedAt, accountID: account.detail)
+        quotaCache.ccpmAccounts = cache
+        saveQuotaCache()
+        recordQuotaHistory(
+            accountKey: QuotaHistoryAccountKey.ccpm(account),
+            app: account.app,
+            kind: .ccpm,
+            snapshot: merged,
+            sampledAt: updatedAt
+        )
+        if source == .api {
+            QuotaNotifier.shared.observe(key: account.id, label: notificationLabel(for: account), snapshot: merged)
+        }
+    }
+
+    private func markCCPMFailure(id: String, message: String, error: QuotaError? = nil) {
+        var state = ccpmQuotaStates[id] ?? PrimaryQuotaState()
+        state.error = message
+        state.refresh.lastError = message
+        if error?.isRateLimited == true {
+            state.refresh.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+        ccpmQuotaStates[id] = state
+    }
+
+    /// Mirrors reuse the primary state in memory; the cache still gets a copy so external
+    /// readers (the ccpm statusline) find every profile under its own key.
+    private func syncCCPMMirrorCache(for app: QuotaApp) {
+        let mirrors = ccpmAccounts.filter { $0.app == app && $0.mirrorsPrimary }
+        guard !mirrors.isEmpty else { return }
+        var cache = quotaCache.ccpmAccounts ?? [:]
+        var changed = false
+        let record = quotaCache.providers[app]
+        for account in mirrors where cache[account.id] != record {
+            cache[account.id] = record
+            changed = true
+        }
+        if changed {
+            quotaCache.ccpmAccounts = cache.isEmpty ? nil : cache
+            saveQuotaCache()
+        }
+    }
+
+    private func notificationLabel(for account: CCPMAccount) -> String {
+        let title = QuotaProviderDescriptor.descriptor(for: account.app)?.title ?? account.app.rawValue
+        return "\(title) · \(account.label)"
+    }
+
+    private func primaryNotificationLabel(_ app: QuotaApp) -> String {
+        let descriptor = QuotaProviderDescriptor.descriptor(for: app)
+        let title = descriptor?.title ?? app.rawValue
+        var who: String? = {
+            switch app {
+            case .codex: return codexAccount?.email
+            case .claude: return claudeAccount?.email
+            case .antigravity: return antigravityAccount?.email
+            case .cursor: return cursorAccount?.email
+            case .commandCode: return commandCodeAccount?.email ?? commandCodeAccount?.login
+            case .kimi, .glm, .ollama: return nil
+            }
+        }()
+        if SettingsStore.shared.privacyMode { who = nil }
+        return "\(title) · \(who ?? descriptor?.vendor ?? "")"
+    }
+
+    private func didStorePrimary(_ app: QuotaApp, snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        if source == .api {
+            QuotaNotifier.shared.observe(key: "\(app.rawValue):primary", label: primaryNotificationLabel(app), snapshot: snapshot)
+        }
+        syncCCPMMirrorCache(for: app)
     }
 
     // MARK: - Imported Codex accounts
@@ -1496,6 +1820,7 @@ final class AppState {
         antigravityRefreshState.source = source
         quotaCache.antigravity = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt, accountID: antigravityAccount?.email)
         saveQuotaCache()
+        didStorePrimary(.antigravity, snapshot: mergedSnapshot, source: source)
         recordAntigravityQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
     }
 
@@ -1740,6 +2065,7 @@ final class AppState {
         codexRefreshState.source = source
         quotaCache.codex = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
         saveQuotaCache()
+        didStorePrimary(.codex, snapshot: mergedSnapshot, source: source)
         recordCodexQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
         recordQuotaCycles(
             accountKey: QuotaHistoryAccountKey.codexPrimary(accountId: codexAccount?.accountId),
@@ -1764,6 +2090,7 @@ final class AppState {
         claudeRefreshState.source = source
         quotaCache.claude = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
         saveQuotaCache()
+        didStorePrimary(.claude, snapshot: mergedSnapshot, source: source)
         recordClaudeQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
         recordQuotaCycles(
             accountKey: QuotaHistoryAccountKey.claudePrimary(email: claudeAccount?.email),
@@ -1791,6 +2118,7 @@ final class AppState {
             accountID: cursorAccount?.userID
         )
         saveQuotaCache()
+        didStorePrimary(.cursor, snapshot: mergedSnapshot, source: source)
     }
 
     private func storeCommandCode(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
@@ -1810,6 +2138,7 @@ final class AppState {
             accountID: commandCodeAccount?.accountKey
         )
         saveQuotaCache()
+        didStorePrimary(.commandCode, snapshot: mergedSnapshot, source: source)
     }
 
     private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
@@ -1907,6 +2236,15 @@ final class AppState {
             print("[Quota 额度] Command Code: source=\(commandCodeQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
         } else if SettingsStore.shared.isProviderEnabled(.commandCode) {
             print("[Quota 额度] Command Code 拉取失败: error=\(commandCodeQuotaError ?? commandCodeError ?? "unknown")")
+        }
+        for account in ccpmAccounts {
+            let state = ccpmQuotaState(for: account)
+            if let q = state.snapshot {
+                let mirror = account.mirrorsPrimary ? " (mirrors primary)" : ""
+                print("[Quota 额度] ccpm \(account.id): source=\(state.source?.rawValue ?? "—") plan=\(q.planType ?? account.planType ?? "—") \(format(q))\(mirror)")
+            } else {
+                print("[Quota 额度] ccpm \(account.id) 拉取失败: error=\(state.error ?? account.unavailableReason ?? "unknown")")
+            }
         }
         // 远端用量和额度是两个独立接口，失败原因必须单独可见，
         // 否则统计页只剩一句"暂不可用"，无法区分未登录和拉取失败。

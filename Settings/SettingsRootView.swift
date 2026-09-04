@@ -79,90 +79,25 @@ struct SettingsRootView: View {
 
     private func accountsGroup(settings: SettingsStore) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            // 主账号（自动检测）
+            // Primary accounts (auto-detected) plus every provider reachable through ccpm profiles.
             PrefsGroup(
                 title: "Accounts",
                 chinese: "账号",
-                desc: "Auto-detected on your Mac. Toggle which services to display.",
-                chineseDesc: "自动检测,自行勾选要显示的"
+                desc: "Auto-detected on your Mac and from ccpm. Toggle which services to display.",
+                chineseDesc: "从本机登录与 ccpm 自动检测,可勾选要显示的服务"
             ) {
-                AccountRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    tint: .codexAccent,
-                    logoName: "codex",
-                    fallback: "C",
-                    email: appState.codexAccount?.email,
-                    plan: appState.codexAccount?.planType,
-                    availability: appState.codexAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.showCodex },
-                        set: { settings.showCodex = $0 }
-                    ),
-                    accessory: appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
-                )
-                AccountRow(
-                    title: "Claude Code",
-                    subtitle: "Anthropic",
-                    tint: .claudeAccent,
-                    logoName: "claude",
-                    fallback: "K",
-                    email: appState.claudeAccount?.email,
-                    plan: appState.claudeAccount?.subscriptionType,
-                    availability: appState.claudeAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.showClaude },
-                        set: { settings.showClaude = $0 }
-                    )
-                )
-                AccountRow(
-                    title: "Antigravity",
-                    subtitle: "Google",
-                    tint: .antigravityAccent,
-                    logoName: "antigravity",
-                    fallback: "A",
-                    email: appState.antigravityAccount?.email,
-                    plan: appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType,
-                    availability: appState.antigravityAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.showAntigravity },
-                        set: { newValue in
-                            settings.showAntigravity = newValue
-                            if newValue {
-                                Task { await appState.refreshQuotas(reason: .userInitiated) }
-                            }
-                        }
-                    )
-                )
-                AccountRow(
-                    title: "Cursor",
-                    subtitle: "Cursor",
-                    tint: .gray,
-                    logoName: "cursor",
-                    fallback: "C",
-                    email: appState.cursorAccount?.email,
-                    plan: appState.cursorQuota?.planType,
-                    availability: appState.cursorAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.isProviderEnabled(.cursor) },
-                        set: { setCursorProviderEnabled($0, settings: settings) }
-                    )
-                )
-                AccountRow(
-                    title: "Command Code",
-                    subtitle: "Command Code",
-                    tint: QuotaApp.commandCode.tintColor,
-                    logoName: "commandcode",
-                    fallback: "⌘",
-                    email: appState.commandCodeAccount?.login,
-                    plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
-                    availability: appState.commandCodeAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.isProviderEnabled(.commandCode) },
-                        set: { setCommandCodeProviderEnabled($0, settings: settings) }
-                    ),
-                    accessory: AnyView(commandCodeCredentialButton)
-                )
+                ForEach(QuotaProviderDescriptor.allProviders) { provider in
+                    accountRow(provider, settings: settings)
+                }
+            }
+
+            PrefsGroup(
+                title: "ccpm Profiles",
+                chinese: "ccpm 账号",
+                desc: "Auto-discovered from ~/.ccpm/config.json. OAuth profiles use their own credentials; Kimi / GLM read the key from the ccpm keystore; Ollama Cloud needs a pasted cookie.",
+                chineseDesc: "自动读取 ~/.ccpm/config.json;OAuth profile 用各自凭据,Kimi / GLM 从 ccpm keystore 取 key,Ollama Cloud 需要粘贴 Cookie"
+            ) {
+                CCPMProfilesView()
             }
 
             // 其他 Codex 账号（手动导入）
@@ -177,17 +112,103 @@ struct SettingsRootView: View {
         }
     }
 
-    private func setCursorProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
-        settings.setProviderEnabled(enabled, for: .cursor)
-        guard enabled else { return }
-        Task {
-            await appState.refreshQuotas(reason: .userInitiated)
+    private func accountRow(_ provider: QuotaProviderDescriptor, settings: SettingsStore) -> some View {
+        let app = provider.app
+        let presence = accountPresence(for: app)
+        return AccountRow(
+            title: provider.title,
+            subtitle: provider.vendor,
+            tint: app.tintColor,
+            logoName: provider.logoName,
+            fallback: provider.fallback,
+            email: presence.email,
+            plan: presence.plan,
+            availability: presence.availability,
+            isOn: Binding(
+                get: { settings.isProviderEnabled(app) },
+                set: { setProviderEnabled($0, for: app, settings: settings) }
+            ),
+            accessory: accountAccessory(for: app),
+            detailOverride: presence.detailOverride
+        )
+    }
+
+    private struct AccountPresence {
+        var email: String?
+        var plan: String?
+        var availability: AccountAvailability
+        /// Replaces the email/plan line, used when the only accounts come from ccpm.
+        var detailOverride: String?
+    }
+
+    /// Primary credentials win; otherwise the row reports how many ccpm profiles back this provider.
+    private func accountPresence(for app: QuotaApp) -> AccountPresence {
+        let ccpmCount = appState.ccpmAccounts(for: app).count
+        var presence: AccountPresence
+        switch app {
+        case .codex:
+            presence = AccountPresence(
+                email: appState.codexAccount?.email,
+                plan: appState.codexAccount?.planType,
+                availability: appState.codexAccount == nil ? .notDetected : .connected
+            )
+        case .claude:
+            presence = AccountPresence(
+                email: appState.claudeAccount?.email,
+                plan: appState.claudeAccount?.subscriptionType,
+                availability: appState.claudeAccount == nil ? .notDetected : .connected
+            )
+        case .antigravity:
+            presence = AccountPresence(
+                email: appState.antigravityAccount?.email,
+                plan: appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType,
+                availability: appState.antigravityAccount == nil ? .notDetected : .connected
+            )
+        case .cursor:
+            presence = AccountPresence(
+                email: appState.cursorAccount?.email,
+                plan: appState.cursorQuota?.planType,
+                availability: appState.cursorAccount == nil ? .notDetected : .connected
+            )
+        case .commandCode:
+            presence = AccountPresence(
+                email: appState.commandCodeAccount?.login,
+                plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                availability: appState.commandCodeAccount == nil ? .notDetected : .connected
+            )
+        case .kimi, .glm, .ollama:
+            presence = AccountPresence(email: nil, plan: nil, availability: .notDetected)
+        }
+        guard presence.availability == .notDetected else { return presence }
+        if ccpmCount > 0 {
+            presence.availability = .connected
+            presence.detailOverride = ccpmCount == 1
+                ? tr("1 ccpm profile", "1 个 ccpm profile")
+                : tr("\(ccpmCount) ccpm profiles", "\(ccpmCount) 个 ccpm profile")
+        } else if app == .kimi || app == .glm || app == .ollama {
+            presence.detailOverride = tr(
+                "Add a ccpm profile with --provider \(app.rawValue)",
+                "用 ccpm add --provider \(app.rawValue) 添加 profile"
+            )
+        }
+        return presence
+    }
+
+    private func accountAccessory(for app: QuotaApp) -> AnyView? {
+        switch app {
+        case .codex:
+            return appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
+        case .commandCode:
+            return AnyView(commandCodeCredentialButton)
+        case .claude, .antigravity, .cursor, .kimi, .glm, .ollama:
+            return nil
         }
     }
 
-    private func setCommandCodeProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
-        settings.setProviderEnabled(enabled, for: .commandCode)
-        guard enabled else { return }
+    /// Codex / Claude are always fetched; every other provider only enters the refresh plan once enabled.
+    private func setProviderEnabled(_ enabled: Bool, for app: QuotaApp, settings: SettingsStore) {
+        settings.setProviderEnabled(enabled, for: app)
+        guard enabled, app != .codex, app != .claude else { return }
         Task {
             await appState.refreshQuotas(reason: .userInitiated)
         }
@@ -281,6 +302,40 @@ struct SettingsRootView: View {
                         .toggleStyle(.switch)
                         .tint(.green)
                 }
+            }
+            PrefsRow(
+                label: "Display mode",
+                chinese: "显示模式",
+                desc: "All enabled providers, or only the one closest to its limit.",
+                chineseDesc: "显示所有已启用服务,或只显示剩余最低的那个"
+            ) {
+                Picker("", selection: Binding(
+                    get: { settings.menuBarMode },
+                    set: { settings.menuBarMode = $0 }
+                )) {
+                    Text(tr("All", "全部")).tag(MenuBarMode.all)
+                    Text(tr("Lowest only", "仅最低")).tag(MenuBarMode.lowestOnly)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            PrefsRow(
+                label: "Icon style",
+                chinese: "图标样式",
+                desc: "Percent text or a small vertical meter next to each logo.",
+                chineseDesc: "logo 旁显示百分比文字或竖向量表"
+            ) {
+                Picker("", selection: Binding(
+                    get: { settings.menuBarStyle },
+                    set: { settings.menuBarStyle = $0 }
+                )) {
+                    Text(tr("Percent", "百分比")).tag(MenuBarStyle.percent)
+                    Text(tr("Meter", "量表")).tag(MenuBarStyle.meter)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
             }
             PrefsRow(
                 label: "Quota period",
@@ -410,6 +465,20 @@ struct SettingsRootView: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+            }
+            PrefsRow(
+                label: "Quota notifications",
+                chinese: "额度通知",
+                desc: "Notify at 10% left, when a window is exhausted, and when it resets.",
+                chineseDesc: "剩余 10%、用尽以及窗口重置时通知"
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.quotaNotificationsEnabled },
+                    set: { settings.quotaNotificationsEnabled = $0 }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
             }
             PrefsRow(
                 label: "Service status dot",
@@ -775,6 +844,8 @@ private struct AccountRow: View {
     @Binding var isOn: Bool
     /// 可选的额外控件(如 Codex 主账号的重置次数入口),放在状态徽标与开关之间。
     var accessory: AnyView? = nil
+    /// Replaces the email/plan line when set (ccpm-only providers, hints).
+    var detailOverride: String? = nil
 
     var body: some View {
         HStack(spacing: 11) {
@@ -811,6 +882,7 @@ private struct AccountRow: View {
     }
 
     private var detailText: String {
+        if let detailOverride { return detailOverride }
         if let email {
             if let plan, !plan.isEmpty {
                 return "\(email) · \(plan)"

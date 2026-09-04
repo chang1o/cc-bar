@@ -5,29 +5,62 @@ struct MenuBarLabel: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        Image(nsImage: MenuBarBadgeImage.make(
-            providers: visibleProviders,
-            snapshots: snapshots,
-            window: SettingsStore.shared.menuBarWindow
-        ))
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityLabel(MenuBarBadgeImage.accessibilityLabel(
-            providers: visibleProviders,
-            snapshots: snapshots,
-            window: SettingsStore.shared.menuBarWindow
-        ))
+        let settings = SettingsStore.shared
+        let items = menuBarItems
+        Image(nsImage: MenuBarBadgeImage.make(items: items, style: settings.menuBarStyle))
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityLabel(MenuBarBadgeImage.accessibilityLabel(items: items))
     }
 
-    private var visibleProviders: [QuotaProviderDescriptor] {
-        QuotaProviderDescriptor.menuBarProviders.filter {
-            SettingsStore.shared.effectiveMenuBarVisibility(for: $0.app)
+    /// One segment per provider that is present and switched on for the bar. The value
+    /// is the most constrained account of that provider; `lowestOnly` keeps just the
+    /// provider with the least headline quota left.
+    private var menuBarItems: [MenuBarBadgeItem] {
+        let settings = SettingsStore.shared
+        let present = appState.presentProviders
+        let providers = QuotaProviderDescriptor.menuBarProviders.filter {
+            present.contains($0.app) && settings.effectiveMenuBarVisibility(for: $0.app)
         }
+        var items = providers.map { provider -> MenuBarBadgeItem in
+            let snapshot = appState.monitorSnapshot(for: provider.app)
+            let limits = snapshot.map {
+                MenuBarQuotaSelection.limits(in: $0, choice: settings.menuBarWindow)
+            } ?? []
+            return MenuBarBadgeItem(
+                descriptor: provider,
+                isUnlimited: snapshot?.isUnlimited == true,
+                remaining: limits.map(\.window.remainingPercent)
+            )
+        }
+        if settings.menuBarMode == .lowestOnly, items.count > 1 {
+            let withData = items.filter { $0.headlineRemaining != nil }
+            let lowest = withData.min { ($0.headlineRemaining ?? 101) < ($1.headlineRemaining ?? 101) }
+            items = [lowest ?? items[0]]
+        }
+        return items
+    }
+}
+
+struct MenuBarBadgeItem {
+    let descriptor: QuotaProviderDescriptor
+    let isUnlimited: Bool
+    /// Remaining percent of the selected lanes, headline lane first (0–2 entries).
+    let remaining: [Double]
+
+    var headlineRemaining: Double? {
+        isUnlimited ? 100 : remaining.first
     }
 
-    private var snapshots: [QuotaApp: QuotaSnapshot] {
-        Dictionary(uniqueKeysWithValues: QuotaApp.allCases.compactMap { app in
-            appState.quotaSnapshot(for: app).map { (app, $0) }
-        })
+    var text: String {
+        if isUnlimited { return "∞" }
+        guard !remaining.isEmpty else { return "--" }
+        return remaining.map { "\(Int($0.rounded()))%" }.joined(separator: "/")
+    }
+
+    /// Fill levels for the meter style; unlimited draws one full meter.
+    var meterLevels: [Double?] {
+        if isUnlimited { return [100] }
+        return remaining.isEmpty ? [nil] : remaining
     }
 }
 
@@ -50,35 +83,25 @@ enum MenuBarBadgeImage {
     private static let height: CGFloat = 22
     private static let iconTextGap: CGFloat = 3
     private static let segmentGap: CGFloat = 9
+    private static let meterWidth: CGFloat = 5
+    private static let meterHeight: CGFloat = 14
+    private static let meterGap: CGFloat = 2
     private static let font = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.menuBarFont(ofSize: 0).pointSize,
         weight: .regular
     )
 
-    static func make(
-        providers: [QuotaProviderDescriptor],
-        snapshots: [QuotaApp: QuotaSnapshot],
-        window: MenuBarWindowChoice
-    ) -> NSImage {
-        let items = providers.map { provider in
-            BadgeItem(
-                logo: provider.logoName,
-                fallback: provider.fallback,
-                text: pctText(snapshots[provider.app], window: window)
-            )
-        }
-
-        let attrs = textAttributes
-        let textWidths = items.map { $0.text.size(withAttributes: attrs).width }
-        let width = items.enumerated().reduce(CGFloat.zero) { partial, entry in
-            let gap = entry.offset == 0 ? CGFloat.zero : segmentGap
-            let textPart = entry.element.text.isEmpty ? 0 : iconTextGap + ceil(textWidths[entry.offset])
-            return partial + gap + iconSize + textPart
-        }
-
+    static func make(items: [MenuBarBadgeItem], style: MenuBarStyle = .percent) -> NSImage {
         // 没有任何 item 时仍要返回一个最小图像（至少留一个 logo 占位以免菜单栏图标完全消失）
         if items.isEmpty {
             return placeholderImage()
+        }
+
+        let attrs = textAttributes
+        var width: CGFloat = 0
+        for (index, item) in items.enumerated() {
+            if index > 0 { width += segmentGap }
+            width += segmentWidth(item, style: style, attrs: attrs)
         }
 
         let image = NSImage(size: NSSize(width: max(ceil(width), iconSize), height: height))
@@ -91,12 +114,22 @@ enum MenuBarBadgeImage {
             if index > 0 { x += segmentGap }
             drawIcon(item, x: x)
             x += iconSize
-            if !item.text.isEmpty {
+            switch style {
+            case .percent:
+                if !item.text.isEmpty {
+                    x += iconTextGap
+                    let textSize = item.text.size(withAttributes: attrs)
+                    item.text.draw(at: NSPoint(x: x, y: floor((height - textSize.height) / 2)),
+                                   withAttributes: attrs)
+                    x += ceil(textSize.width)
+                }
+            case .meter:
                 x += iconTextGap
-                let textSize = item.text.size(withAttributes: attrs)
-                item.text.draw(at: NSPoint(x: x, y: floor((height - textSize.height) / 2)),
-                               withAttributes: attrs)
-                x += ceil(textSize.width)
+                for (meterIndex, level) in item.meterLevels.enumerated() {
+                    if meterIndex > 0 { x += meterGap }
+                    drawMeter(remaining: level, x: x)
+                    x += meterWidth
+                }
             }
         }
 
@@ -105,16 +138,26 @@ enum MenuBarBadgeImage {
         return image
     }
 
-    static func accessibilityLabel(
-        providers: [QuotaProviderDescriptor],
-        snapshots: [QuotaApp: QuotaSnapshot],
-        window: MenuBarWindowChoice
-    ) -> String {
-        let parts = providers.map { provider in
-            if snapshots[provider.app]?.isUnlimited == true {
-                return "\(provider.title) Unlimited"
-            }
-            return "\(provider.title) \(pctText(snapshots[provider.app], window: window))"
+    private static func segmentWidth(
+        _ item: MenuBarBadgeItem,
+        style: MenuBarStyle,
+        attrs: [NSAttributedString.Key: Any]
+    ) -> CGFloat {
+        switch style {
+        case .percent:
+            let textPart = item.text.isEmpty ? 0 : iconTextGap + ceil(item.text.size(withAttributes: attrs).width)
+            return iconSize + textPart
+        case .meter:
+            let count = CGFloat(item.meterLevels.count)
+            return iconSize + iconTextGap + meterWidth * count + meterGap * (count - 1)
+        }
+    }
+
+    static func accessibilityLabel(items: [MenuBarBadgeItem]) -> String {
+        let parts = items.map { item in
+            item.isUnlimited
+                ? "\(item.descriptor.title) Unlimited"
+                : "\(item.descriptor.title) \(item.text)"
         }
         return parts.isEmpty ? "CCBar" : parts.joined(separator: ", ")
     }
@@ -124,19 +167,6 @@ enum MenuBarBadgeImage {
             .font: font,
             .foregroundColor: NSColor.black
         ]
-    }
-
-    private static func pctText(_ snap: QuotaSnapshot?, window: MenuBarWindowChoice) -> String {
-        guard let snap else { return "--" }
-        if snap.isUnlimited == true { return "∞" }
-        let limits = MenuBarQuotaSelection.limits(in: snap, choice: window)
-        guard !limits.isEmpty else { return "--" }
-        return limits.map { pctOrPlaceholder($0.window) }.joined(separator: "/")
-    }
-
-    private static func pctOrPlaceholder(_ window: QuotaWindow?) -> String {
-        guard let window else { return "--" }
-        return "\(Int(window.remainingPercent.rounded()))%"
     }
 
     private static func placeholderImage() -> NSImage {
@@ -153,9 +183,9 @@ enum MenuBarBadgeImage {
         return image
     }
 
-    private static func drawIcon(_ item: BadgeItem, x: CGFloat) {
+    private static func drawIcon(_ item: MenuBarBadgeItem, x: CGFloat) {
         let rect = NSRect(x: x, y: floor((height - iconSize) / 2), width: iconSize, height: iconSize)
-        if let img = MenuBarLogo.rawImage(named: item.logo) {
+        if let img = MenuBarLogo.rawImage(named: item.descriptor.logoName) {
             img.draw(in: rect)
             return
         }
@@ -164,16 +194,29 @@ enum MenuBarBadgeImage {
             .font: NSFont.systemFont(ofSize: 9, weight: .semibold),
             .foregroundColor: NSColor.black
         ]
-        let size = item.fallback.size(withAttributes: attrs)
-        item.fallback.draw(at: NSPoint(x: x + floor((iconSize - size.width) / 2),
-                                       y: floor((height - size.height) / 2)),
-                           withAttributes: attrs)
+        let glyph = item.descriptor.fallback
+        let size = glyph.size(withAttributes: attrs)
+        glyph.draw(at: NSPoint(x: x + floor((iconSize - size.width) / 2),
+                               y: floor((height - size.height) / 2)),
+                   withAttributes: attrs)
     }
 
-    private struct BadgeItem {
-        let logo: String
-        let fallback: String
-        let text: String
+    /// Vertical meter: 1px outline, filled from the bottom by remaining percent.
+    /// Missing data draws the empty outline so the segment keeps its width.
+    private static func drawMeter(remaining: Double?, x: CGFloat) {
+        let frame = NSRect(x: x, y: floor((height - meterHeight) / 2), width: meterWidth, height: meterHeight)
+        let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 1, yRadius: 1)
+        outline.lineWidth = 1
+        NSColor.black.withAlphaComponent(0.55).setStroke()
+        outline.stroke()
+
+        guard let remaining, remaining > 0 else { return }
+        let fraction = max(0, min(1, remaining / 100))
+        let inner = frame.insetBy(dx: 1, dy: 1)
+        let fillHeight = max(1, round(inner.height * fraction))
+        let fill = NSRect(x: inner.minX, y: inner.minY, width: inner.width, height: fillHeight)
+        NSColor.black.setFill()
+        NSBezierPath(roundedRect: fill, xRadius: 0.5, yRadius: 0.5).fill()
     }
 }
 
@@ -192,7 +235,9 @@ enum MenuBarQuotaSelection {
         case .primary:
             return [snapshot.primaryLimit].compactMap { $0 }
         case .weekly:
-            return [snapshot.weeklyLimit].compactMap { $0 }
+            // Providers without a weekly lane (single-window plans) fall back to primary
+            // instead of going blank.
+            return [snapshot.weeklyLimit ?? snapshot.primaryLimit].compactMap { $0 }
         case .both:
             return [snapshot.primaryLimit, snapshot.secondaryLimit]
                 .compactMap { $0 }

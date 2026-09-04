@@ -442,11 +442,8 @@ final class UsageService {
             cycles: cycles,
             affectedCycleIDs: affectedCycleIDs
         )
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let codexRoots = [
-            home.appendingPathComponent(".codex/sessions", isDirectory: true),
-            home.appendingPathComponent(".codex/archived_sessions", isDirectory: true),
-        ]
+        let codexRoots = CodexJSONLScanner.defaultRoots()
+        let claudeRoots = ClaudeJSONLScanner.defaultRoots()
         let progress: ScanProgressCallback? = { [weak self] progress in
             DispatchQueue.main.async { self?.scanProgress = progress }
         }
@@ -455,7 +452,7 @@ final class UsageService {
             ClaudeJSONLScanner.scan(
                 previous: [:],
                 seenMessageIds: [],
-                root: ClaudeJSONLScanner.defaultRoot(),
+                roots: claudeRoots,
                 // 重建只需要 entries，跳过标题索引构建（省一次索引文件解析）
                 conversationIndex: ConversationTitleIndex.ClaudeIndex(titles: [:], projects: [:]),
                 minimumMtime: dateFrom,

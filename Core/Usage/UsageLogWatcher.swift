@@ -69,6 +69,8 @@ final class UsageLogWatcher {
             ".pi",
             ".local/share/opencode",
         ].map { home.appendingPathComponent($0, isDirectory: true).path }
+            // ccpm profiles keep their own Claude / Codex logs under the ccpm home.
+            + [CCPMProfileCatalog.homeDirectory().path]
     }
 
     /// 周期扫描的门控：返回 true 表示这一轮应该真的扫。

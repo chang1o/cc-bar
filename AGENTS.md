@@ -4,7 +4,7 @@
 
 ## 项目概况
 
-cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于展示 Codex 和 Claude Code 的额度、刷新状态、本地用量统计和桌面悬浮窗。
+cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于展示 Codex、Claude Code、Antigravity、Cursor、Command Code 以及通过 ccpm profile 接入的 Kimi Code / GLM Coding Plan / Ollama Cloud 的额度、刷新状态、本地用量统计和桌面悬浮窗。
 
 项目主体功能已开发完成，后续以新需求和迭代为主，不再按初始里程碑推进。
 

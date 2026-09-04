@@ -43,6 +43,9 @@
   * **Antigravity (Google)**: Cloud Mode direct connection to Google Cloud APIs (without requiring local IDE/CLI processes), grouping Gemini 5H, Gemini Weekly, and Claude auxiliary quotas.
   * **Cursor**: Direct connection to the official Usage API, displaying Total primary quota alongside Auto and API breakdown, automatically recognizing Unlimited with `∞` badges and aggregating today/week actual spend.
   * **Command Code**: Tracks 5-hour primary quota (cap 14.0), weekly quota (cap 35.0), and monthly GOAT subscription Credits.
+  * **Kimi Code / GLM Coding Plan / Ollama Cloud**: monitored through [ccpm](https://github.com/chang1o/claude-code-profile-manager) profiles. Kimi shows weekly requests and the 5-hour rate limit, GLM shows 5-hour / weekly token quotas, Ollama Cloud shows the monthly dollar allowance and weekly usage (paste an ollama.com cookie once in Settings).
+* **ccpm multi-account** — auto-discovers ccpm profiles: Codex / Claude OAuth profiles read their own credentials, Kimi / GLM keys come from the ccpm keystore; accounts of the same service are grouped in the popover, one full card each, with Dashboard / Status / Terminal / Set default actions; ccpm's `statusline` reads the cc-bar cache.
+* **Pace and notifications** — every lane compares usage against an even burn (ahead / behind, projected run-out); local notifications at 10% left, exhausted, and reset; Claude Extra usage is shown as an extra lane.
 * **Menu Bar & Floating HUD** — Customizable menu bar percentages (primary, weekly, or both); independent desktop HUD overlay with per-service toggles, 20pt edge magnetic snapping, position persistence, and non-activating window behavior (never steals keyboard focus).
 * **Live Health & Smart Scheduling** — Dynamic relative timestamp ("refreshed Xs ago") rolling in the Popover header; embedded live health status dots for OpenAI and Anthropic; dual independent polling loops (2-min quota / 5-min log scan) with 60s throttling and 429 exponential backoff.
 
@@ -159,6 +162,7 @@ Part of the same tool series by the author, sharing quota definitions and design
 | **cc-bar** (this repository) | Native macOS menu bar utility | Swift / SwiftUI |
 | [**CC Trace**](https://github.com/nanvon/cc-trace) | Desktop client (macOS menu bar / Windows tray) | Tauri / Web |
 | [**CC Trace Mobile**](https://github.com/nanvon/cc-trace-mobile) | Mobile companion (iOS / Android) | Mobile Framework |
+| [**ccpm (fork)**](https://github.com/chang1o/claude-code-profile-manager) | Claude Code profile manager CLI with `--provider kimi/glm/ollama` and a `statusline` that reads the cc-bar cache | Go |
 
 ---
 

@@ -42,3 +42,9 @@
 - 改代码时,顺手把对应小节回写到上述四份文档之一。代码与文档冲突时**以代码为准**,并修正文档。
 - 不在文档里写计划性 / 时间表内容;那些放 GitHub Issue 或 commit message。
 - 新增大型功能可在主目录下添加单独的设计草案(命名 `XX-某功能.md`);落地后并入相应规范文档并把草案移到 `历史参考/`。
+
+## 多 Provider / ccpm 联动
+
+- `superpowers/specs/2026-09-04-multi-provider-design.md`：Kimi / GLM / Ollama Cloud 与 ccpm 联动的设计与决策记录，第 8 节是合并上游后的类型映射
+- `设计稿/2026-09-04-multi-provider/index.html`：Popover / 菜单栏 / 设置的静态设计稿与能力迁移矩阵
+- `技术实现.md` 第 15 节：ccpm 账号层的实现说明

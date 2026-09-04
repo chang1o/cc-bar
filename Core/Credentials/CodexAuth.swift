@@ -2,7 +2,11 @@ import Foundation
 
 enum CodexAuth {
     nonisolated static func load() throws -> CodexAccount {
-        let url = authFileURL()
+        try load(from: authFileURL())
+    }
+
+    /// Parses any Codex `auth.json`, e.g. a ccpm profile's `CODEX_HOME/auth.json`.
+    nonisolated static func load(from url: URL) throws -> CodexAccount {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw CredentialError.fileNotFound(url.path)
         }

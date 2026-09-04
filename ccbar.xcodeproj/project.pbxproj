@@ -7,6 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		49C1CD00000000000001AABB /* QuotaNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD00000000000001AAAA /* QuotaNotifier.swift */; };
+		49C1CD01000000000001AABB /* CCPMProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD01000000000001AAAA /* CCPMProfiles.swift */; };
+		49C1CD02000000000001AABB /* CCPMKeystore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD02000000000001AAAA /* CCPMKeystore.swift */; };
+		49C1CD03000000000001AABB /* OllamaCookieStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD03000000000001AAAA /* OllamaCookieStore.swift */; };
+		49C1CD04000000000001AABB /* CCPMAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD04000000000001AAAA /* CCPMAccount.swift */; };
+		49C1CD05000000000001AABB /* QuotaPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD05000000000001AAAA /* QuotaPace.swift */; };
+		49C1CD06000000000001AABB /* KimiQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD06000000000001AAAA /* KimiQuotaClient.swift */; };
+		49C1CD07000000000001AABB /* GLMQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD07000000000001AAAA /* GLMQuotaClient.swift */; };
+		49C1CD08000000000001AABB /* OllamaCloudQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD08000000000001AAAA /* OllamaCloudQuotaClient.swift */; };
+		49C1CD09000000000001AABB /* CCPMAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD09000000000001AAAA /* CCPMAccountsSection.swift */; };
+		49C1CD0A000000000001AABB /* CCPMProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD0A000000000001AAAA /* CCPMProfilesView.swift */; };
+		49C1CD0B000000000001AABB /* MultiProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD0B000000000001AAAA /* MultiProviderTests.swift */; };
+		49C1CD0C000000000001AABB /* kimi.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CD0C000000000001AAAA /* kimi.svg */; };
+		49C1CD0D000000000001AABB /* glm.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CD0D000000000001AAAA /* glm.svg */; };
+		49C1CD0E000000000001AABB /* ollama.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CD0E000000000001AAAA /* ollama.svg */; };
 		4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4931AC522FC02A4200EE598C /* Assets.xcassets */; };
 		4931AC622FC02A4200EE598C /* MenuBarLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */; };
 		4931AC632FC02A4200EE598C /* CCBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC412FC02A4200EE598C /* CCBarApp.swift */; };
@@ -113,6 +128,21 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		49C1CD00000000000001AAAA /* QuotaNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaNotifier.swift; sourceTree = "<group>"; };
+		49C1CD01000000000001AAAA /* CCPMProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfiles.swift; sourceTree = "<group>"; };
+		49C1CD02000000000001AAAA /* CCPMKeystore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMKeystore.swift; sourceTree = "<group>"; };
+		49C1CD03000000000001AAAA /* OllamaCookieStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaCookieStore.swift; sourceTree = "<group>"; };
+		49C1CD04000000000001AAAA /* CCPMAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMAccount.swift; sourceTree = "<group>"; };
+		49C1CD05000000000001AAAA /* QuotaPace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPace.swift; sourceTree = "<group>"; };
+		49C1CD06000000000001AAAA /* KimiQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KimiQuotaClient.swift; sourceTree = "<group>"; };
+		49C1CD07000000000001AAAA /* GLMQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GLMQuotaClient.swift; sourceTree = "<group>"; };
+		49C1CD08000000000001AAAA /* OllamaCloudQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaCloudQuotaClient.swift; sourceTree = "<group>"; };
+		49C1CD09000000000001AAAA /* CCPMAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMAccountsSection.swift; sourceTree = "<group>"; };
+		49C1CD0A000000000001AAAA /* CCPMProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfilesView.swift; sourceTree = "<group>"; };
+		49C1CD0B000000000001AAAA /* MultiProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiProviderTests.swift; sourceTree = "<group>"; };
+		49C1CD0C000000000001AAAA /* kimi.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = kimi.svg; sourceTree = "<group>"; };
+		49C1CD0D000000000001AAAA /* glm.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = glm.svg; sourceTree = "<group>"; };
+		49C1CD0E000000000001AAAA /* ollama.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = ollama.svg; sourceTree = "<group>"; };
 		4931AC302FC029A000EE598C /* CCBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CCBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4931AC3E2FC02A4200EE598C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		4931AC3F2FC02A4200EE598C /* ccbar.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ccbar.xcodeproj; sourceTree = "<group>"; };
@@ -272,6 +302,7 @@
 				49C1B15F000000000001AAAA /* Usage */,
 				49C1B15B000000000001AAAA /* Pricing */,
 				49C1B111000000000001AAAA /* Storage */,
+				49C1CD00000000000001AAAA /* QuotaNotifier.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -282,6 +313,7 @@
 				4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */,
 				4931AC502FC02A4200EE598C /* PopoverRootView.swift */,
 				49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */,
+				49C1CD09000000000001AAAA /* CCPMAccountsSection.swift */,
 			);
 			path = MenuBar;
 			sourceTree = "<group>";
@@ -302,6 +334,7 @@
 				49C1CC04000000000001AAAA /* CommandCodeCredentialSheet.swift */,
 				49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */,
 				49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */,
+				49C1CD0A000000000001AAAA /* CCPMProfilesView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -323,6 +356,9 @@
 				49C1B104000000000001AAAA /* ClaudeAuth.swift */,
 				49C1B191000000000001AAAA /* ImportedCodexAccount.swift */,
 				49C1B192000000000001AAAA /* ImportedCodexStore.swift */,
+				49C1CD01000000000001AAAA /* CCPMProfiles.swift */,
+				49C1CD02000000000001AAAA /* CCPMKeystore.swift */,
+				49C1CD03000000000001AAAA /* OllamaCookieStore.swift */,
 			);
 			path = Credentials;
 			sourceTree = "<group>";
@@ -358,6 +394,11 @@
 				49C1B126000000000001AAAA /* ServiceStatusClient.swift */,
 				49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */,
 				49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */,
+				49C1CD04000000000001AAAA /* CCPMAccount.swift */,
+				49C1CD05000000000001AAAA /* QuotaPace.swift */,
+				49C1CD06000000000001AAAA /* KimiQuotaClient.swift */,
+				49C1CD07000000000001AAAA /* GLMQuotaClient.swift */,
+				49C1CD08000000000001AAAA /* OllamaCloudQuotaClient.swift */,
 			);
 			path = Quota;
 			sourceTree = "<group>";
@@ -370,6 +411,9 @@
 				49C1B143000000000001AAAA /* antigravity.svg */,
 				49C1BC16000000000001AAAA /* cursor.svg */,
 				49C1CC01000000000001AAAA /* commandcode.svg */,
+				49C1CD0C000000000001AAAA /* kimi.svg */,
+				49C1CD0D000000000001AAAA /* glm.svg */,
+				49C1CD0E000000000001AAAA /* ollama.svg */,
 			);
 			path = Logos;
 			sourceTree = "<group>";
@@ -455,6 +499,7 @@
 				49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */,
 				49C1BF09000000000001AAAA /* UpdateCheckerTests.swift */,
 				49C1B3F2000000000001AAAA /* Fixtures */,
+				49C1CD0B000000000001AAAA /* MultiProviderTests.swift */,
 			);
 			path = CCBarTests;
 			sourceTree = "<group>";
@@ -566,6 +611,9 @@
 				49C1B143000000000001AABB /* antigravity.svg in Resources */,
 				49C1BC16000000000001AABB /* cursor.svg in Resources */,
 				49C1CC01000000000001AABB /* commandcode.svg in Resources */,
+				49C1CD0C000000000001AABB /* kimi.svg in Resources */,
+				49C1CD0D000000000001AABB /* glm.svg in Resources */,
+				49C1CD0E000000000001AABB /* ollama.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -657,6 +705,17 @@
 				49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */,
 				49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */,
 				49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */,
+				49C1CD00000000000001AABB /* QuotaNotifier.swift in Sources */,
+				49C1CD01000000000001AABB /* CCPMProfiles.swift in Sources */,
+				49C1CD02000000000001AABB /* CCPMKeystore.swift in Sources */,
+				49C1CD03000000000001AABB /* OllamaCookieStore.swift in Sources */,
+				49C1CD04000000000001AABB /* CCPMAccount.swift in Sources */,
+				49C1CD05000000000001AABB /* QuotaPace.swift in Sources */,
+				49C1CD06000000000001AABB /* KimiQuotaClient.swift in Sources */,
+				49C1CD07000000000001AABB /* GLMQuotaClient.swift in Sources */,
+				49C1CD08000000000001AABB /* OllamaCloudQuotaClient.swift in Sources */,
+				49C1CD09000000000001AABB /* CCPMAccountsSection.swift in Sources */,
+				49C1CD0A000000000001AABB /* CCPMProfilesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -677,6 +736,7 @@
 				49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */,
 				49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */,
 				49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */,
+				49C1CD0B000000000001AABB /* MultiProviderTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

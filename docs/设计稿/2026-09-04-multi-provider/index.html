@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cc-bar · Multi-provider 设计稿 · 2026-09-04</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  html, body { margin: 0; min-height: 100%; }
+  body { font-family: var(--font-sf); background: var(--desktop); color: var(--text-primary); }
+  body.theme-light { --page-bg: #eeece7; --panel-bg: #fff; --ink: #1d1d1f; --ink-2: rgba(0,0,0,.55); --ink-3: rgba(0,0,0,.35); --line: rgba(0,0,0,.08); }
+  body.theme-dark  { --page-bg: #141416; --panel-bg: #1f1f22; --ink: #f5f5f7; --ink-2: rgba(235,235,245,.6); --ink-3: rgba(235,235,245,.32); --line: rgba(255,255,255,.08); }
+  body { background: var(--page-bg); }
+
+  /* ---------- page chrome ---------- */
+  .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 18px; padding: 12px 28px;
+    background: color-mix(in srgb, var(--page-bg) 82%, transparent); backdrop-filter: blur(18px); border-bottom: .5px solid var(--line); }
+  .topbar h1 { font-size: 15px; margin: 0; letter-spacing: -.2px; }
+  .topbar .sub { font-size: 11.5px; color: var(--ink-2); }
+  .tabs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+  .tabs a { font-size: 12px; padding: 5px 10px; border-radius: 7px; color: var(--ink-2); text-decoration: none; }
+  .tabs a:hover { background: var(--fill-2); color: var(--ink); }
+  .theme-btn { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 7px; border: .5px solid var(--line); background: var(--panel-bg); color: var(--ink); cursor: pointer; }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 28px 120px; }
+  section { margin-bottom: 72px; scroll-margin-top: 70px; }
+  section > h2 { font-size: 24px; letter-spacing: -.5px; margin: 0 0 6px; }
+  section > .lead { font-size: 13.5px; color: var(--ink-2); max-width: 760px; line-height: 1.6; margin: 0 0 22px; }
+  .note { font-size: 12px; color: var(--ink-2); background: var(--fill-3); border: .5px solid var(--line); border-radius: 10px; padding: 10px 14px; line-height: 1.6; }
+  .note b { color: var(--ink); }
+  .grid { display: grid; gap: 22px; align-items: start; }
+  .grid.two { grid-template-columns: 1fr 1fr; }
+  .plate { background: var(--panel-bg); border-radius: 16px; padding: 18px; border: .5px solid var(--line); }
+  .plate > .lbl { font-size: 10.5px; letter-spacing: .5px; text-transform: uppercase; color: var(--ink-3); font-weight: 600; margin-bottom: 12px; }
+  .wall { border-radius: 14px; padding: 26px; background: linear-gradient(155deg, #1F2A3A 0%, #2A2235 40%, #3A2330 75%, #4A2A38 100%); }
+  .theme-light .wall { background: linear-gradient(155deg, #C1D6E8 0%, #DCE3DD 35%, #E5D4C2 70%, #D4B69A 100%); }
+  code, .mono { font-family: var(--font-mono); }
+  pre { background: #0f1115; color: #e6e6eb; font-size: 12px; line-height: 1.6; padding: 14px 16px; border-radius: 10px; overflow-x: auto; margin: 0; }
+  .theme-light pre { background: #1d1f24; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* ---------- tiles / bars ---------- */
+  .tile { display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; width: 22px; height: 22px; flex: 0 0 auto; }
+  .tile img { width: 14px; height: 14px; display: block; }
+  .tile.codex { background: #fff; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.12); }
+  .tile.codex img { filter: none; }
+  .tile.claude { background: #D97757; } .tile.kimi { background: #FE603C; } .tile.glm { background: #E85A6A; } .tile.ollama { background: #606064; }
+  .tile.claude img, .tile.kimi img, .tile.glm img, .tile.ollama img { filter: invert(1); }
+  .tile.sm { width: 16px; height: 16px; border-radius: 4px; } .tile.sm img { width: 10px; height: 10px; }
+  .tile.lg { width: 28px; height: 28px; border-radius: 7px; } .tile.lg img { width: 16px; height: 16px; }
+  .tile.xl { width: 34px; height: 34px; border-radius: 8px; } .tile.xl img { width: 18px; height: 18px; }
+  .bar { position: relative; height: 6px; border-radius: 3px; background: rgba(120,120,128,.22); overflow: hidden; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; }
+  .bar.thin { height: 4px; } .bar.hair { height: 3px; }
+  .c-ok { background: #98989D; } .c-warn { background: #FFE27A; } .c-low { background: #FFA15F; } .c-empty { background: #FF7A90; }
+  .theme-light .c-ok { background: #6C6C70; } .theme-light .c-warn { background: #F6C343; } .theme-light .c-low { background: #FF7A2F; } .theme-light .c-empty { background: #FF4D6D; }
+  .t-ok { color: #98989D; } .t-warn { color: #FFE27A; } .t-low { color: #FFA15F; } .t-empty { color: #FF7A90; }
+  .theme-light .t-ok { color: #6C6C70; } .theme-light .t-warn { color: #C89A1B; } .theme-light .t-low { color: #FF7A2F; } .theme-light .t-empty { color: #FF4D6D; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .chip { font-size: 10.5px; font-weight: 500; padding: 2px 6px; border-radius: 999px; background: var(--fill-2); color: var(--ink-2); }
+
+  /* ---------- menu bar strip ---------- */
+  .mbar { height: 30px; display: flex; align-items: center; padding: 0 14px; font-size: 13px; border-radius: 8px;
+    background: rgba(20,20,22,.42); backdrop-filter: blur(20px); color: #f5f5f7; }
+  .theme-light .mbar { background: rgba(255,255,255,.34); color: #1d1d1f; }
+  .mbar .apple { font-weight: 700; margin-right: 18px; }
+  .mbar .m { margin-right: 14px; opacity: .9; }
+  .mbar .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .mbar .seg { display: inline-flex; align-items: center; gap: 3px; margin-right: 6px; }
+  .mbar .seg img { width: 18px; height: 18px; filter: invert(1); opacity: .95; }
+  .theme-light .mbar .seg img { filter: none; }
+  .mbar .seg span { font-variant-numeric: tabular-nums; font-size: 13px; }
+  .mbar .meter { width: 5px; height: 14px; border-radius: 1.5px; border: 1px solid rgba(255,255,255,.55); position: relative; overflow: hidden; }
+  .theme-light .mbar .meter { border-color: rgba(0,0,0,.55); }
+  .mbar .meter i { position: absolute; left: 0; right: 0; bottom: 0; background: currentColor; }
+  .mbar .clock { font-variant-numeric: tabular-nums; margin-left: 6px; }
+  .mbar-lbl { font-size: 10.5px; color: var(--ink-3); font-family: var(--font-mono); margin: 8px 0 18px; }
+
+  /* ---------- popover ---------- */
+  .popover { width: 340px; border-radius: 18px; background: var(--surface-solid); box-shadow: var(--shadow-popover); overflow: hidden; margin: 0 auto; }
+  .theme-dark .popover { background: #262628; }
+  .pop-head { display: flex; align-items: center; gap: 4px; padding: 14px 12px 12px; }
+  .pop-head .ttl { font-size: 13px; font-weight: 600; } .pop-head .st { font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .pop-head .btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 22px; min-width: 26px; padding: 0 5px; border-radius: 5px; color: var(--ink-2); font-size: 10.5px; font-weight: 600; }
+  .pop-head .btn svg { width: 13px; height: 13px; }
+  .risk { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(255,161,95,.12); }
+  .risk .k { font-size: 9.5px; font-weight: 600; letter-spacing: .3px; color: #FFA15F; text-transform: uppercase; }
+  .risk .v { font-size: 11px; font-weight: 500; }
+  .risk .p { margin-left: auto; text-align: right; } .risk .p b { display: block; font-size: 14px; color: #FFA15F; font-variant-numeric: tabular-nums; } .risk .p span { font-size: 10px; color: var(--ink-2); }
+  .sep { height: .5px; background: var(--line); }
+  .sep.inset { margin: 0 16px; }
+  .sec-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 2px; font-size: 9.5px; font-weight: 600; letter-spacing: .3px; color: var(--ink-3); }
+  .sec-head span:last-child { font-variant-numeric: tabular-nums; opacity: .7; }
+  .card { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .card .hd { display: flex; align-items: flex-start; gap: 9px; }
+  .card .hd .nm { font-size: 13px; font-weight: 600; letter-spacing: -.1px; }
+  .card .hd .sub { font-size: 11px; color: var(--ink-2); margin-left: 6px; }
+  .card .hd .upd { font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .card .hd .plan { margin-left: auto; }
+  .card .hd .dot { margin-top: 5px; }
+  .lane { display: flex; flex-direction: column; gap: 4px; }
+  .lane .row { display: flex; align-items: baseline; justify-content: space-between; }
+  .lane .ttl { font-size: 12px; font-weight: 600; }
+  .lane .det { font-size: 10.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .lane .pct { font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .lane .rst { font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .lane .pace { font-size: 10.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .lane .pace.ahead { color: #FFA15F; }
+  .usage .ttl { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+  .usage .ln { font-size: 11px; line-height: 1.5; } .usage .ln span { color: var(--ink-2); }
+  .err { font-size: 10.5px; color: #FFA15F; }
+  .acts-row { font-size: 10.5px; font-weight: 500; color: var(--ink-2); } .acts-row span { color: var(--accent); }
+  .empty-pop { text-align: center; padding: 24px; font-size: 12px; color: var(--ink-2); }
+
+  /* ---------- HUD ---------- */
+  .hud { display: inline-flex; flex-direction: column; gap: 7px; padding: 10px 14px; border-radius: 14px; min-width: 190px;
+    background: rgba(40,40,42,.78); backdrop-filter: blur(30px); box-shadow: var(--shadow-hud); color: #f5f5f7; }
+  .theme-light .hud { background: rgba(255,255,255,.72); color: #1d1d1f; }
+  .hud .r { display: flex; align-items: center; gap: 8px; }
+  .hud .bar { flex: 1; min-width: 56px; }
+  .hud .l { font-size: 9px; font-weight: 600; width: 22px; text-align: right; opacity: .5; font-variant-numeric: tabular-nums; }
+  .hud .p { font-size: 13px; font-weight: 600; min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+
+  /* ---------- windows ---------- */
+  .win { border-radius: 12px; background: var(--window-bg); box-shadow: var(--shadow-window); overflow: hidden; }
+  .titlebar { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: .5px solid var(--separator); background: var(--surface-2); }
+  .tl { display: flex; gap: 8px; } .tl i { width: 12px; height: 12px; border-radius: 6px; display: block; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.18); }
+  .tl i:nth-child(1) { background: #FE5F58; } .tl i:nth-child(2) { background: #FEBC2E; } .tl i:nth-child(3) { background: #28C840; }
+  .titlebar .tabs2 { margin-left: auto; margin-right: auto; display: flex; gap: 2px; background: var(--fill-2); border-radius: 7px; padding: 2px; }
+  .titlebar .tabs2 span { font-size: 12px; padding: 3px 12px; border-radius: 5px; color: var(--ink-2); }
+  .titlebar .tabs2 span.on { background: var(--surface-solid); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .win-body { display: flex; }
+  .sidebar { width: 200px; flex: 0 0 200px; padding: 14px 12px; border-right: .5px solid var(--separator); background: var(--surface-2); display: flex; flex-direction: column; gap: 16px; }
+  .sb-title { font-size: 10px; font-weight: 600; letter-spacing: .4px; color: var(--ink-3); padding: 0 6px 4px; text-transform: uppercase; }
+  .sb-item { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 500; padding: 5px 8px; border-radius: 6px; }
+  .sb-item.on { background: var(--accent); color: #fff; }
+  .sb-item .mk { width: 8px; height: 8px; border-radius: 2px; }
+  .content { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+  /* settings */
+  .prefs { padding: 20px 28px; display: flex; flex-direction: column; gap: 22px; }
+  .pg-title { font-size: 12px; font-weight: 600; padding: 0 4px 2px; } .pg-desc { font-size: 10.5px; color: var(--ink-3); padding: 0 4px 8px; }
+  .pg-body { background: var(--panel-bg); border-radius: 10px; border: .5px solid var(--line); overflow: hidden; }
+  .prow { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: .5px solid var(--line); }
+  .prow:first-child { border-top: 0; }
+  .prow .lab { font-size: 12.5px; } .prow .lab small { display: block; font-size: 10.5px; color: var(--ink-3); }
+  .prow .tr { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .toggle { width: 26px; height: 15px; border-radius: 8px; background: rgba(120,120,128,.35); position: relative; flex: 0 0 auto; }
+  .toggle.on { background: #30D158; } .toggle::after { content: ""; position: absolute; top: 1.5px; left: 1.5px; width: 12px; height: 12px; border-radius: 50%; background: #fff; }
+  .toggle.on::after { left: 12.5px; }
+  .toggle.off-dis { opacity: .4; }
+  .pick { font-size: 11.5px; padding: 3px 22px 3px 8px; border-radius: 6px; border: .5px solid var(--line); background: var(--fill-3); position: relative; }
+  .pick::after { content: "⌄"; position: absolute; right: 7px; top: 1px; font-size: 12px; opacity: .6; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; } .badge.g { color: #30D158; } .badge.o { color: #FF9F0A; }
+  .btn-sm { font-size: 11px; padding: 3px 9px; border-radius: 6px; border: .5px solid var(--line); background: var(--fill-3); }
+  .acct { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: .5px solid var(--line); }
+  .acct:first-child { border-top: 0; }
+  .acct .t { font-size: 12.5px; font-weight: 500; } .acct .d { font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+  .acct .r { margin-left: auto; text-align: right; display: flex; align-items: center; gap: 10px; }
+  .acct .r .auth { font-size: 10.5px; color: var(--ink-2); } .acct .r .pct { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sheet { width: 460px; padding: 20px; border-radius: 12px; background: var(--panel-bg); border: .5px solid var(--line); box-shadow: var(--shadow-window); }
+  .sheet h4 { margin: 0 0 8px; font-size: 14px; } .sheet p { font-size: 11.5px; color: var(--ink-2); margin: 0 0 12px; line-height: 1.5; }
+  .sheet textarea { width: 100%; box-sizing: border-box; height: 110px; font-family: var(--font-mono); font-size: 11px; border-radius: 6px; border: .5px solid var(--line); background: var(--fill-3); color: var(--ink); padding: 8px; resize: none; }
+  .sheet .acts { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+  .sheet .acts .sp { flex: 1; }
+  .b { font-size: 12px; padding: 4px 12px; border-radius: 6px; border: .5px solid var(--line); background: var(--fill-3); }
+  .b.p { background: var(--accent); color: #fff; border-color: transparent; } .b.d { color: #FF453A; }
+
+  /* stats */
+  .segs { display: inline-flex; background: var(--fill-2); border-radius: 7px; padding: 2px; margin-left: auto; }
+  .segs span { font-size: 11px; padding: 3px 9px; border-radius: 5px; color: var(--ink-2); } .segs span.on { background: var(--surface-solid); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .kpi { background: var(--panel-bg); border: .5px solid var(--line); border-radius: 10px; padding: 11px 14px; }
+  .kpi .l { font-size: 11px; color: var(--ink-2); display: flex; align-items: center; gap: 4px; } .kpi .l .mk { width: 6px; height: 6px; border-radius: 1.5px; }
+  .kpi .v { font-size: 20px; font-weight: 600; letter-spacing: -.5px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .kpi .v small { font-size: 11px; font-weight: 600; margin-left: 6px; color: #FF453A; } .kpi .v small.dn { color: #30D158; }
+  .panel { background: var(--panel-bg); border: .5px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel .ph { display: flex; align-items: baseline; justify-content: space-between; font-size: 12.5px; font-weight: 600; margin-bottom: 12px; }
+  .legend { display: flex; gap: 8px; font-size: 11px; font-weight: 400; color: var(--ink-2); } .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .chart { display: flex; align-items: flex-end; gap: 6px; height: 150px; padding-bottom: 18px; position: relative; }
+  .chart .col { flex: 1; display: flex; flex-direction: column-reverse; gap: 1px; position: relative; }
+  .chart .col i { display: block; border-radius: 2px; }
+  .chart .col span { position: absolute; bottom: -16px; left: 0; right: 0; text-align: center; font-size: 9.5px; color: var(--ink-3); font-family: var(--font-mono); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .svc { padding: 8px 0; border-top: .5px solid var(--line); } .svc:first-child { border-top: 0; padding-top: 0; }
+  .svc .h { display: flex; align-items: baseline; gap: 6px; font-size: 12px; font-weight: 600; } .svc .h small { font-size: 10.5px; color: var(--ink-3); font-weight: 400; } .svc .h b { margin-left: auto; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .svc .bar { margin: 6px 0 4px 16px; height: 5px; } .svc .f { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-2); margin-left: 16px; }
+  .ring { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; position: relative; flex: 0 0 auto; }
+  .ring::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--panel-bg); }
+  .ring span { position: relative; font-size: 9.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .lim { display: flex; align-items: center; gap: 11px; padding: 7px 0; } .lim .t { font-size: 12px; font-weight: 500; } .lim .s { font-size: 10.5px; color: var(--ink-2); }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.tbl th { text-align: left; font-size: 10.5px; color: var(--ink-3); font-weight: 600; padding: 7px 10px; background: var(--fill-3); }
+  table.tbl td { padding: 7px 10px; border-top: .5px solid var(--line); font-family: var(--font-mono); color: var(--ink-2); white-space: nowrap; }
+  table.tbl td.tx { font-family: var(--font-sf); color: var(--ink); }
+  table.tbl td.num, table.tbl th.num { text-align: right; }
+  .mk { display: inline-block; width: 7px; height: 7px; border-radius: 1.8px; margin-right: 6px; vertical-align: 0; }
+
+  /* onboarding */
+  .ob { width: 620px; border-radius: 12px; background: var(--window-bg); box-shadow: var(--shadow-window); padding: 28px; }
+  .ob h3 { margin: 0 0 18px; font-size: 18px; letter-spacing: -.3px; }
+  .ob .row { display: flex; align-items: center; gap: 13px; padding: 14px 16px; border-radius: 12px; background: var(--panel-bg); border: .5px solid var(--line); margin-bottom: 10px; }
+  .ob .cb { width: 13px; height: 13px; border-radius: 3.5px; border: 1px solid rgba(120,120,128,.5); } .ob .cb.on { background: var(--accent); border-color: transparent; position: relative; }
+  .ob .cb.on::after { content: "✓"; color: #fff; font-size: 9px; font-weight: 700; position: absolute; left: 2.5px; top: -1px; }
+  .ob .row .t { font-size: 13px; font-weight: 600; } .ob .row .t small { font-size: 11px; color: var(--ink-3); font-weight: 400; margin-left: 4px; }
+  .ob .row .e { font-size: 11.5px; color: var(--ink-2); } .ob .row .s { font-size: 10px; font-family: var(--font-mono); color: var(--ink-3); }
+  .ob .info { display: flex; gap: 10px; padding: 10px 14px; border-radius: 10px; background: rgba(10,132,255,.1); border: .5px solid rgba(10,132,255,.25); font-size: 11.5px; color: var(--ink-2); margin-top: 8px; }
+
+  /* ccpm flow */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; align-items: stretch; }
+  .step { background: var(--panel-bg); border: .5px solid var(--line); border-radius: 12px; padding: 14px; font-size: 12px; line-height: 1.55; position: relative; }
+  .step .n { font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: .4px; margin-bottom: 6px; }
+  .step b { display: block; margin-bottom: 4px; font-size: 12.5px; }
+  .step code { font-size: 11px; background: var(--fill-2); padding: 1px 5px; border-radius: 4px; }
+  .step .who { position: absolute; top: 12px; right: 12px; font-size: 9.5px; padding: 2px 6px; border-radius: 999px; background: var(--fill-2); color: var(--ink-2); }
+
+  /* matrix */
+  table.mx { width: 100%; border-collapse: collapse; font-size: 12px; background: var(--panel-bg); border: .5px solid var(--line); border-radius: 12px; overflow: hidden; }
+  table.mx th { text-align: left; font-size: 10.5px; color: var(--ink-3); font-weight: 600; padding: 9px 12px; background: var(--fill-3); position: sticky; top: 58px; }
+  table.mx td { padding: 9px 12px; border-top: .5px solid var(--line); vertical-align: top; line-height: 1.5; }
+  table.mx td.cap { font-weight: 600; white-space: nowrap; }
+  table.mx td.where { white-space: nowrap; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
+  .st { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .st.done { background: rgba(48,209,88,.16); color: #30D158; } .st.rec { background: rgba(10,132,255,.16); color: #4aa3ff; } .st.opt { background: rgba(255,159,10,.16); color: #FF9F0A; } .st.no { background: rgba(255,69,58,.14); color: #FF6961; }
+  .theme-light .st.done { color: #1f8f3e; } .theme-light .st.rec { color: #0a6fe0; } .theme-light .st.opt { color: #b86f00; } .theme-light .st.no { color: #d0342c; }
+  .mx-legend { display: flex; gap: 12px; font-size: 11.5px; color: var(--ink-2); margin: 0 0 12px; flex-wrap: wrap; }
+  .sum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+  .sum .k { background: var(--panel-bg); border: .5px solid var(--line); border-radius: 10px; padding: 12px 14px; } .sum .k b { font-size: 22px; display: block; letter-spacing: -.5px; } .sum .k span { font-size: 11px; color: var(--ink-2); }
+</style>
+</head>
+<body class="theme-dark">
+<div class="topbar">
+  <div>
+    <h1>cc-bar · Multi-provider 设计稿</h1>
+    <div class="sub">2026-09-04 · Codex / Claude Code / Kimi Code / GLM / Ollama Cloud · ccpm 联动 · 对齐 codexbar 菜单卡</div>
+  </div>
+  <nav class="tabs">
+    <a href="#overview">概览</a><a href="#menubar">菜单栏</a><a href="#popover">Popover</a><a href="#hud">HUD</a>
+    <a href="#settings">设置</a><a href="#stats">统计</a><a href="#onboarding">引导</a><a href="#ccpm">ccpm 联动</a><a href="#matrix">能力迁移矩阵</a>
+  </nav>
+  <button class="theme-btn" onclick="toggleTheme()">切换深浅色</button>
+</div>
+
+<main>
+<section id="overview">
+  <h2>概览</h2>
+  <p class="lead">本稿覆盖 cc-bar 多 Provider 改造后的全部界面，样例数据与真实数据模型一致：两个 Codex 账号（默认登录 + ccpm profile）、两个 Claude Code 账号、通过 ccpm profile 发现的 Kimi Code、GLM Coding Plan、Ollama Cloud 各一个。页面用同一份样例数据渲染，改样例即可同步所有界面。</p>
+  <div class="grid two">
+    <div class="note"><b>本次改动的核心</b><br>
+      1. 统一账号模型：<code>Provider</code> + <code>ProviderDescriptor</code> + <code>MonitoredAccount</code>，AppState 只有一个账号列表与一个按账号 id 键控的额度字典。<br>
+      2. 第三方账号只从 ccpm profile 发现（<code>provider</code> 字段 + keystore），cc-bar 不提供独立填 key 入口。<br>
+      3. 菜单卡对齐 codexbar：每个窗口一段（标题、进度条、剩余 % + 重置倒计时、Pace），后接 Cost / Tokens 段；不折叠，每个账号都是完整卡片。<br>
+      4. 菜单栏按 provider 勾选，新增「仅显示最低」模式；HUD 每 provider 一行。</div>
+    <div class="note"><b>阅读提示</b><br>
+      · 颜色规则不变：识别色只用于 tile，额度状态色按剩余比例四档（&gt;50% 灰、20~50% 黄、&lt;20% 橙、0 红）。<br>
+      · Kimi Code 窗口带请求数明细（139/200 requests），GLM 带额度明细，Ollama Cloud 主窗是月额度（$7.50 of $60）。<br>
+      · Codex Pro 20x 现在只有周窗口（<code>wham/usage</code> 的 <code>primary_window.limit_window_seconds = 604800</code>，<code>secondary_window = null</code>），卡片只显示 Weekly 一段；窗口种类按 <code>limit_window_seconds</code> 判定，不再按位置硬编码。<br>
+      · 所有文案都是中英双语选词，本稿默认显示英文口径，方便和 codexbar 对照。<br>
+      · 最后两节是本稿的重点：ccpm 联动流程，以及 codexbar 有哪些能力能迁进 cc-bar / ccpm。</div>
+  </div>
+</section>
+
+<section id="menubar">
+  <h2>① 菜单栏</h2>
+  <p class="lead">每个启用的 provider 一段（logo + 百分比），顺序固定 Codex → Claude → Kimi → GLM → Ollama。新增「仅显示最低」模式，只画剩余最低的那个 provider，解决五个 provider 把菜单栏撑宽的问题。「主/副窗口」切换对所有段同时生效。</p>
+  <div class="wall">
+    <div class="mbar" id="mb-all"></div><div class="mbar-lbl">A · All providers · primary lane (5H; Ollama = MO)</div>
+    <div class="mbar" id="mb-lowest"></div><div class="mbar-lbl">B · Lowest only · the single most constrained provider</div>
+    <div class="mbar" id="mb-both"></div><div class="mbar-lbl">C · Both lanes · primary/secondary per provider</div>
+    <div class="mbar" id="mb-meter"></div><div class="mbar-lbl" style="margin-bottom:0">D · Meter icon style · logo + 5×14pt vertical meter, no percent text</div>
+  </div>
+</section>
+
+<section id="popover">
+  <h2>② Popover</h2>
+  <p class="lead">宽 340pt。Header 保留原有一排按钮。每个 provider 一个分区，多账号时有分区标题；每个账号一张完整卡片（不折叠）。卡片结构对齐 codexbar：头部（tile、名称、身份、更新时间、计划），每个窗口一段，Pace 一行，最后 Cost / Tokens 段。</p>
+  <div class="grid two">
+    <div>
+      <div class="popover" id="popover-main"></div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:22px">
+      <div class="plate"><div class="lbl">卡片解剖 · card anatomy</div>
+        <div class="popover" style="width:340px" id="popover-anatomy"></div>
+      </div>
+      <div class="note"><b>与 codexbar 的对应关系</b><br>
+        · codexbar「Session / Weekly / Sonnet」= cc-bar 的 primary / secondary / extra 窗口，标题来自 <code>QuotaWindowKind.laneTitle</code>。<br>
+        · codexbar「2% used · Resets in 3h 53m」= cc-bar「98% left · resets in 3h 53m」（cc-bar 一直显示剩余口径）。<br>
+        · codexbar「Pace: Behind (-42%) · Lasts to reset」= cc-bar「Pace: behind -42% · lasts to reset」。<br>
+        · codexbar「Cost · Today / Last 30 days」= cc-bar「Cost · Today / This week / Last 30 days」，不计费 provider 显示 Tokens。<br>
+        · codexbar「Extra usage」= cc-bar 的 <code>extraUsage</code> 额外窗口（来自 <code>oauth/usage.extra_usage</code>）；「Usage Dashboard / Status Page / Switch Account」= 卡片底部操作行：Dashboard · Status · Terminal（<code>ccpm run</code>）· Set default（<code>ccpm set-default</code>）。</div>
+    </div>
+  </div>
+</section>
+
+<section id="hud">
+  <h2>③ 桌面悬浮窗</h2>
+  <p class="lead">每个勾选的 provider 一行，行内是 tile、进度条、窗口标签、百分比。取该 provider 所有账号里剩余最低的窗口，和菜单栏口径一致。</p>
+  <div class="wall" style="display:flex; gap:40px; align-items:flex-start">
+    <div><div class="hud" id="hud-all"></div><div class="mbar-lbl" style="margin-bottom:0">A · 5 providers · primary lane</div></div>
+    <div><div class="hud" id="hud-two"></div><div class="mbar-lbl" style="margin-bottom:0">B · Codex + Claude only · secondary lane (WK)</div></div>
+  </div>
+</section>
+
+<section id="settings">
+  <h2>④ 设置</h2>
+  <p class="lead">「账号」组按 <code>Provider.allCases</code> 生成，每行显示识别到的身份与账号数；「ccpm Profiles」统一列出所有运行时和 provider 的 profile，Ollama 行带 Cookie 粘贴入口；「菜单栏」「悬浮窗」组也按 provider 生成。</p>
+  <div class="win" style="max-width:1100px">
+    <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><div class="tabs2"><span>Statistics</span><span class="on">Settings</span></div></div>
+    <div class="prefs" id="prefs"></div>
+  </div>
+  <div class="grid two" style="margin-top:22px">
+    <div class="plate"><div class="lbl">Ollama Cloud · cookie sheet</div>
+      <div class="sheet">
+        <h4>Ollama Cloud cookie</h4>
+        <p>Sign in at ollama.com, open DevTools → Network, copy the Cookie request header of any ollama.com request and paste it here. It is stored in your login Keychain and only sent to ollama.com/settings.</p>
+        <textarea readonly>wos-session=eyJhbGciOiJIUzI1NiJ9...; _ga=GA1.1.1234567890; __cf_bm=...</textarea>
+        <div class="acts"><span class="b d">Remove</span><span class="sp"></span><span class="b">Cancel</span><span class="b p">Save</span></div>
+      </div>
+    </div>
+    <div class="note"><b>设置项变化</b><br>
+      · <code>showCodex / showClaude</code> 等布尔对 → <code>enabledProviders / menuBarProviders / floatingProviders</code> 三个集合，首次启动从旧键迁移。<br>
+      · 新增 <code>menuBarMode</code>：All / Lowest only。<br>
+      · 「额度周期」语义改为主/副窗口：Codex、Claude、Kimi、GLM 主窗是 5H，Ollama Cloud 主窗是 MO。<br>
+      · Ollama Cookie 存 cc-bar 自己的 Keychain（service <code>com.cc-bar.ollama.cookie</code>，account = profile 名），不走浏览器自动导入。<br>
+      · ccpm keystore 读取：<code>security find-generic-password -s ccpm -a &lt;profile&gt; -w</code>，解 go-keyring 的 base64 / hex 前缀。</div>
+  </div>
+</section>
+
+<section id="stats">
+  <h2>⑤ 统计窗口</h2>
+  <p class="lead">侧栏服务过滤按可见 provider 生成。总花费只累计计费 provider；单独筛到 Kimi / GLM / Ollama 时图表与占比切换为 token 口径。当前限额圆环每 provider 两枚（主/副窗）。明细表多账号时增加 Account 列。</p>
+  <div class="win">
+    <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><div class="tabs2"><span class="on">Statistics</span><span>Settings</span></div></div>
+    <div class="win-body">
+      <aside class="sidebar" id="stats-sidebar"></aside>
+      <div class="content" id="stats-content"></div>
+    </div>
+  </div>
+  <div class="grid two" style="margin-top:22px">
+    <div class="win"><div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span style="font-size:12px;font-weight:600;margin:0 auto">Breakdown · 多账号 Account 列</span></div>
+      <div class="content" id="stats-breakdown"></div></div>
+    <div class="win"><div class="titlebar"><div class="tl"><i></i><i></i><i></i></div><span style="font-size:12px;font-weight:600;margin:0 auto">Timeline · 按账号分区</span></div>
+      <div class="content" id="stats-timeline"></div></div>
+  </div>
+</section>
+
+<section id="onboarding">
+  <h2>⑥ 首次启动 · 检测账号</h2>
+  <p class="lead">按 provider 列出发现结果（来源路径、身份、计划），勾选写入 <code>enabledProviders</code>。未识别的 provider 置灰。</p>
+  <div class="wall"><div class="ob" id="onboarding-step"></div></div>
+</section>
+
+<section id="ccpm">
+  <h2>⑦ ccpm 联动</h2>
+  <p class="lead">第三方 provider 的唯一入口是 ccpm profile。ccpm 负责「登记 + 存 key + 启动时注入」，cc-bar 负责「发现 + 查额度 + 扫本地用量」。两边只通过 <code>~/.ccpm/config.json</code>、macOS Keychain 与 profile 目录交换信息，没有进程间通信。</p>
+  <div class="flow">
+    <div class="step"><span class="who">ccpm</span><div class="n">STEP 1</div><b>建 profile</b><code>ccpm add kimi-work --provider kimi</code><br>强制 runtime=claude、auth=api_key，提示输入 Kimi Code API key；保留 import wizard。</div>
+    <div class="step"><span class="who">ccpm</span><div class="n">STEP 2</div><b>落盘</b>config.json 写 <code>provider: "kimi"</code> 与 <code>env.ANTHROPIC_BASE_URL</code>；key 存 Keychain（service <code>ccpm</code>，account = profile）。</div>
+    <div class="step"><span class="who">ccpm</span><div class="n">STEP 3</div><b>启动注入</b><code>ccpm run / use / set-default</code> 对非 Anthropic provider 注入 <code>ANTHROPIC_AUTH_TOKEN</code>（Bearer），Anthropic 仍用 <code>ANTHROPIC_API_KEY</code>。</div>
+    <div class="step"><span class="who">cc-bar</span><div class="n">STEP 4</div><b>发现</b><code>AccountCatalog.discover()</code> 按 runtime × provider × auth_method 映射成 <code>MonitoredAccount</code>；key 从 keystore 读，Ollama cookie 从 cc-bar Keychain 读。</div>
+    <div class="step"><span class="who">cc-bar</span><div class="n">STEP 5</div><b>刷新 + 扫描</b>Kimi <code>/coding/v1/usages</code>，GLM <code>/api/monitor/usage/quota/limit</code>，Ollama 抓 settings 页；本地用量扫 <code>&lt;profile&gt;/projects</code>。</div>
+  </div>
+  <div class="grid two" style="margin-top:22px">
+    <div class="plate"><div class="lbl">ccpm CLI · 新增/变化的输出</div>
+<pre>$ ccpm add kimi-work --provider kimi
+API Key Authentication
+Enter your Kimi Code API key: ********
+✓ Profile "kimi-work" authenticated via API key
+  provider: kimi
+  ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
+  Tip: pick a model with
+  ccpm env set ANTHROPIC_MODEL=&lt;model&gt; --profile kimi-work
+
+$ ccpm list
+  NAME         RUNTIME  PROVIDER   AUTH     STATUS            DEFAULT  LAST USED
+  ─────────────────────────────────────────────────────────────────────────────
+  zxliu        claude   anthropic  oauth    ✓ authenticated   *        2m ago
+  czxliu       codex    -          oauth    ✓ ChatGPT OAuth            3h ago
+  kimi-work    claude   kimi       api_key  ✓ key: sk-k...9f           just now
+  glm-cn       claude   glm        api_key  ✓ key: 3a1...2c            1d ago
+  ollama-cloud claude   ollama     api_key  ✓ key: a91...0e            5d ago</pre>
+    </div>
+    <div class="plate"><div class="lbl">config.json · profile 片段</div>
+<pre>{
+  "name": "kimi-work",
+  "dir": "/Users/me/.ccpm/profiles/kimi-work",
+  "runtime": "claude",
+  "provider": "kimi",
+  "auth_method": "api_key",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.kimi.com/coding/",
+    "ANTHROPIC_MODEL": "kimi-k2-thinking"
+  }
+}</pre>
+      <div class="note" style="margin-top:12px"><b>映射表</b> runtime × provider × auth → cc-bar 凭据<br>
+        codex + oauth → Codex OAuth（读 auth.json，与默认/导入账号同身份时镜像）<br>
+        claude + anthropic + oauth → Claude OAuth（profile 专属 Keychain service）<br>
+        claude + anthropic + api_key → 不查额度，只扫本地用量<br>
+        claude + kimi / glm + api_key → keystore key + base URL<br>
+        claude + ollama + api_key → cc-bar Keychain 里的 cookie</div>
+    </div>
+  </div>
+</section>
+
+<section id="matrix">
+  <h2>⑧ codexbar 能力迁移矩阵</h2>
+  <p class="lead">逐项对照 codexbar 的能力，判断能不能、值不值得迁进 cc-bar 或 ccpm。判定依据：cc-bar 的边界（零依赖、不做浏览器 cookie 自动导入、不做 App 内登录、只读监控）和 ccpm 的定位（profile 管理 CLI）。</p>
+  <div class="sum" id="mx-summary"></div>
+  <div class="mx-legend"><span class="st done">已落地</span> 本次改造已实现 <span class="st rec">建议迁移</span> 收益明确、成本可控 <span class="st opt">可选</span> 有价值但非必需，或成本较高 <span class="st no">不迁移</span> 与边界冲突或收益低</div>
+  <table class="mx" id="mx-table"></table>
+  <div class="note" style="margin-top:18px"><b>本批已落地（2026-09-04 第二批）</b><br>
+    额度阈值通知 + 周重置提醒 · ccpm statusline 读 cc-bar 额度缓存 · 卡片操作行（Dashboard / Status / Terminal / Set default）· Claude Extra usage 窗口 · 菜单栏量表图标。<br><br>
+    <b>再下一批候选</b><br>
+    1. Merge icons 顶部 provider 切换器（账号多时替代长滚动）。<br>
+    2. Adaptive refresh 的低成本版：JSONL 有新写入时提前刷新，不读进程列表。<br>
+    3. Codex <code>additional_rate_limits</code>（按功能拆的 5h / 周限额）作为 extra 窗口。<br>
+    4. Claude <code>limits[].weekly_scoped</code> 模型级周窗。<br>
+    5. 诊断信息一键复制。</div>
+</section>
+</main>
+
+<script>
+// ---------- sample data (mirrors MonitoredAccount / QuotaSnapshot) ----------
+const PROVIDERS = {
+  codex:  { name: 'Codex',           vendor: 'OpenAI',   logo: 'codex.svg',  cost: true,  primary: 'fiveHour', secondary: 'weekly'  },
+  claude: { name: 'Claude Code',     vendor: 'Anthropic',logo: 'claude.svg', cost: true,  primary: 'fiveHour', secondary: 'weekly'  },
+  kimi:   { name: 'Kimi Code',       vendor: 'Moonshot', logo: 'kimi.svg',   cost: false, primary: 'fiveHour', secondary: 'weekly'  },
+  glm:    { name: 'GLM Coding Plan', vendor: 'Zhipu',    logo: 'glm.svg',    cost: false, primary: 'fiveHour', secondary: 'weekly'  },
+  ollama: { name: 'Ollama Cloud',    vendor: 'Ollama',   logo: 'ollama.svg', cost: false, primary: 'monthly',  secondary: 'weekly'  },
+};
+const KIND = {
+  fiveHour: { short: '5H', title: 'Session · 5h' }, weekly: { short: 'WK', title: 'Weekly' }, monthly: { short: 'MO', title: 'Monthly' },
+  weeklyOpus: { short: 'OPUS', title: 'Opus · weekly' }, weeklySonnet: { short: 'SONNET', title: 'Sonnet · weekly' }, mcp: { short: 'MCP', title: 'MCP · monthly' }, extraUsage: { short: 'EXTRA', title: 'Extra usage · monthly' },
+};
+// left = remaining percent; pace: delta (+ ahead / - behind), runsOut text
+const ACCOUNTS = [
+  // Pro 20x: wham/usage returns a single weekly window and secondary_window = null.
+  { id: 'codex:default', p: 'codex', sub: 'Default · me@acme.dev · Pro', plan: 'Pro 20x', updated: '12s ago', status: 'ok',
+    lanes: [ { k: 'weekly',   left: 70, reset: 'resets in 2d 16h', pace: { d: 12, out: 'runs out in 1d 2h' } } ],
+    usage: { today: '$3.21 · 15.2k tokens', week: '$14.10 · 1.2M tokens', month: '$48.00 · 5.6M tokens' } },
+  { id: 'codex:ccpm:czxliu', p: 'codex', sub: 'ccpm · czxliu · work@acme.dev · Pro', plan: 'Pro', updated: '12s ago', status: 'ok',
+    lanes: [ { k: 'fiveHour', left: 87, reset: 'resets in 4h 40m', pace: { d: 0, out: null } },
+             { k: 'weekly',   left: 62, reset: 'resets in 5d 1h',  pace: { d: -5, out: null } } ],
+    usage: { today: '$0.80 · 4.1k tokens', week: '$6.40 · 420k tokens', month: '$22.30 · 2.1M tokens' } },
+  { id: 'claude:default', p: 'claude', sub: 'Default · me@acme.dev · Max', plan: 'Max 5x', updated: '14s ago', status: 'ok',
+    lanes: [ { k: 'fiveHour', left: 100, reset: 'resets in 4h 58m', pace: null },
+             { k: 'weekly',   left: 60,  reset: 'resets in 3d 20h', pace: { d: -42, out: null } },
+             { k: 'weeklyOpus', left: 80, reset: 'resets in 3d 20h', pace: null },
+             { k: 'weeklySonnet', left: 92, reset: 'resets in 3d 20h', pace: null },
+             { k: 'extraUsage', left: 100, reset: 'monthly', detail: '$0.00 / $2000.00', pace: null } ],
+    usage: { today: '$0.04 · 15k tokens', week: '$31.90 · 9.8M tokens', month: '$254.24 · 218M tokens' } },
+  { id: 'claude:ccpm:zxliu', p: 'claude', sub: 'ccpm · zxliu · zx@acme.dev · Default · Max', plan: 'Max', updated: '14s ago', status: 'ok',
+    lanes: [ { k: 'fiveHour', left: 21, reset: 'resets in 1h 05m', pace: { d: 18, out: 'runs out in 40m' } },
+             { k: 'weekly',   left: 79, reset: 'resets in 6d 2h',  pace: { d: 3, out: null } } ],
+    usage: { today: '$12.60 · 3.4M tokens', week: '$40.10 · 11M tokens', month: '$120.00 · 38M tokens' } },
+  { id: 'kimi:ccpm:kimi-work', p: 'kimi', sub: 'ccpm · kimi-work · api.kimi.com', plan: 'Moderato', updated: '9s ago', status: 'ok',
+    lanes: [ { k: 'fiveHour', left: 18, reset: 'resets in 1h 05m', detail: '164/200 requests', pace: { d: 22, out: 'runs out in 25m' } },
+             { k: 'weekly',   left: 89, reset: 'resets in 4d 2h',  detail: '214/2048 requests', pace: { d: -30, out: null } } ],
+    usage: { today: '15.2k tokens', week: '340k tokens', month: '1.9M tokens' } },
+  { id: 'glm:ccpm:glm-cn', p: 'glm', sub: 'ccpm · glm-cn · open.bigmodel.cn', plan: 'Pro', updated: '11s ago', status: 'ok',
+    lanes: [ { k: 'fiveHour', left: 60, reset: 'resets in 3h 02m', detail: '1000 limit · 400 remaining', pace: { d: 4, out: null } },
+             { k: 'weekly',   left: 88, reset: 'resets in 2d 9h',  pace: { d: -20, out: null } },
+             { k: 'mcp',      left: 97, reset: 'resets in 21d',    detail: '100 limit · 97 remaining', pace: null } ],
+    usage: { today: '210k tokens', week: '1.1M tokens', month: '4.4M tokens' } },
+  { id: 'ollama:ccpm:ollama-cloud', p: 'ollama', sub: 'ccpm · ollama-cloud · ollama.com', plan: 'Pro', updated: '30s ago', status: 'ok',
+    lanes: [ { k: 'monthly', left: 87.5, reset: 'resets in 4d', detail: '$7.50 of $60', pace: { d: -15, out: null } },
+             { k: 'weekly',  left: 75,   reset: 'resets in 2d 3h', pace: { d: 2, out: null } } ],
+    usage: { today: '8.4k tokens', week: '120k tokens', month: '600k tokens' } },
+];
+
+const cls = left => left <= 0 ? 'empty' : left < 20 ? 'low' : left <= 50 ? 'warn' : 'ok';
+const tile = (p, size = '') => `<span class="tile ${p} ${size}"><img src="${PROVIDERS[p].logo}" alt=""></span>`;
+const pct = v => `${Math.round(v)}%`;
+const paceText = pc => !pc ? '' : pc.d > 0 ? `Pace: ahead +${pc.d}% · ${pc.out || 'lasts to reset'}` : pc.d < 0 ? `Pace: behind ${pc.d}% · lasts to reset` : 'Pace: on track · lasts to reset';
+const lowestLane = (p, kind) => {
+  const lanes = ACCOUNTS.filter(a => a.p === p).map(a => a.lanes.find(l => l.k === kind)).filter(Boolean);
+  return lanes.length ? lanes.reduce((m, l) => l.left < m.left ? l : m) : null;
+};
+
+// ---------- menu bar ----------
+function menuBar(el, mode) {
+  const order = Object.keys(PROVIDERS);
+  if (mode === 'meter') {
+    const segs = order.map(p => { const l = lowestLane(p, PROVIDERS[p].primary); return `<span class="seg"><img src="${PROVIDERS[p].logo}" alt=""><span class="meter"><i style="height:${l ? l.left : 0}%"></i></span></span>`; }).join('');
+    el.innerHTML = `<span class="apple"></span><span class="m" style="font-weight:600">Finder</span><span class="m">File</span><span class="m">Edit</span><span class="m">View</span><span class="m">Go</span><span class="m">Window</span>
+      <div class="right">${segs}<span style="opacity:.7">◐</span><span style="opacity:.7">◔</span><span class="clock">Fri Sep 4  22:58</span></div>`;
+    return;
+  }
+  let segs = order.map(p => {
+    const prim = lowestLane(p, PROVIDERS[p].primary), sec = lowestLane(p, PROVIDERS[p].secondary);
+    return { p, prim, sec, text: mode === 'both' ? `${prim ? pct(prim.left) : '--'}/${sec ? pct(sec.left) : '--'}` : (prim ? pct(prim.left) : '--') };
+  });
+  if (mode === 'lowest') segs = [segs.reduce((m, s) => (s.prim && (!m.prim || s.prim.left < m.prim.left)) ? s : m)];
+  el.innerHTML = `<span class="apple"></span><span class="m" style="font-weight:600">Finder</span><span class="m">File</span><span class="m">Edit</span><span class="m">View</span><span class="m">Go</span><span class="m">Window</span>
+    <div class="right">${segs.map(s => `<span class="seg"><img src="${PROVIDERS[s.p].logo}" alt=""><span>${s.text}</span></span>`).join('')}
+    <span style="opacity:.7">◐</span><span style="opacity:.7">◔</span><span class="clock">Fri Sep 4  22:58</span></div>`;
+}
+menuBar(document.getElementById('mb-all'), 'all');
+menuBar(document.getElementById('mb-lowest'), 'lowest');
+menuBar(document.getElementById('mb-both'), 'both');
+menuBar(document.getElementById('mb-meter'), 'meter');
+
+// ---------- popover ----------
+function lane(l) {
+  const c = cls(l.left);
+  return `<div class="lane">
+    <div class="row"><span class="ttl">${KIND[l.k].title}</span>${l.detail ? `<span class="det">${l.detail}</span>` : ''}</div>
+    <div class="bar"><i class="c-${c}" style="width:${l.left}%"></i></div>
+    <div class="row"><span class="pct t-${c}">${pct(l.left)} left</span><span class="rst">${l.reset}</span></div>
+    ${l.pace ? `<div class="pace ${l.pace.d > 0 ? 'ahead' : ''}">${paceText(l.pace)}</div>` : ''}
+  </div>`;
+}
+function card(a, opts = {}) {
+  const P = PROVIDERS[a.p];
+  return `<div class="card">
+    <div class="hd">${tile(a.p)}<div><span class="nm">${P.name}</span><span class="sub">${a.sub}</span><div class="upd">Updated ${a.updated}${a.source ? ' · ' + a.source : ''}</div></div>
+      ${a.plan ? `<span class="chip plan">${a.plan}</span>` : ''}${a.status ? `<span class="dot" style="background:#30D158"></span>` : ''}</div>
+    ${a.lanes.map(lane).join('')}
+    ${a.usage ? `<div class="usage"><div class="ttl">${P.cost ? 'Cost' : 'Tokens'}</div>
+      <div class="ln"><span>Today: </span>${a.usage.today}</div><div class="ln"><span>This week: </span>${a.usage.week}</div><div class="ln"><span>Last 30 days: </span>${a.usage.month}</div></div>` : ''}
+    ${a.error ? `<div class="err">${a.error}</div>` : ''}
+    <div class="acts-row">${['<span>Dashboard</span>', P.name === 'Codex' || P.name === 'Claude Code' ? '<span>Status</span>' : null, a.id.includes(':ccpm:') && a.p !== 'codex' ? '<span>Terminal</span>' : null, a.id.includes(':ccpm:') && a.p !== 'codex' && !a.sub.includes('Default') ? '<span>Set default</span>' : null].filter(Boolean).join(' · ')}</div>
+  </div>`;
+}
+function popover(el, accounts, { risk = true } = {}) {
+  const order = Object.keys(PROVIDERS).filter(p => accounts.some(a => a.p === p));
+  const riskItem = accounts.flatMap(a => a.lanes.map(l => ({ a, l }))).filter(x => x.l.left <= 20).sort((x, y) => x.l.left - y.l.left)[0];
+  const refreshIcon = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>`;
+  el.innerHTML = `<div class="pop-head"><div><div class="ttl">Usage</div><div class="st">refreshed 12s ago</div></div><span style="flex:1"></span>
+      <span class="dot" style="background:#30D158;width:7px;height:7px;margin-right:6px"></span>
+      <span class="btn">5H</span><span class="btn">${refreshIcon}</span><span class="btn" style="min-width:54px">▥ Stats</span><span class="btn">⚙</span><span class="btn">⏻</span></div>
+    ${risk && riskItem ? `<div class="risk"><span style="color:#FFA15F">▲</span><div><div class="k">Quota risk</div><div class="v">${PROVIDERS[riskItem.a.p].name} · ${riskItem.a.id.split(':').pop()} · ${KIND[riskItem.l.k].short}</div></div><div class="p"><b>${pct(riskItem.l.left)}</b><span>${riskItem.l.reset.replace('resets in ', '')}</span></div></div>` : ''}
+    <div class="sep"></div>
+    ${order.map((p, i) => {
+      const list = accounts.filter(a => a.p === p);
+      return `${i > 0 ? '<div class="sep inset"></div>' : ''}${list.length > 1 ? `<div class="sec-head"><span>${PROVIDERS[p].name.toUpperCase()} ACCOUNTS</span><span>all · ${list.length}</span></div>` : ''}
+        ${list.map((a, j) => `${j > 0 ? '<div class="sep inset"></div>' : ''}${card(a)}`).join('')}`;
+    }).join('')}`;
+}
+popover(document.getElementById('popover-main'), ACCOUNTS);
+popover(document.getElementById('popover-anatomy'), [ACCOUNTS[4]], { risk: false });
+
+// ---------- HUD ----------
+function hud(el, providers, kindSel) {
+  el.innerHTML = providers.map(p => {
+    const k = kindSel === 'secondary' ? PROVIDERS[p].secondary : PROVIDERS[p].primary;
+    const l = lowestLane(p, k); const c = l ? cls(l.left) : 'ok';
+    return `<div class="r">${tile(p, 'sm')}<div class="bar thin"><i class="c-${c}" style="width:${l ? l.left : 0}%"></i></div><span class="l">${KIND[k].short}</span><span class="p t-${c}">${l ? pct(l.left) : '--%'}</span></div>`;
+  }).join('');
+}
+hud(document.getElementById('hud-all'), Object.keys(PROVIDERS), 'primary');
+hud(document.getElementById('hud-two'), ['codex', 'claude'], 'secondary');
+
+// ---------- settings ----------
+function prefs(el) {
+  const group = (t, d, body) => `<div><div class="pg-title">${t}</div>${d ? `<div class="pg-desc">${d}</div>` : ''}<div class="pg-body">${body}</div></div>`;
+  const toggle = (on, dis) => `<span class="toggle ${on ? 'on' : ''} ${dis ? 'off-dis' : ''}"></span>`;
+  const accounts = Object.keys(PROVIDERS).map(p => {
+    const list = ACCOUNTS.filter(a => a.p === p); const first = list[0];
+    const ident = list.length > 1 ? `${first.sub.split(' · ')[1]} · ${first.plan} · ${list.length} accounts` : `${first.sub.split(' · ').slice(1).join(' · ')}`;
+    return `<div class="prow">${tile(p, 'lg')}<div class="lab"><b style="font-weight:600">${PROVIDERS[p].name}</b> <span style="color:var(--ink-3);font-size:11px">· ${PROVIDERS[p].vendor}</span><small>${ident}</small></div>
+      <div class="tr"><span class="badge g"><span class="dot" style="background:#30D158"></span>Connected</span>${toggle(true)}</div></div>`;
+  }).join('');
+  const profiles = ACCOUNTS.filter(a => a.id.includes(':ccpm:')).map(a => {
+    const name = a.id.split(':')[2]; const auth = a.p === 'ollama' ? 'cookie' : (a.p === 'codex' || a.p === 'claude') ? 'oauth' : 'api_key';
+    const detail = a.p === 'kimi' ? 'api.kimi.com · ~/.ccpm/profiles/kimi-work' : a.p === 'glm' ? 'Pro · open.bigmodel.cn · ~/.ccpm/profiles/glm-cn' : a.p === 'ollama' ? 'Pro · ollama.com · ~/.ccpm/profiles/ollama-cloud' : `${a.sub.split(' · ')[2]} · ${a.plan} · ~/.ccpm/profiles/${name}`;
+    const l = a.lanes[0]; const c = cls(l.left);
+    return `<div class="acct">${tile(a.p, 'lg')}<div><div class="t">${PROVIDERS[a.p].name} · ${name}${a.sub.includes('Default') ? ' <span class="chip">Default</span>' : ''}</div><div class="d">${detail}</div></div>
+      <div class="r">${a.p === 'ollama' ? '<span class="btn-sm">Cookie…</span>' : ''}<div><div class="auth">${auth}</div><div class="pct t-${c}">${pct(l.left)}</div></div></div></div>`;
+  }).join('');
+  const provToggles = (dis) => Object.keys(PROVIDERS).map(p => `<div class="prow"><div class="lab">Show ${PROVIDERS[p].name}${dis ? ' row' : ''}</div><div class="tr">${toggle(true)}</div></div>`).join('');
+  el.innerHTML = [
+    group('Accounts', 'Auto-detected on your Mac and from ccpm. Toggle which services to display.', accounts),
+    group('ccpm Profiles', 'Auto-discovered from ~/.ccpm/config.json. OAuth profiles use their own credentials; Kimi / GLM read the key from the ccpm keystore; Ollama Cloud needs a pasted cookie.', profiles),
+    group('Other Codex Accounts', 'Paste auth.json to monitor additional Codex accounts (view only).', `<div class="prow"><div class="lab" style="color:var(--ink-2)">No imported accounts</div><div class="tr"><span class="btn-sm">Add…</span></div></div>`),
+    group('Menu Bar', 'What appears next to the icon.', provToggles(false) +
+      `<div class="prow"><div class="lab">Display mode<small>All enabled providers, or only the one closest to its limit.</small></div><div class="tr"><span class="pick">All</span></div></div>
+       <div class="prow"><div class="lab">Quota period<small>Primary (5H, monthly for Ollama) or secondary (WK).</small></div><div class="tr"><span class="pick">Primary · 5H</span></div></div>`),
+    group('Floating HUD', 'A small always-on-top window pinned to your desktop.', `<div class="prow"><div class="lab">Show floating window</div><div class="tr">${toggle(true)}</div></div>` + provToggles(true)),
+    group('Refresh', 'How often the app polls usage in the background.',
+      `<div class="prow"><div class="lab">Quota refresh</div><div class="tr"><span class="pick">2 minutes</span></div></div><div class="prow"><div class="lab">Log scan</div><div class="tr"><span class="pick">2 minutes</span></div></div>
+       <div class="prow"><div class="lab">Reset time</div><div class="tr"><span class="pick">Remaining</span></div></div><div class="prow"><div class="lab">Service status dot</div><div class="tr">${toggle(true)}</div></div>`),
+  ].join('');
+}
+prefs(document.getElementById('prefs'));
+
+// ---------- stats ----------
+const ACC = { codex: '#98989D', claude: '#E68A6E', kimi: '#FE603C', glm: '#E85A6A', ollama: '#AAAAB0' };
+function stats() {
+  const sb = document.getElementById('stats-sidebar');
+  sb.innerHTML = `<div><div class="sb-title">Service</div><div class="sb-item on"><span class="mk" style="background:transparent"></span>All</div>${Object.keys(PROVIDERS).map(p => `<div class="sb-item"><span class="mk" style="background:${ACC[p]}"></span>${PROVIDERS[p].name}</div>`).join('')}</div>
+    <div><div class="sb-title">View</div><div class="sb-item on">▦ Overview</div><div class="sb-item">📈 Timeline</div><div class="sb-item">☰ Breakdown</div></div>`;
+  const days = ['Aug 29', 'Aug 30', 'Aug 31', 'Sep 1', 'Sep 2', 'Sep 3', 'Sep 4'];
+  const series = { codex: [12, 18, 9, 22, 15, 20, 4], claude: [40, 55, 30, 62, 48, 70, 13], kimi: [6, 4, 8, 5, 9, 6, 2], glm: [8, 10, 6, 12, 7, 9, 3], ollama: [2, 3, 1, 2, 4, 2, 1] };
+  const maxT = Math.max(...days.map((_, i) => Object.values(series).reduce((s, v) => s + v[i], 0)));
+  const chart = days.map((d, i) => `<div class="col">${Object.keys(series).map(p => `<i style="height:${series[p][i] / maxT * 130}px;background:${ACC[p]}"></i>`).join('')}<span>${d}</span></div>`).join('');
+  const ring = (l) => { const c = cls(l.left); const col = { ok: '#98989D', warn: '#FFE27A', low: '#FFA15F', empty: '#FF7A90' }[c]; return `<div class="ring" style="background:conic-gradient(${col} ${l.left}%, rgba(120,120,128,.2) 0)"><span class="t-${c}">${Math.round(l.left)}</span></div>`; };
+  const limits = Object.keys(PROVIDERS).flatMap(p => [PROVIDERS[p].primary, PROVIDERS[p].secondary].map(k => { const l = lowestLane(p, k); return `<div class="lim">${ring(l)}<div><div class="t">${PROVIDERS[p].name} ${KIND[k].short}</div><div class="s">${l.detail || l.reset}</div></div></div>`; })).join('');
+  const svc = [['codex', '$48.00', '5.6M', 15], ['claude', '$254.24', '218M', 78], ['kimi', '1.9M tokens', '1.9M', 3], ['glm', '4.4M tokens', '4.4M', 3], ['ollama', '600k tokens', '600k', 1]]
+    .map(([p, v, t, r]) => `<div class="svc"><div class="h"><span class="mk" style="background:${ACC[p]}"></span>${PROVIDERS[p].name}<small>${PROVIDERS[p].vendor}</small><b>${v}</b></div><div class="bar"><i style="width:${r}%;background:${ACC[p]}"></i></div><div class="f"><span>${t} Tokens</span><span>${r}% of spend</span></div></div>`).join('');
+  document.getElementById('stats-content').innerHTML = `
+    <div style="display:flex"><div class="segs"><span>Today</span><span>Yesterday</span><span>Week</span><span>Month</span><span>Year</span><span>7d</span><span class="on">30d</span><span>All</span><span>Custom</span></div></div>
+    <div class="kpis"><div class="kpi"><div class="l">Total tokens</div><div class="v">231M <small>↑ 12.4%</small></div></div><div class="kpi"><div class="l">Total spend</div><div class="v">$302.24 <small class="dn">↓ 3.1%</small></div></div>
+      <div class="kpi"><div class="l"><span class="mk" style="background:${ACC.claude}"></span>Claude Code</div><div class="v" style="color:${ACC.claude}">$254.24</div></div><div class="kpi"><div class="l"><span class="mk" style="background:${ACC.kimi}"></span>Kimi Code</div><div class="v" style="color:${ACC.kimi}">1.9M <small class="dn">↓ 8%</small></div></div></div>
+    <div class="panel"><div class="ph">Daily usage<span class="legend">${Object.keys(PROVIDERS).map(p => `<span><i style="background:${ACC[p]}"></i>${PROVIDERS[p].name}</span>`).join('')}</span></div><div class="chart">${chart}</div></div>
+    <div class="two-col"><div class="panel"><div class="ph">By service</div>${svc}</div><div class="panel"><div class="ph">Current limits</div>${limits}</div></div>`;
+  const rows = [['2026-09-04', 'claude', 'Default', 'claude-fable-5', '1.2M', '48k', '9.8M', '11M', '$12.60'], ['2026-09-04', 'claude', 'zxliu', 'claude-opus-4-8', '840k', '31k', '2.4M', '3.3M', '$6.10'], ['2026-09-04', 'codex', 'Default', 'gpt-5.5-codex', '210k', '12k', '1.1M', '1.3M', '$3.21'],
+    ['2026-09-04', 'kimi', 'kimi-work', 'kimi-k2-thinking', '9k', '3k', '3k', '15k', '—'], ['2026-09-04', 'glm', 'glm-cn', 'glm-5', '120k', '18k', '72k', '210k', '—'], ['2026-09-04', 'ollama', 'ollama-cloud', 'glm-5:cloud', '6k', '1k', '1k', '8k', '—']];
+  document.getElementById('stats-breakdown').innerHTML = `<div class="panel" style="padding:0;overflow:auto"><table class="tbl"><tr><th>Day</th><th>Service</th><th>Account</th><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache</th><th class="num">Total</th><th class="num">Cost</th></tr>
+    ${rows.map(r => `<tr><td>${r[0]}</td><td class="tx"><span class="mk" style="background:${ACC[r[1]]}"></span>${PROVIDERS[r[1]].name}</td><td class="tx">${r[2]}</td><td class="tx">${r[3]}</td><td class="num">${r[4]}</td><td class="num">${r[5]}</td><td class="num">${r[6]}</td><td class="num">${r[7]}</td><td class="num">${r[8]}</td></tr>`).join('')}</table></div>`;
+  const tl = [['claude', 'Claude Code · zxliu', 21, '-64%', '22:41'], ['kimi', 'Kimi Code · kimi-work', 18, '-58%', '22:38'], ['codex', 'Codex · Default', 70, '-12%', '21:02']];
+  document.getElementById('stats-timeline').innerHTML = tl.map(([p, t, cur, d, at]) => `<div class="panel"><div class="ph"><span><span class="mk" style="background:${ACC[p]}"></span>${t}</span><span style="font-weight:400;font-size:11px;color:var(--ink-2)" class="mono">Current ${cur}% · Today ${d} · Latest ${at}</span></div>
+    <div style="height:70px;border-radius:8px;background:linear-gradient(180deg,rgba(120,120,128,.08),rgba(120,120,128,.02));display:flex;align-items:flex-end;gap:3px;padding:8px">${Array.from({ length: 24 }, (_, i) => `<i style="flex:1;height:${Math.max(6, 60 - i * 2.2 + (i % 5) * 3)}%;background:${ACC[p]};opacity:.55;border-radius:2px"></i>`).join('')}</div></div>`).join('');
+}
+stats();
+
+// ---------- onboarding ----------
+function onboarding(el) {
+  const src = { codex: '~/.codex/auth.json', claude: 'Keychain · claude-code', kimi: '~/.ccpm/config.json', glm: '~/.ccpm/config.json', ollama: '~/.ccpm/config.json' };
+  el.innerHTML = `<h3>We found these accounts</h3>${Object.keys(PROVIDERS).map(p => { const a = ACCOUNTS.find(x => x.p === p); return `<div class="row"><span class="cb on"></span>${tile(p, 'xl')}<div><div class="t">${PROVIDERS[p].name}<small>· ${PROVIDERS[p].vendor}${a.plan ? ' · ' + a.plan : ''}</small></div><div class="e">${a.sub.split(' · ').find(s => s.includes('@')) || a.sub.split(' · ')[1]}</div><div class="s">${src[p]}</div></div></div>`; }).join('')}
+    <div class="info"><span style="color:var(--accent)">ⓘ</span><div><b style="font-size:11.5px;font-weight:500;color:var(--ink)">Read-only access</b><br>cc-bar reads local credentials and only calls each provider's own API (OpenAI, Anthropic, Kimi, Zhipu, Ollama). It never sends credentials anywhere else.</div></div>`;
+}
+onboarding(document.getElementById('onboarding-step'));
+
+// ---------- migration matrix ----------
+const MATRIX = [
+  ['Provider descriptor 架构（元数据 / 品牌 / 窗口种类 / 是否计费集中在一处）', 'ProviderDescriptor + ProviderManifest + 注册表', 'Provider + ProviderDescriptor 静态表，UI 全部 descriptor 驱动', 'cc-bar', 'done', '新增 provider = 一个 descriptor + 一个 quota client'],
+  ['第三方 provider：Kimi Code / GLM Coding Plan / Ollama Cloud', 'App 内填 key / cookie，69 个 provider', '只从 ccpm profile 发现，key 走 ccpm keystore', '两者', 'done', 'cc-bar 不再有独立填 key 入口，账号即 profile'],
+  ['多账号（token accounts / claude-swap 多槽位）', 'tokenAccounts 配置 + cswap 适配器', 'ccpm profile 天然是多账号；Codex 保留手动导入', '两者', 'done', '同身份镜像规则沿用'],
+  ['Pace：超前/落后 + 预计耗尽时间', 'UsagePace，含工作日模型与历史预测', 'QuotaPace：均匀燃烧对比 + runs-out 投影', 'cc-bar', 'done', '工作日模型与历史预测未迁，见下'],
+  ['菜单卡信息密度（每窗口一段 + Cost 段）', 'UsageMenuCardView', 'ServiceBlockView 对齐：标题 / 条 / 剩余+重置 / Pace / Cost', 'cc-bar', 'done', '本次按截图反馈重做'],
+  ['Claude 模型级周窗（Opus / Sonnet / scoped weekly）', 'seven_day_opus/sonnet + limits[].weekly_scoped', 'extra 窗口 weeklyOpus / weeklySonnet', 'cc-bar', 'done', 'scoped weekly 数组未解析，可补'],
+  ['服务状态页轮询（statuspage.io）', 'StatusProbe 每 provider', 'OpenAI / Anthropic 已有；Kimi / GLM / Ollama 无公开状态页', 'cc-bar', 'done', ''],
+  ['本地 cost 扫描 + 30 天视图 + 按模型', 'CostUsageFetcher + SQLite 历史', 'JSONL 扫描 + 聚合桶，按账号归因', 'cc-bar', 'done', '已扩展到 ccpm profile 目录'],
+  ['Claude CLI PTY 兜底', 'ClaudeStatusProbe', 'ClaudeCLIFallbackQuotaClient（仅默认登录）', 'cc-bar', 'done', ''],
+  ['额度阈值通知 + 周重置提醒', 'AppNotifications：session 阈值、weekly reset confetti', '无（一期明确不做）', 'cc-bar', 'done', '本批：QuotaNotifier，20% / 用尽 / 窗口重置三类，设置里默认关'],
+  ['ccpm statusline 显示额度（API key profile 也能看 5H/WK）', 'codexbar serve / usage --json 供外部集成', 'ccpm statusline 只解析 Claude Code 推送的 rate_limits（订阅账号才有）', 'ccpm', 'done', '本批：ccpm statusline 无 rate_limits 时读 quota-cache.json，30 分钟内有效'],
+  ['卡片操作行：Usage Dashboard / Status Page 链接', 'dashboardURL / statusPageURL 菜单项', '无', 'cc-bar', 'done', '本批：descriptor 加 dashboardURL / statusPageWebURL，卡片底部一行'],
+  ['账号切换 / 打开终端（codexbar 的 Switch Account…）', 'cswap --switch-to，Login runner', '无', '两者', 'done', '本批：Terminal → ccpm run，Set default → ccpm set-default（仅 Claude 运行时 profile）'],
+  ['Claude Extra usage（超额消费 / 月上限）', 'oauth/usage extra_usage → 额外一段', '未解析', 'cc-bar', 'done', '本批：extra_usage → extraUsage 窗口，detail 显示 $used / $limit'],
+  ['菜单栏量表图标（图标即进度条，可替代百分比文字）', 'IconRenderer bar / critter 风格', 'logo + 百分比文字', 'cc-bar', 'done', '本批：Icon style = Meter，logo + 5×14pt 竖向量表'],
+  ['Merge Icons + provider 切换器（Popover 顶部 tab）', '单状态项 + 顶部 provider 标签栏', '单状态项，Popover 纵向堆叠', 'cc-bar', 'opt', '账号多时可用顶部 tab 代替长滚动'],
+  ['菜单栏 Layout tokens 编辑器（拖拽组合图标/百分比/重置时间）', 'MenuBarLayoutEditor', '固定布局 + 两个开关', 'cc-bar', 'opt', '成本高，先看「仅最低」模式是否够用'],
+  ['Adaptive refresh（agent 活跃时加密刷新）', 'AdaptiveRefreshPolicy，读进程列表', '固定间隔 1~10 分钟', 'cc-bar', 'opt', '要读进程命令行，需要显式同意；可退化为「JSONL 有新写入时提前刷新」'],
+  ['Pace 工作日模型 / 历史用量预测', 'Work days 设置 + Codex 历史 pace', '均匀燃烧', 'cc-bar', 'opt', '需要积累周级历史，二期'],
+  ['WidgetKit 桌面小组件', 'WidgetExtension + App Group 快照', '悬浮 HUD 承担同一职责', 'cc-bar', 'opt', '需要新 target + App Group，与 HUD 重叠'],
+  ['Hooks（额度变化触发脚本）', 'codexbar hooks', '无', 'ccpm', 'opt', '若做，放 ccpm：hooks 已是它的概念'],
+  ['CLI 输出（usage --json / serve）', 'CodexBarCLI 跨平台', '无 CLI', 'ccpm', 'opt', '不复制 quota client 到 Go；ccpm 读 cc-bar 缓存即可（见 statusline 行）'],
+  ['Sparkle 自动更新', 'Sparkle + appcast', '手动出包', 'cc-bar', 'opt', '发布流程问题，与功能无关'],
+  ['诊断导出 / Debug pane', 'ProviderDiagnosticExport', 'print 日志', 'cc-bar', 'opt', '「复制诊断信息」一个按钮即可'],
+  ['浏览器 cookie 自动导入（Chrome / Safari 解密）', 'BrowserCookieImporter + Keychain Safe Storage', '不做；Ollama 用手动粘贴', '—', 'no', '与 cc-bar 边界冲突，且触发 Keychain / 全盘访问弹窗'],
+  ['Codex web dashboard extras（credits、code review 剩余）', 'OpenAI cookie 抓 dashboard', '不做', '—', 'no', '依赖 cookie'],
+  ['Kimi 网页增强（会员月度池）', 'kimi-auth cookie 二次请求', '不做', '—', 'no', '依赖 cookie；API key 已给出周请求与 5h 速率'],
+  ['App 内登录（Claude / Codex / Gemini login runner）', 'LoginRunner 系列', '不做', 'ccpm', 'no', '登录归 ccpm add / auth refresh；cc-bar 保持只读'],
+  ['21 语言本地化', 'Localization catalog', '中英双语选词', '—', 'no', '维护成本高，收益低'],
+  ['Provider 本地存储占用扫描', 'ProviderStorageFootprint', '不做', '—', 'no', '与额度监控无关'],
+];
+const LABEL = { done: '已落地', rec: '建议迁移', opt: '可选', no: '不迁移' };
+document.getElementById('mx-table').innerHTML = `<tr><th>能力</th><th>codexbar 做法</th><th>cc-bar / ccpm 现状</th><th>落点</th><th>结论</th><th>备注</th></tr>` +
+  MATRIX.map(r => `<tr><td class="cap">${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="where">${r[3]}</td><td><span class="st ${r[4]}">${LABEL[r[4]]}</span></td><td>${r[5]}</td></tr>`).join('');
+const counts = MATRIX.reduce((m, r) => (m[r[4]] = (m[r[4]] || 0) + 1, m), {});
+document.getElementById('mx-summary').innerHTML = Object.keys(LABEL).map(k => `<div class="k"><b>${counts[k] || 0}</b><span class="st ${k}">${LABEL[k]}</span></div>`).join('');
+
+function toggleTheme() { document.body.classList.toggle('theme-dark'); document.body.classList.toggle('theme-light'); }
+</script>
+</body>
+</html>
