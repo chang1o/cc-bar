@@ -14,6 +14,7 @@ private extension ConversationQuerySort {
 
 struct ConversationStatsView: View {
     @Environment(AppState.self) private var appState
+    @Binding var granularity: StatsGranularity
     @Binding var range: StatsRange
     @Binding var customFrom: Date
     @Binding var customTo: Date
@@ -90,8 +91,16 @@ struct ConversationStatsView: View {
             .buttonStyle(.borderless)
             .help(tr("Refresh local usage", "刷新本地用量"))
 
+            Picker("", selection: $granularity) {
+                ForEach(StatsGranularity.allCases, id: \.self) { item in
+                    Text(tr(item.englishLabel, item.chineseLabel)).tag(item)
+                }
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+
             Picker("", selection: $range) {
-                ForEach(StatsRange.allCases, id: \.self) { item in
+                ForEach(granularity.ranges, id: \.self) { item in
                     Text(tr(item.englishLabel, item.chineseLabel)).tag(item)
                 }
             }

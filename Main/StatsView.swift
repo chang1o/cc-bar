@@ -4,14 +4,21 @@ import Charts
 
 // MARK: - StatsRange
 
+/// 时间范围。从属于 `StatsGranularity`：每个粒度只暴露自己那一组范围
+/// （当前 / 上一个 / 近 N 个 / 全部 / 自定义），`.all` 与 `.custom` 三个粒度共用。
 enum StatsRange: Hashable, CaseIterable {
     case today
     case yesterday
-    case thisWeek
-    case thisMonth
-    case thisYear
     case last7
     case last30
+    case thisWeek
+    case lastWeek
+    case last4Weeks
+    case last12Weeks
+    case thisMonth
+    case lastMonth
+    case last6Months
+    case thisYear
     case all
     case custom
 
@@ -19,11 +26,16 @@ enum StatsRange: Hashable, CaseIterable {
         switch self {
         case .today: return "Today"
         case .yesterday: return "Yesterday"
-        case .thisWeek: return "Week"
-        case .thisMonth: return "Month"
-        case .thisYear: return "Year"
         case .last7: return "7d"
         case .last30: return "30d"
+        case .thisWeek: return "This week"
+        case .lastWeek: return "Last week"
+        case .last4Weeks: return "4w"
+        case .last12Weeks: return "12w"
+        case .thisMonth: return "This month"
+        case .lastMonth: return "Last month"
+        case .last6Months: return "6m"
+        case .thisYear: return "Year"
         case .all: return "All"
         case .custom: return "Custom"
         }
@@ -33,11 +45,16 @@ enum StatsRange: Hashable, CaseIterable {
         switch self {
         case .today: return "今天"
         case .yesterday: return "昨天"
-        case .thisWeek: return "本周"
-        case .thisMonth: return "本月"
-        case .thisYear: return "本年"
         case .last7: return "7 天"
         case .last30: return "30 天"
+        case .thisWeek: return "本周"
+        case .lastWeek: return "上周"
+        case .last4Weeks: return "4 周"
+        case .last12Weeks: return "12 周"
+        case .thisMonth: return "本月"
+        case .lastMonth: return "上月"
+        case .last6Months: return "6 个月"
+        case .thisYear: return "本年"
         case .all: return "全部"
         case .custom: return "自定义"
         }
@@ -64,13 +81,29 @@ enum StatsRange: Hashable, CaseIterable {
             let yesterdayStart = cal.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
             return (yesterdayStart, startOfToday)
         case .thisWeek:
-            let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
-            let weekStart = cal.date(from: comps) ?? startOfToday
-            return (weekStart, startOfTomorrow)
+            return (Self.weekStart(now, cal: cal, fallback: startOfToday), startOfTomorrow)
+        case .lastWeek:
+            let weekStart = Self.weekStart(now, cal: cal, fallback: startOfToday)
+            let previous = cal.date(byAdding: .weekOfYear, value: -1, to: weekStart) ?? weekStart
+            return (previous, weekStart)
+        case .last4Weeks:
+            let weekStart = Self.weekStart(now, cal: cal, fallback: startOfToday)
+            let from = cal.date(byAdding: .weekOfYear, value: -3, to: weekStart) ?? weekStart
+            return (from, startOfTomorrow)
+        case .last12Weeks:
+            let weekStart = Self.weekStart(now, cal: cal, fallback: startOfToday)
+            let from = cal.date(byAdding: .weekOfYear, value: -11, to: weekStart) ?? weekStart
+            return (from, startOfTomorrow)
         case .thisMonth:
-            let comps = cal.dateComponents([.year, .month], from: now)
-            let monthStart = cal.date(from: comps) ?? startOfToday
-            return (monthStart, startOfTomorrow)
+            return (Self.monthStart(now, cal: cal, fallback: startOfToday), startOfTomorrow)
+        case .lastMonth:
+            let monthStart = Self.monthStart(now, cal: cal, fallback: startOfToday)
+            let previous = cal.date(byAdding: .month, value: -1, to: monthStart) ?? monthStart
+            return (previous, monthStart)
+        case .last6Months:
+            let monthStart = Self.monthStart(now, cal: cal, fallback: startOfToday)
+            let from = cal.date(byAdding: .month, value: -5, to: monthStart) ?? monthStart
+            return (from, startOfTomorrow)
         case .thisYear:
             let comps = cal.dateComponents([.year], from: now)
             let yearStart = cal.date(from: comps) ?? startOfToday
@@ -91,6 +124,16 @@ enum StatsRange: Hashable, CaseIterable {
         }
     }
 
+    private static func weekStart(_ date: Date, cal: Calendar, fallback: Date) -> Date {
+        let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+        return cal.date(from: comps) ?? fallback
+    }
+
+    private static func monthStart(_ date: Date, cal: Calendar, fallback: Date) -> Date {
+        let comps = cal.dateComponents([.year, .month], from: date)
+        return cal.date(from: comps) ?? fallback
+    }
+
     /// 上一个等长区间(用于 delta 对比)。`.all` / `.custom` 返回 nil(无法对比)。
     func previousBounds(now: Date = Date(), customFrom: Date, customTo: Date) -> (from: Date, to: Date)? {
         switch self {
@@ -108,8 +151,9 @@ enum StatsRange: Hashable, CaseIterable {
 
 // MARK: - StatsGranularity
 
-/// 「每日用量」图表的 X 轴聚合粒度。与 `StatsRange` 正交：range 决定看多长时间，
-/// 粒度决定每根柱覆盖多久。底层用量桶始终是日桶，周 / 月只在渲染前做二次归并。
+/// 统计粒度，Overview / Conversations 的**上级**控件：它决定「一个统计单元」是一天、
+/// 一周还是一个月，下级的 `StatsRange` 只能在该粒度自己那组范围里选。
+/// 底层用量桶始终是日桶，周 / 月只在读取时把日桶归并到周期起点。
 enum StatsGranularity: Hashable, CaseIterable {
     case day
     case week
@@ -144,6 +188,16 @@ enum StatsGranularity: Hashable, CaseIterable {
         case .day: return "每日用量"
         case .week: return "每周用量"
         case .month: return "每月用量"
+        }
+    }
+
+    /// 该粒度下可选的时间范围：当前 / 上一个 / 近 N 个 / 全部 / 自定义。
+    /// `.all` 与 `.custom` 三个粒度共用，切换粒度时不会被重置。
+    var ranges: [StatsRange] {
+        switch self {
+        case .day: return [.today, .yesterday, .last7, .last30, .all, .custom]
+        case .week: return [.thisWeek, .lastWeek, .last4Weeks, .last12Weeks, .all, .custom]
+        case .month: return [.thisMonth, .lastMonth, .last6Months, .thisYear, .all, .custom]
         }
     }
 
@@ -305,6 +359,7 @@ struct StatsView: View {
 
                 if viewMode == .conversations {
                     ConversationStatsView(
+                        granularity: $granularity,
                         range: $range,
                         customFrom: $customFrom,
                         customTo: $customTo,
@@ -327,6 +382,10 @@ struct StatsView: View {
         }
         .onChange(of: viewMode) { _, _ in
             reconcileServiceFilter()
+        }
+        .onChange(of: granularity) { _, _ in
+            reconcileRange()
+            expandedProvider = nil
         }
         .onChange(of: range) { _, _ in expandedProvider = nil }
         .onChange(of: serviceFilter) { _, _ in expandedProvider = nil }
@@ -588,14 +647,29 @@ struct StatsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Picker("", selection: $granularity) {
+                ForEach(StatsGranularity.allCases, id: \.self) { item in
+                    Text(tr(item.englishLabel, item.chineseLabel)).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+
             Picker("", selection: $range) {
-                ForEach(StatsRange.allCases, id: \.self) { r in
+                ForEach(granularity.ranges, id: \.self) { r in
                     Text(tr(r.englishLabel, r.chineseLabel)).tag(r)
                 }
             }
             .pickerStyle(.segmented)
             .fixedSize()
         }
+    }
+
+    /// 切换粒度后，把不属于新粒度的范围收敛到该粒度的第一档；
+    /// `.all` / `.custom` 在三个粒度里都在，切换时会原样保留。
+    private func reconcileRange() {
+        guard !granularity.ranges.contains(range) else { return }
+        range = granularity.ranges.first ?? .all
     }
 
     private var customRangeRow: some View {
@@ -695,14 +769,6 @@ struct StatsView: View {
                             .font(.system(size: 10.5))
                             .foregroundStyle(.tertiary)
                     }
-                    Picker(tr("Granularity", "粒度"), selection: $granularity) {
-                        ForEach(StatsGranularity.allCases, id: \.self) { item in
-                            Text(tr(item.englishLabel, item.chineseLabel)).tag(item)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
                     ForEach(visibleUsageApps, id: \.self) { app in
                         LegendChip(color: app.tintColor, label: app.displayName)
                     }
