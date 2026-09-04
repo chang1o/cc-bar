@@ -1,8 +1,8 @@
 import Foundation
 import Security
 
-/// Manual `Cookie:` header for ollama.com, one per ccpm profile, stored in the
-/// app's own Keychain item (SecItem, no authorization prompt).
+/// Manual `Cookie:` header for ollama.com, one per ccpm profile, stored in the app's own
+/// Keychain item (SecItem, no authorization prompt).
 nonisolated enum OllamaCookieStore {
     nonisolated static let keychainService = "com.cc-bar.ollama.cookie"
 
@@ -26,8 +26,10 @@ nonisolated enum OllamaCookieStore {
             return
         }
         let data = Data(cleaned.utf8)
-        var attributes: [String: Any] = [kSecValueData as String: data]
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
         let updateStatus = SecItemUpdate(baseQuery(account: profile) as CFDictionary, attributes as CFDictionary)
         if updateStatus == errSecSuccess { return }
         if updateStatus != errSecItemNotFound {
@@ -59,7 +61,7 @@ nonisolated enum OllamaCookieStore {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
         ]
     }
 }

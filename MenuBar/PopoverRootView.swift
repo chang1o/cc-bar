@@ -3,8 +3,10 @@ import AppKit
 
 // MARK: - PopoverRootView
 //
-// Header (title + refresh age + state dot + lane toggle + refresh / stats / settings / quit)
-// + optional risk banner + one `ProviderSection` per visible provider.
+// Header (title + status dot + refresh / stats / settings / quit) followed by one
+// section per present provider. Every account inside a section renders as a full
+// card (`ServiceBlockView`): primary account first, then ccpm profiles, then the
+// imported Codex accounts. No compact rows.
 
 struct PopoverRootView: View {
     @Environment(AppState.self) private var appState
@@ -15,18 +17,16 @@ struct PopoverRootView: View {
         VStack(spacing: 0) {
             header
 
-            if let risk = quotaRisk {
-                riskBanner(risk)
-            }
-
             Divider()
 
-            ScrollView {
-                content
-            }
-            .frame(height: contentHeight)
+            content
         }
         .frame(width: 340)
+        // 转圈由 appState.isRefreshing 统一驱动:无论刷新从哪个入口发起
+        // (点击刷新按钮、⌘R 全局快捷键),只要整体刷新真正开始,按钮就转一圈。
+        .onChange(of: appState.isRefreshing) { _, refreshing in
+            if refreshing { refreshRotation += 360 }
+        }
     }
 
     // MARK: Header
@@ -37,7 +37,8 @@ struct PopoverRootView: View {
                 Text(tr("Usage", "用量"))
                     .font(.system(size: 13, weight: .semibold))
 
-                // Re-render every second so "refreshed Xs ago" ticks; costs nothing while hidden.
+                // 用 TimelineView 每秒重新渲染一次,让 "Xs 前已刷新" 实时滚动。
+                // Popover 不可见时 TimelineView 不会被调度,几乎零 CPU 成本。
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(headerSubtitle(now: context.date))
                         .font(.system(size: 11))
@@ -57,17 +58,6 @@ struct PopoverRootView: View {
                     .padding(.trailing, 4)
             }
 
-            Button(action: toggleMenuBarQuotaWindow) {
-                Text(laneToggleLabel)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(PopoverIconButtonStyle())
-            .help(menuBarQuotaWindow == .primary
-                ? tr("Show secondary window", "显示副窗口额度")
-                : tr("Show primary window", "显示主窗口额度"))
-
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 13, weight: .medium))
@@ -76,18 +66,16 @@ struct PopoverRootView: View {
                     .animation(.easeInOut(duration: 0.7), value: refreshRotation)
             }
             .buttonStyle(PopoverIconButtonStyle())
+            // 不加 disabled:按钮永远可点;AppState.refreshNow() 内部已经做了
+            // in-flight 去重,不会重复发请求。刷新真正开始时由 isRefreshing 驱动转圈。
             .help(tr("Refresh now", "立即刷新"))
 
             Button { activateAndOpenMain(tab: .stats) } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chart.bar.xaxis")
-                        .font(.system(size: 12.5, weight: .medium))
-                    Text(tr("Stats", "统计"))
-                        .font(.system(size: 10.5, weight: .semibold))
-                }
-                .foregroundStyle(.secondary)
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(PopoverTextButtonStyle(width: 54))
+            .buttonStyle(PopoverIconButtonStyle())
             .help(tr("Open Statistics", "查看统计"))
 
             Button { activateAndOpenMain(tab: .settings) } label: {
@@ -111,221 +99,305 @@ struct PopoverRootView: View {
         .padding(.bottom, 12)
     }
 
-    /// Lane toggle shows the label of the lane that is currently the headline
-    /// for the first visible provider (5H / WK for most, MO / WK for Ollama).
-    private var laneToggleLabel: String {
-        let provider = appState.visibleProviders.first ?? .codex
-        let descriptor = provider.descriptor
-        switch menuBarQuotaWindow {
-        case .primary: return descriptor.primaryKind.shortLabel
-        case .secondary: return descriptor.secondaryKind?.shortLabel ?? descriptor.primaryKind.shortLabel
-        case .both: return "\(descriptor.primaryKind.shortLabel)/\(descriptor.secondaryKind?.shortLabel ?? "")"
-        }
-    }
-
+    /// `now` 由 header 的 TimelineView 提供,让"Xs 前已刷新"实时滚动。
     private func headerSubtitle(now: Date) -> String {
-        if let latest = appState.latestVisibleSuccess {
+        let states = monitoredRefreshStates
+        let latest = states.compactMap(\.lastSuccessAt).max()
+
+        if let latest {
             let age = Self.relativeAge(from: latest, now: now)
             return tr("refreshed \(age) ago", "\(age) 前已刷新")
         }
-        if appState.hasVisibleError {
+        if states.contains(where: { $0.lastError != nil }) {
             return tr("refresh failed", "刷新失败")
         }
         return tr("waiting…", "等待数据")
+    }
+
+    /// Refresh states of every account the popover shows: primaries plus the ccpm
+    /// profiles that are fetched on their own (mirrors reuse the primary state).
+    private var monitoredRefreshStates: [QuotaRefreshState] {
+        var states: [QuotaRefreshState] = []
+        for app in appState.presentProviders {
+            if appState.hasPrimaryAccount(app) {
+                states.append(appState.refreshState(for: app))
+            }
+            for account in appState.ccpmAccounts(for: app)
+            where !account.mirrorsPrimary && account.availability == .ready {
+                states.append(appState.ccpmQuotaState(for: account).refresh)
+            }
+        }
+        return states
     }
 
     // MARK: Content
 
     @ViewBuilder
     private var content: some View {
-        let providers = appState.visibleProviders
-        if providers.isEmpty {
+        let apps = appState.presentProviders
+        let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
+        let includesCodex = apps.contains(.codex)
+
+        if apps.isEmpty && !hasImported {
             VStack(spacing: 6) {
-                Text(tr("No services enabled", "未启用任何服务"))
+                Text(tr("No accounts to show", "没有可显示的账号"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text(tr("Enable a service in Settings → Accounts", "到「设置 → 账号」开启"))
+                Text(tr("Enable a service in Settings → Accounts, or add a ccpm profile",
+                        "到「设置 → 账号」开启服务,或添加 ccpm profile"))
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
+            .padding(.horizontal, 16)
         } else {
             VStack(spacing: 0) {
-                ForEach(Array(providers.enumerated()), id: \.element) { index, provider in
+                if hasImported && !includesCodex {
+                    OtherCodexAccountsSection()
+                    if !apps.isEmpty {
+                        Divider().padding(.horizontal, 16)
+                    }
+                }
+
+                ForEach(Array(apps.enumerated()), id: \.element) { index, app in
                     if index > 0 {
                         Divider().padding(.horizontal, 16)
                     }
-                    ProviderSection(provider: provider)
+                    providerSection(app)
                 }
             }
         }
     }
 
-    private var menuBarQuotaWindow: MenuBarWindowChoice {
-        SettingsStore.shared.menuBarWindow
-    }
+    /// One provider: optional "N accounts" header, primary card, ccpm cards, imported Codex rows.
+    @ViewBuilder
+    private func providerSection(_ app: QuotaApp) -> some View {
+        let hasPrimary = appState.hasPrimaryAccount(app)
+        let ccpm = appState.ccpmAccounts(for: app)
+        let standaloneCCPM = ccpm.filter { !$0.mirrorsPrimary }.count
+        let otherCodex = app == .codex ? visibleImportedCodexCount(dedupPrimary: hasPrimary) : 0
+        let cardCount = (hasPrimary ? 1 : 0) + standaloneCCPM + otherCodex
 
-    // MARK: Height
+        VStack(spacing: 0) {
+            if cardCount > 1, let descriptor = QuotaProviderDescriptor.descriptor(for: app) {
+                ProviderAccountsHeader(
+                    title: "\(descriptor.title.uppercased()) ACCOUNTS",
+                    chineseTitle: "\(descriptor.title) 账号",
+                    count: cardCount
+                )
+            }
 
-    private var maxContentHeight: CGFloat {
-        let available = NSScreen.main?.visibleFrame.height ?? 900
-        return min(680, max(320, available * 0.78))
-    }
+            if hasPrimary, let descriptor = QuotaProviderDescriptor.descriptor(for: app) {
+                primaryServiceBlock(descriptor)
+            }
 
-    private var contentHeight: CGFloat {
-        min(maxContentHeight, estimatedContentHeight)
-    }
+            CCPMAccountsSection(app: app, hasPrecedingCard: hasPrimary)
 
-    private var estimatedContentHeight: CGFloat {
-        let providers = appState.visibleProviders
-        guard !providers.isEmpty else { return Self.emptyContentHeight }
-
-        var height: CGFloat = 0
-        for (index, provider) in providers.enumerated() {
-            if index > 0 { height += Self.dividerHeight }
-            let accounts = appState.accounts(for: provider)
-            if accounts.count > 1 { height += Self.accountsSectionHeaderHeight }
-            for (position, account) in accounts.enumerated() {
-                if position > 0 { height += Self.dividerHeight }
-                height += cardHeight(account)
+            if app == .codex && otherCodex > 0 {
+                Divider().padding(.horizontal, 16)
+                OtherCodexAccountsSection(dedupPrimary: hasPrimary)
             }
         }
-        return max(Self.emptyContentHeight, height)
     }
 
-    private func cardHeight(_ account: MonitoredAccount) -> CGFloat {
-        let state = appState.quotaState(for: account)
-        var height = Self.cardBaseHeight
-        let lanes: [QuotaWindow?]
-        if let snapshot = state.snapshot {
-            lanes = snapshot.allWindows
-        } else {
-            lanes = Array(repeating: nil, count: account.descriptor.secondaryKind == nil ? 1 : 2)
-        }
-        for lane in lanes {
-            height += Self.laneHeight
-            if let lane, QuotaPace.compute(window: lane) != nil { height += Self.paceLineHeight }
-        }
-        if !account.usageRoots.isEmpty { height += Self.costSectionHeight }
-        height += Self.actionRowHeight
-        if state.error != nil { height += Self.errorLineHeight }
-        return height
+    private func visibleImportedCodexCount(dedupPrimary: Bool) -> Int {
+        appState.importedCodexAccounts.filter {
+            $0.visibleInPopover && !(dedupPrimary && appState.importedCodexAccountMirrorsPrimary($0))
+        }.count
     }
 
-    private static let emptyContentHeight: CGFloat = 96
-    private static let cardBaseHeight: CGFloat = 78
-    private static let laneHeight: CGFloat = 58
-    private static let paceLineHeight: CGFloat = 16
-    private static let costSectionHeight: CGFloat = 70
-    private static let actionRowHeight: CGFloat = 20
-    private static let accountsSectionHeaderHeight: CGFloat = 28
-    private static let errorLineHeight: CGFloat = 20
-    private static let dividerHeight: CGFloat = 1
-
-    // MARK: Quota risk summary
-
-    private var quotaRisk: QuotaRiskItem? {
-        var candidates: [QuotaRiskItem] = []
+    /// Identity line under the title: email (unless privacy mode) or the vendor name.
+    /// The plan lives in the card's chip, not here.
+    private func providerSubtitle(for app: QuotaApp) -> String {
         let privacy = SettingsStore.shared.privacyMode
-        for provider in appState.visibleProviders {
-            for (index, account) in appState.accounts(for: provider).enumerated() {
-                guard let snapshot = appState.quotaState(for: account).snapshot else { continue }
-                let title = "\(provider.displayName) · \(account.shortTitle(index: index, privacy: privacy))"
-                for window in [snapshot.primary, snapshot.secondary].compactMap({ $0 }) {
-                    candidates.append(QuotaRiskItem(title: title, window: window, tint: provider.accent))
-                }
-            }
+        let email: String?
+        let fallback: String
+        switch app {
+        case .codex:
+            email = appState.codexAccount?.email
+            fallback = "OpenAI"
+        case .claude:
+            email = appState.claudeAccount?.email
+            fallback = "Anthropic"
+        case .antigravity:
+            email = appState.antigravityAccount?.email
+            fallback = "Google"
+        case .cursor:
+            email = appState.cursorAccount?.email
+            fallback = "Cursor"
+        case .commandCode:
+            email = appState.commandCodeAccount?.email ?? appState.commandCodeAccount?.login
+            fallback = "Command Code"
+        case .kimi, .glm, .ollama:
+            email = nil
+            fallback = QuotaProviderDescriptor.descriptor(for: app)?.vendor ?? ""
         }
-        return candidates
-            .filter { $0.remainingPercent <= 20 }
-            .min { lhs, rhs in lhs.remainingPercent < rhs.remainingPercent }
+        if !privacy, let email, !email.isEmpty { return email }
+        return fallback
     }
 
-    private func riskBanner(_ risk: QuotaRiskItem) -> some View {
-        let color = statusColor(remainingPercent: risk.remainingPercent, tint: risk.tint)
-        return HStack(spacing: 8) {
-            Image(systemName: risk.remainingPercent <= 0 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(color)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(tr("Quota risk", "额度风险"))
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(color)
-                    .textCase(.uppercase)
-                Text("\(risk.title) · \(risk.window.kind.shortLabel)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 8)
-
-            VStack(alignment: .trailing, spacing: 1) {
-                Text("\(Int(risk.remainingPercent.rounded()))%")
-                    .font(.system(size: 14, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(color)
-                Text(formatResetCompact(risk.window.resetsAt))
-                    .font(.system(size: 10))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
+    private func planBadge(for app: QuotaApp) -> String? {
+        let raw: String?
+        switch app {
+        case .codex:
+            raw = appState.quotaSnapshot(for: .codex)?.planType ?? appState.codexAccount?.planType
+        case .claude:
+            raw = appState.quotaSnapshot(for: .claude)?.planType ?? appState.claudeAccount?.subscriptionType
+        case .antigravity:
+            raw = appState.quotaSnapshot(for: .antigravity)?.planType ?? appState.antigravityAccount?.planType
+        case .cursor:
+            raw = appState.quotaSnapshot(for: .cursor)?.planType
+        case .commandCode:
+            raw = appState.commandCodeAccount?.planType ?? appState.quotaSnapshot(for: .commandCode)?.planType
+        case .kimi, .glm, .ollama:
+            raw = appState.quotaSnapshot(for: app)?.planType
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(color.opacity(0.10))
+        return ServiceBlockView.formatPlan(raw)
+    }
+
+    private func primaryServiceBlock(_ provider: QuotaProviderDescriptor) -> some View {
+        ServiceBlockView(
+            app: provider.app,
+            title: provider.title,
+            subtitle: providerSubtitle(for: provider.app),
+            tint: provider.app.tintColor,
+            logoName: provider.logoName,
+            fallback: provider.fallback,
+            state: appState.primaryQuotaStates[provider.app] ?? PrimaryQuotaState(),
+            error: providerDisplayError(for: provider.app),
+            usage: usage(for: provider),
+            serviceStatus: serviceStatus(for: provider.app),
+            planBadge: planBadge(for: provider.app),
+            dashboardURL: provider.dashboardURL,
+            statusPageURL: provider.statusPageWebURL
+        )
+    }
+
+    private func providerDisplayError(for app: QuotaApp) -> String? {
+        guard let error = appState.quotaError(for: app) else { return nil }
+        guard app == .cursor || app == .commandCode else { return error }
+        return tr("refresh failed", "刷新失败")
+    }
+
+    /// Local usage totals for the primary card. ccpm cards never show usage: the
+    /// scanners aggregate per app, so a per-profile split does not exist.
+    private func usage(for provider: QuotaProviderDescriptor) -> ServiceBlockView.Usage? {
+        guard provider.showsCost else { return nil }
+        let (todayFrom, todayTo) = Self.todayBounds()
+        let (weekFrom, weekTo) = Self.weekBounds()
+        let (monthFrom, monthTo) = Self.monthBounds()
+        if provider.app == .cursor {
+            return ServiceBlockView.Usage(
+                today: cursorTotals(from: todayFrom, to: todayTo),
+                week: cursorTotals(from: weekFrom, to: weekTo),
+                month: cursorTotals(from: monthFrom, to: monthTo),
+                showsTokens: false
+            )
+        }
+        guard let usageApp = provider.app.usageApp else { return nil }
+        let aggregator = appState.usageService.aggregator
+        return ServiceBlockView.Usage(
+            today: aggregator.totals(app: usageApp, from: todayFrom, to: todayTo),
+            week: aggregator.totals(app: usageApp, from: weekFrom, to: weekTo),
+            month: aggregator.totals(app: usageApp, from: monthFrom, to: monthTo),
+            showsTokens: true
+        )
+    }
+
+    /// Cursor 没有本地日志费用。只要远端缓存已有相交日桶，就展示已知 `chargedCents`
+    /// 汇总；完整覆盖由刷新链路在后台补齐，不能让一个缺口抹掉已有金额。
+    private func cursorTotals(from: Date, to: Date) -> UsageTotals? {
+        guard appState.usageService.hasCursorRemoteUsage(in: from..<to) else { return nil }
+        return appState.usageService.aggregator.totals(app: .cursor, from: from, to: to)
+    }
+
+    private func serviceStatus(for app: QuotaApp) -> ServiceStatus? {
+        guard SettingsStore.shared.showServiceStatus else { return nil }
+        return switch app {
+        case .codex: appState.codexServiceStatus
+        case .claude: appState.claudeServiceStatus
+        case .cursor: appState.cursorServiceStatus
+        case .antigravity, .commandCode, .kimi, .glm, .ollama: nil
+        }
     }
 
     // MARK: Header state (live / stale / offline)
 
     private var headerState: CCRefreshState? {
-        guard let latest = appState.latestVisibleSuccess else {
-            return appState.hasVisibleError ? .offline : nil
+        let settings = SettingsStore.shared
+        let states = monitoredRefreshStates
+        let latest = states.compactMap(\.lastSuccessAt).max()
+        let hasError = states.contains(where: { $0.lastError != nil })
+
+        guard let latest else {
+            return hasError ? .offline : nil
         }
-        let interval = SettingsStore.shared.quotaInterval.seconds ?? 300
+
+        let interval = settings.quotaInterval.seconds ?? 300
         let age = Date().timeIntervalSince(latest)
         if age <= interval * 1.5 { return .live }
         if age <= interval * 3 { return .stale }
         return .offline
     }
 
-    // MARK: Actions
+    // MARK: Open main window
 
-    /// Accessory apps do not come to the front on their own; activate first so
-    /// the window opens above everything else.
+    /// 菜单栏 App (`.accessory`) 默认不抢焦点,打开窗口后会被压在其他 App 后面;
+    /// 先 `activate(ignoringOtherApps:)` 把进程置前,再 `openWindow` 才会出现在最前。
+    /// 先设置 `mainTab` 再 openWindow,确保点「统计」/「设置」总是落到对应 tab,
+    /// 不受上次窗口停留 tab 影响(与 ⌘, / ⌘1 命令行为一致)。
     private func activateAndOpenMain(tab: MainTab) {
         appState.mainTab = tab
         NSApp.activate(ignoringOtherApps: true)
         openWindow(id: "main")
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            appState.mainTab = tab
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.windows
-                .first { $0.title == "CCBar" }
-                .map { window in
-                    window.makeKeyAndOrderFront(nil)
-                    window.orderFrontRegardless()
-                }
-        }
     }
 
-    /// Always spin the icon for feedback; `refreshNow` deduplicates the real work.
+    // MARK: Refresh
+
+    /// 用户点刷新按钮的处理:
+    /// - 只负责启动一个非阻塞 Task 去做真正的刷新工作;UI 不等
+    /// - 真正的去重 / 协调放在 `AppState.refreshNow()` 内部
+    /// - 转圈动画不在这里手动触发,而由 body 上监听 `appState.isRefreshing` 统一驱动,
+    ///   让点击和 ⌘R 两个入口的视觉反馈完全一致(刷新真正开始才转,in-flight 去重时不转)
+    /// - 数据更新通过 @Observable 自动驱动 UI 刷新,不需要在这里 await 结果
     private func refresh() {
-        refreshRotation += 360
         Task { await appState.refreshNow() }
-    }
-
-    private func toggleMenuBarQuotaWindow() {
-        SettingsStore.shared.menuBarWindow = SettingsStore.shared.menuBarWindow.toggledForMenuBar
-        FloatingPanelController.shared.sync()
     }
 
     // MARK: Helpers
 
+    static func todayBounds(now: Date = Date()) -> (Date, Date) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let start = cal.startOfDay(for: now)
+        return (start, cal.date(byAdding: .day, value: 1, to: start) ?? start)
+    }
+
+    static func weekBounds(now: Date = Date()) -> (Date, Date) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        cal.firstWeekday = 2
+        let startOfToday = cal.startOfDay(for: now)
+        let startOfTomorrow = cal.date(byAdding: .day, value: 1, to: startOfToday) ?? startOfToday
+        let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+        let weekStart = cal.date(from: comps) ?? startOfToday
+        return (weekStart, startOfTomorrow)
+    }
+
+    /// Rolling 30 days ending tomorrow 00:00 (today included).
+    static func monthBounds(now: Date = Date()) -> (Date, Date) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let startOfToday = cal.startOfDay(for: now)
+        let startOfTomorrow = cal.date(byAdding: .day, value: 1, to: startOfToday) ?? startOfToday
+        let start = cal.date(byAdding: .day, value: -29, to: startOfToday) ?? startOfToday
+        return (start, startOfTomorrow)
+    }
+
+    /// 计算相对时间字符串。`now` 默认是当前时间;header 用 `TimelineView` 驱动时
+    /// 把 timeline 提供的 `context.date` 传进来,避免和 `Date()` 真实时间细微偏差。
     static func relativeAge(from date: Date, now: Date = Date()) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
         if seconds < 60 { return "\(seconds)s" }
@@ -337,91 +409,131 @@ struct PopoverRootView: View {
     }
 }
 
-private struct QuotaRiskItem {
+// MARK: - ProviderAccountsHeader
+
+/// "CODEX ACCOUNTS        all · 3" strip above a provider with several cards.
+struct ProviderAccountsHeader: View {
     let title: String
-    let window: QuotaWindow
-    let tint: Color
+    let chineseTitle: String
+    let count: Int
 
-    var remainingPercent: Double {
-        window.remainingPercent
-    }
-}
+    var body: some View {
+        HStack {
+            Text(tr(title, chineseTitle))
+                .font(.system(size: 9.5, weight: .semibold))
+                .kerning(0.3)
+                .foregroundStyle(.tertiary)
 
-// MARK: - Week bounds shared by popover rows
+            Spacer()
 
-enum UsageWeek {
-    static func bounds(now: Date = Date()) -> (Date, Date) {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = .current
-        cal.firstWeekday = 2
-        let startOfToday = cal.startOfDay(for: now)
-        let startOfTomorrow = cal.date(byAdding: .day, value: 1, to: startOfToday) ?? startOfToday
-        let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
-        let weekStart = cal.date(from: comps) ?? startOfToday
-        return (weekStart, startOfTomorrow)
+            Text("all · \(count)")
+                .font(.system(size: 9.5, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(.quaternary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
     }
 }
 
 // MARK: - ServiceBlockView
 //
-// One account card, modelled on CodexBar's menu card: header (tile, name,
-// identity, refresh age, plan), one section per quota window (title, bar,
-// percent left + reset countdown, pace line), then a local cost / token section.
+// One account card: header (tile, name, identity, refresh line, plan chip, status dot),
+// one lane per limit (title, detail, bar, remaining, reset, pace), local usage block,
+// action row (Dashboard / Status / Terminal / Set default), error line.
 
 struct ServiceBlockView: View {
-    let account: MonitoredAccount
-    let state: AccountQuotaState
+    struct Usage {
+        var today: UsageTotals?
+        var week: UsageTotals?
+        var month: UsageTotals?
+        /// Cursor only has remote cost, no token counts.
+        var showsTokens: Bool
+    }
+
+    let app: QuotaApp
+    let title: String
     let subtitle: String
-    let todayTotals: UsageTotals?
-    let weekTotals: UsageTotals?
-    let monthTotals: UsageTotals?
+    let tint: Color
+    let logoName: String
+    let fallback: String
+    let state: PrimaryQuotaState
+    let error: String?
+    let usage: Usage?
     let serviceStatus: ServiceStatus?
-    /// Called after a ccpm action (set-default) so the caller can rediscover accounts.
+    let planBadge: String?
+    let dashboardURL: URL?
+    let statusPageURL: URL?
+    /// Set for ccpm profile cards; drives the Terminal / Set default actions.
+    var ccpmAccount: CCPMAccount? = nil
+    /// When set the card has no quota lanes and shows this reason instead.
+    var unavailableReason: String? = nil
+    /// Called after a ccpm action changed profiles (set-default) so the caller rediscovers.
     var onProfilesChanged: () -> Void = {}
+
     @State private var actionError: String?
 
-    private var descriptor: ProviderDescriptor { account.descriptor }
-    private var tint: Color { account.provider.accent }
+    private var snapshot: QuotaSnapshot? { state.snapshot }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             headerRow
-            ForEach(Array(lanes.enumerated()), id: \.offset) { _, lane in
-                laneSection(lane.window, kind: lane.kind)
+
+            if let unavailableReason {
+                Text(unavailableReason)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            } else if isUnlimited {
+                unlimitedRow
+            } else {
+                ForEach(lanes) { lane in
+                    laneSection(lane)
+                }
             }
-            if !account.usageRoots.isEmpty {
-                usageSection
+
+            if let usage {
+                usageSection(usage)
             }
+
             actionRow
+
             if let actionError {
                 Text(actionError)
                     .font(.system(size: 10.5))
                     .foregroundStyle(quotaPaceAheadColor)
                     .lineLimit(2)
             }
-            if let message = shortError(state.error) {
-                Text(message)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(quotaPaceAheadColor)
-                    .lineLimit(2)
+            if let message = shortError(error) {
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text(message)
+                        .font(.system(size: 11))
+                        .lineLimit(2)
+                }
+                .foregroundStyle(.orange)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(unavailableReason == nil ? 1 : 0.75)
     }
 
     // MARK: Header
 
     private var headerRow: some View {
         HStack(alignment: .top, spacing: 9) {
-            ServiceTile(logoName: descriptor.logoName, fallback: descriptor.fallbackGlyph, tint: tint)
+            ServiceTile(logoName: logoName, fallback: fallback, tint: tint)
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(descriptor.displayName)
+                    Text(title)
                         .font(.system(size: 13, weight: .semibold))
                         .kerning(-0.1)
+                        .lineLimit(1)
                     Text(subtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary.opacity(0.75))
@@ -439,8 +551,8 @@ struct ServiceBlockView: View {
 
             Spacer(minLength: 0)
 
-            if let plan = state.snapshot?.planType ?? account.identity.plan, !plan.isEmpty {
-                Text(plan.replacingOccurrences(of: "_", with: " ").capitalized)
+            if let planBadge {
+                Text(planBadge)
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
@@ -465,7 +577,9 @@ struct ServiceBlockView: View {
         } else if let last = state.refresh.lastSuccessAt {
             let age = PopoverRootView.relativeAge(from: last, now: now)
             parts.append(tr("Updated \(age) ago", "\(age) 前更新"))
-        } else if state.error != nil {
+        } else if unavailableReason != nil {
+            parts.append(tr("Not monitored", "未监控"))
+        } else if error != nil || state.error != nil {
             parts.append(tr("Refresh failed", "刷新失败"))
         } else {
             parts.append(tr("Waiting for first refresh", "等待首次刷新"))
@@ -486,33 +600,38 @@ struct ServiceBlockView: View {
 
     // MARK: Lanes
 
-    private struct Lane {
-        let kind: QuotaWindowKind
-        let window: QuotaWindow?
+    private struct Lane: Identifiable {
+        let id: String
+        let limit: QuotaLimit?
     }
 
-    /// Every window the snapshot carries, primary first; placeholders for the
-    /// descriptor's lanes while nothing has been fetched yet.
+    /// Primary, secondary, auxiliary and model limits, deduplicated by id; a single
+    /// placeholder lane while nothing has been fetched yet.
     private var lanes: [Lane] {
-        if let snapshot = state.snapshot {
-            return snapshot.allWindows.map { Lane(kind: $0.kind, window: $0) }
+        guard let snapshot else { return [Lane(id: "placeholder", limit: nil)] }
+        let candidates = [snapshot.primaryLimit, snapshot.secondaryLimit].compactMap { $0 }
+            + snapshot.auxiliaryLimits
+            + snapshot.modelLimits
+        let unique = candidates.reduce(into: [QuotaLimit]()) { result, limit in
+            if !result.contains(where: { $0.id == limit.id }) {
+                result.append(limit)
+            }
         }
-        var placeholders = [Lane(kind: descriptor.primaryKind, window: nil)]
-        if let secondary = descriptor.secondaryKind {
-            placeholders.append(Lane(kind: secondary, window: nil))
-        }
-        return placeholders
+        if unique.isEmpty { return [Lane(id: "placeholder", limit: nil)] }
+        return unique.map { Lane(id: $0.id, limit: $0) }
     }
 
-    private func laneSection(_ window: QuotaWindow?, kind: QuotaWindowKind) -> some View {
+    private func laneSection(_ lane: Lane) -> some View {
+        let window = lane.limit?.window
         let color = laneColor(window)
-        let pace = window.flatMap { QuotaPace.compute(window: $0) }
+        let pace = lane.limit.flatMap { QuotaPace.compute(limit: $0) }
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(kind.laneTitle)
+                Text(lane.limit.map(laneTitle) ?? tr("Quota", "额度"))
                     .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
                 Spacer(minLength: 8)
-                if let detail = window?.detail {
+                if let detail = window?.detail, !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: 10.5))
                         .monospacedDigit()
@@ -524,37 +643,92 @@ struct ServiceBlockView: View {
             ProgressBar(value: (window?.remainingPercent ?? 0) / 100, tint: color, height: 6)
 
             HStack(alignment: .firstTextBaseline) {
-                Text(window.map { tr("\(Int($0.remainingPercent.rounded()))% left", "剩余 \(Int($0.remainingPercent.rounded()))%") } ?? "--%")
+                Text(remainingText(window))
                     .font(.system(size: 11.5, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(color)
                 Spacer(minLength: 8)
-                ResetTimeHint(resetsAt: window?.resetsAt)
+                laneResetStatus(lane.limit)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
 
             if let pace {
-                Text(paceText(pace, window: window))
+                Text(paceText(pace))
                     .font(.system(size: 10.5))
                     .monospacedDigit()
-                    .foregroundStyle(pace.deltaPercent > 0 ? quotaPaceAheadColor : .secondary)
+                    .foregroundStyle(pace.isAhead ? quotaPaceAheadColor : .secondary)
                     .lineLimit(1)
             }
         }
     }
 
-    private func paceText(_ pace: QuotaPace, window: QuotaWindow?) -> String {
+    @ViewBuilder
+    private func laneResetStatus(_ limit: QuotaLimit?) -> some View {
+        if let limit,
+           limit.kind == .modelWeekly,
+           limit.window.usedPercent == 0,
+           limit.window.resetsAt == nil
+        {
+            Text(tr("Unused", "尚未使用"))
+        } else {
+            ResetHintText(resetsAt: limit?.window.resetsAt)
+        }
+    }
+
+    private var unlimitedRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("∞")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(tr("Unlimited", "不限额度"))
+                .font(.system(size: 12, weight: .semibold))
+            Spacer(minLength: 8)
+            ResetHintText(resetsAt: snapshot?.primaryLimit?.window.resetsAt)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Antigravity / Cursor name their windows officially (Gemini 5H, Auto, ...); the
+    /// rest fall back to the window kind. Model and custom lanes always use their name.
+    private func laneTitle(_ limit: QuotaLimit) -> String {
+        let name = limit.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let officiallyNamed = app == .antigravity || app == .cursor
+        switch limit.kind {
+        case .fiveHour:
+            if officiallyNamed, !name.isEmpty { return name }
+            return tr("Session · 5h", "5 小时")
+        case .weekly:
+            if officiallyNamed, !name.isEmpty { return name }
+            return tr("Weekly", "周额度")
+        case .modelWeekly:
+            if name.isEmpty { return tr("Weekly", "周额度") }
+            return tr("\(name) · weekly", "\(name) · 周")
+        case .unknown:
+            return name.isEmpty ? tr("Current window", "当前窗口") : name
+        }
+    }
+
+    private func remainingText(_ window: QuotaWindow?) -> String {
+        guard let window else { return "--%" }
+        let left = Int(window.remainingPercent.rounded())
+        return tr("\(left)% left", "剩余 \(left)%")
+    }
+
+    private func paceText(_ pace: QuotaPace) -> String {
+        let delta = Int(pace.deltaPercent.rounded())
         let head: String
-        if pace.deltaPercent > 0 {
-            head = tr("Pace: ahead +\(pace.deltaPercent)%", "节奏：超前 +\(pace.deltaPercent)%")
-        } else if pace.deltaPercent < 0 {
-            head = tr("Pace: behind \(pace.deltaPercent)%", "节奏：落后 \(pace.deltaPercent)%")
+        if delta > 0 {
+            head = tr("Pace: ahead +\(delta)%", "节奏：超前 +\(delta)%")
+        } else if delta < 0 {
+            head = tr("Pace: behind \(delta)%", "节奏：落后 \(delta)%")
         } else {
             head = tr("Pace: on track", "节奏：正常")
         }
         if let runsOutAt = pace.runsOutAt {
-            return "\(head) · " + tr("runs out in \(formatResetCompact(runsOutAt))", "预计 \(formatResetCompact(runsOutAt)) 后耗尽")
+            let compact = formatResetCompact(runsOutAt)
+            return "\(head) · " + tr("runs out in \(compact)", "预计 \(compact) 后耗尽")
         }
         return "\(head) · " + tr("lasts to reset", "可撑到重置")
     }
@@ -564,23 +738,27 @@ struct ServiceBlockView: View {
         return statusColor(remainingPercent: window.remainingPercent, tint: tint)
     }
 
+    private var isUnlimited: Bool {
+        snapshot?.isUnlimited == true
+    }
+
     // MARK: Local usage
 
-    private var usageSection: some View {
+    private func usageSection(_ usage: Usage) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(descriptor.supportsCost ? tr("Cost", "花费") : tr("Tokens", "令牌"))
+            Text(tr("Cost", "花费"))
                 .font(.system(size: 12, weight: .semibold))
-            usageLine(tr("Today", "今日"), todayTotals)
-            usageLine(tr("This week", "本周"), weekTotals)
-            usageLine(tr("Last 30 days", "最近 30 天"), monthTotals)
+            usageLine(tr("Today", "今日"), usage.today, showsTokens: usage.showsTokens)
+            usageLine(tr("This week", "本周"), usage.week, showsTokens: usage.showsTokens)
+            usageLine(tr("Last 30 days", "最近 30 天"), usage.month, showsTokens: usage.showsTokens)
         }
     }
 
-    private func usageLine(_ label: String, _ totals: UsageTotals?) -> some View {
+    private func usageLine(_ label: String, _ totals: UsageTotals?, showsTokens: Bool) -> some View {
         HStack(spacing: 0) {
             Text("\(label): ")
                 .foregroundStyle(.secondary)
-            Text(usageValue(totals))
+            Text(usageValue(totals, showsTokens: showsTokens))
                 .foregroundStyle(.primary)
                 .monospacedDigit()
         }
@@ -588,77 +766,81 @@ struct ServiceBlockView: View {
         .lineLimit(1)
     }
 
-    private func usageValue(_ totals: UsageTotals?) -> String {
+    private func usageValue(_ totals: UsageTotals?, showsTokens: Bool) -> String {
         guard let totals else { return "—" }
-        let tokens = StatsFormatter.compactToken(totals.totalTokens) + " tokens"
-        if descriptor.supportsCost {
-            return "\(StatsFormatter.cost(totals.costUSD)) · \(tokens)"
-        }
-        return tokens
+        let cost = StatsFormatter.cost(totals.costUSD)
+        guard showsTokens else { return cost }
+        return "\(cost) · \(StatsFormatter.compactToken(totals.totalTokens)) tokens"
     }
 
     // MARK: Actions
 
-    private var ccpmProfile: String? {
-        if case .ccpm(let profile) = account.source { return profile }
-        return nil
-    }
-
     private var actionRow: some View {
-        HStack(spacing: 0) {
-            if let url = account.dashboardURL {
-                actionButton(tr("Dashboard", "用量面板")) { NSWorkspace.shared.open(url) }
-            }
-            if let url = descriptor.statusPageWebURL {
-                actionSeparator(after: account.dashboardURL != nil)
-                actionButton(tr("Status", "状态页")) { NSWorkspace.shared.open(url) }
-            }
-            if let profile = ccpmProfile, account.provider != .codex {
-                actionSeparator(after: account.dashboardURL != nil || descriptor.statusPageWebURL != nil)
-                actionButton(tr("Terminal", "终端")) {
-                    do {
-                        actionError = nil
-                        try CCPMCommand.openInTerminal(profile: profile)
-                    } catch {
-                        actionError = "\(error)"
-                    }
+        let actions = availableActions
+        return HStack(spacing: 0) {
+            ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
+                if index > 0 {
+                    Text(" · ")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.quaternary)
                 }
-                if !account.identity.isDefaultProfile {
-                    actionSeparator(after: true)
-                    actionButton(tr("Set default", "设为默认")) {
-                        actionError = nil
-                        Task {
-                            do {
-                                try await CCPMCommand.setDefault(profile: profile)
-                                onProfilesChanged()
-                            } catch {
-                                actionError = "\(error)"
-                            }
-                        }
-                    }
+                Button(action: action.perform) {
+                    Text(action.title)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
             }
             Spacer(minLength: 0)
         }
     }
 
-    private func actionButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
+    private struct CardAction {
+        let title: String
+        let perform: () -> Void
     }
 
-    @ViewBuilder
-    private func actionSeparator(after hasPrevious: Bool) -> some View {
-        if hasPrevious {
-            Text(" · ")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.quaternary)
+    private var availableActions: [CardAction] {
+        var actions: [CardAction] = []
+        if let dashboardURL {
+            actions.append(CardAction(title: tr("Dashboard", "用量面板")) {
+                NSWorkspace.shared.open(dashboardURL)
+            })
         }
+        if let statusPageURL {
+            actions.append(CardAction(title: tr("Status", "状态页")) {
+                NSWorkspace.shared.open(statusPageURL)
+            })
+        }
+        // ccpm launches Claude Code (and the compatible providers); Codex profiles
+        // only carry credentials, so the terminal actions do not apply to them.
+        if let account = ccpmAccount, account.app != .codex {
+            let profile = account.profile.name
+            actions.append(CardAction(title: tr("Terminal", "终端")) {
+                actionError = nil
+                CCPMCommand.openInTerminal(profile: profile)
+            })
+            if !account.profile.isDefault {
+                actions.append(CardAction(title: tr("Set default", "设为默认")) {
+                    actionError = nil
+                    if CCPMCommand.setDefault(profile: profile) {
+                        onProfilesChanged()
+                    } else {
+                        actionError = tr("ccpm set-default failed", "ccpm set-default 失败")
+                    }
+                })
+            }
+        }
+        return actions
+    }
+
+    // MARK: Formatting
+
+    /// "max_20x" → "Max 20x"; nil / empty → nil.
+    static func formatPlan(_ raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        return raw.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private func shortError(_ error: String?) -> String? {
@@ -671,72 +853,18 @@ struct ServiceBlockView: View {
 }
 
 /// "resets in 4h 37m" that ticks every minute and flips to the absolute time on hover.
-private struct ResetTimeHint: View {
+struct ResetHintText: View {
     let resetsAt: Date?
     @State private var hovering = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            Text(hovering ? formatResetAltCompact(resetsAt, now: context.date) : formatResetHint(resetsAt, now: context.date))
+            Text(hovering
+                 ? formatResetAltCompact(resetsAt, now: context.date)
+                 : formatResetHint(resetsAt, now: context.date))
                 .monospacedDigit()
                 .contentShape(Rectangle())
                 .onHover { hovering = $0 }
         }
-    }
-}
-
-extension QuotaWindowKind {
-    @MainActor
-    var laneTitle: String {
-        switch self {
-        case .fiveHour: return tr("Session · 5h", "5 小时")
-        case .weekly: return tr("Weekly", "周额度")
-        case .monthly: return tr("Monthly", "月额度")
-        case .weeklyOpus: return tr("Opus · weekly", "Opus · 周")
-        case .weeklySonnet: return tr("Sonnet · weekly", "Sonnet · 周")
-        case .mcp: return tr("MCP · monthly", "MCP · 月")
-        case .extraUsage: return tr("Extra usage · monthly", "超额用量 · 月")
-        }
-    }
-}
-
-// MARK: - Account subtitle
-
-extension MonitoredAccount {
-    /// "Default · me@x.com · Pro" / "imported · alias · me@x.com" / "ccpm · work · api.kimi.com".
-    @MainActor
-    func popoverSubtitle(index: Int) -> String {
-        let privacy = SettingsStore.shared.privacyMode
-        var parts: [String] = []
-        switch source {
-        case .defaultLogin:
-            parts.append(tr("Default", "默认"))
-            if !privacy, let email = identity.email, !email.isEmpty { parts.append(email) }
-        case .importedCodex:
-            parts.append("imported")
-            if privacy {
-                parts.append(tr("Account \(index + 1)", "账号 \(index + 1)"))
-            } else {
-                parts.append(shortTitle(index: index, privacy: false))
-                if let email = identity.email, !email.isEmpty, email != parts.last { parts.append(email) }
-            }
-        case .ccpm(let profile):
-            parts.append("ccpm")
-            if privacy {
-                parts.append(tr("Profile \(index + 1)", "账号 \(index + 1)"))
-            } else {
-                parts.append(profile)
-                if let email = identity.email, !email.isEmpty { parts.append(email) }
-                if case .apiKey(_, let baseURL) = credential, let host = baseURL.host { parts.append(host) }
-            }
-            if identity.isDefaultProfile { parts.append("Default") }
-        }
-        if let plan = identity.plan, !plan.isEmpty {
-            parts.append(plan.replacingOccurrences(of: "_", with: " ").capitalized)
-        }
-        if parts.count == 1, source == .defaultLogin {
-            parts.append(descriptor.vendor)
-        }
-        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }

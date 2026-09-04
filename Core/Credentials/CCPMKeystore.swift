@@ -1,33 +1,24 @@
 import Foundation
 
-/// Reads API keys ccpm stored with go-keyring: Keychain generic password,
-/// service `ccpm`, account = profile name. The item was created through the
-/// `security` CLI, so reading it back through `security` needs no prompt.
+/// Reads API keys ccpm stored with go-keyring: Keychain generic password, service `ccpm`,
+/// account = profile name. Created through the `security` CLI, so reading it back the same
+/// way needs no authorization prompt.
 nonisolated enum CCPMKeystore {
     nonisolated static let service = "ccpm"
     private static let hexPrefix = "go-keyring-encoded:"
     private static let base64Prefix = "go-keyring-base64:"
 
     nonisolated static func apiKey(profile: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", service, "-a", profile, "-w"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-        guard process.terminationStatus == 0 else { return nil }
-        let output = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let raw = String(data: output, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !raw.isEmpty
+        guard let data = SecurityCLI.findGenericPassword(service: service, account: profile),
+              let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty
         else { return nil }
-        return decode(raw)
+        let decoded = decode(raw)
+        return decoded.isEmpty ? nil : decoded
+    }
+
+    nonisolated static func credential(for profile: CCPMProfile) -> String? {
+        apiKey(profile: profile.name)
     }
 
     /// go-keyring wraps values as `go-keyring-base64:<b64>` (current) or

@@ -3,40 +3,48 @@ import AppKit
 
 // MARK: - Product accent colors
 //
-// Codex / Claude 识别色定义在 Asset Catalog (CodexAccent / ClaudeAccent)。
-// 浅色 #6C6C70 / #D97757,深色 #98989D / #E68A6E。
-// Xcode 自动从 .xcassets 生成 `Color.codexAccent` / `Color.claudeAccent`,直接使用即可。
+// Provider 识别色定义在 Asset Catalog (*Accent)。
+// Xcode 自动从 .xcassets 生成对应 Color,通过 QuotaApp.tintColor 统一访问。
 // 见 docs/03-设计风格.md §4.2。
-// MARK: - Provider accent
 
-extension Provider {
-    /// Brand tint used for tiles, legend chips and rings. Never used for
-    /// quota status colouring (see `statusColor`).
-    var accent: Color {
+extension QuotaApp {
+    var tintColor: Color {
         switch self {
-        case .codex: return .codexAccent
-        case .claude: return .claudeAccent
-        case .kimi: return kimiAccent
-        case .glm: return glmAccent
-        case .ollama: return ollamaAccent
+        case .codex: .codexAccent
+        case .claude: .claudeAccent
+        case .antigravity: .antigravityAccent
+        case .cursor: .gray
+        case .commandCode: Color(red: 24 / 255, green: 24 / 255, blue: 27 / 255)
+        case .kimi: Color(red: 0.15, green: 0.15, blue: 0.2)
+        case .glm: Color(red: 0.16, green: 0.42, blue: 0.94)
+        case .ollama: Color(red: 0.2, green: 0.2, blue: 0.2)
         }
     }
 }
 
-private let kimiAccent = quotaAdaptiveColor(
-    light: (red: 254, green: 96, blue: 60),   // #FE603C
-    dark: (red: 255, green: 128, blue: 96)
-)
+// MARK: - UsageApp 识别色与名称
 
-private let glmAccent = quotaAdaptiveColor(
-    light: (red: 232, green: 90, blue: 106),  // #E85A6A
-    dark: (red: 240, green: 122, blue: 136)
-)
+extension UsageApp {
+    var tintColor: Color {
+        switch self {
+        case .codex: .codexAccent
+        case .claude: .claudeAccent
+        case .cursor: .gray
+        case .pi: .piAccent
+        case .opencode: .opencodeAccent
+        }
+    }
 
-private let ollamaAccent = quotaAdaptiveColor(
-    light: (red: 96, green: 96, blue: 100),   // neutral grey
-    dark: (red: 170, green: 170, blue: 176)
-)
+    var displayName: String {
+        switch self {
+        case .codex: "Codex"
+        case .claude: "Claude Code"
+        case .cursor: "Cursor"
+        case .pi: "Pi"
+        case .opencode: "OpenCode"
+        }
+    }
+}
 
 // MARK: - Status color
 
@@ -68,7 +76,7 @@ private let quotaLowColor = quotaAdaptiveColor(
     dark: (red: 255, green: 161, blue: 95)    // #FFA15F
 )
 
-/// Pace "ahead of budget" tint: the warning amber, not the empty red.
+/// Pace line when usage runs ahead of an even burn rate; same hue as the low tier.
 let quotaPaceAheadColor = quotaAdaptiveColor(
     light: (red: 255, green: 122, blue: 47),
     dark: (red: 255, green: 161, blue: 95)
@@ -479,25 +487,6 @@ struct PopoverIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .frame(width: 26, height: 22)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(hovering && isEnabled ? Color.primary.opacity(0.08) : .clear)
-            )
-            .opacity(configuration.isPressed ? 0.5 : 1)
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .pointingHandCursor()
-    }
-}
-
-struct PopoverTextButtonStyle: ButtonStyle {
-    let width: CGFloat
-    @State private var hovering = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(width: width, height: 22)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(hovering && isEnabled ? Color.primary.opacity(0.08) : .clear)

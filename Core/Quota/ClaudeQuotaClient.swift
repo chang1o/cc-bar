@@ -25,64 +25,171 @@ nonisolated enum ClaudeQuotaClient {
             let msg = String(data: data, encoding: .utf8) ?? ""
             return .failure(.http(http.statusCode, msg))
         }
-        do {
-            return .success(try parse(data: data))
-        } catch let error as QuotaError {
-            return .failure(error)
-        } catch {
-            return .failure(.decode("\(error)"))
-        }
-    }
-
-    nonisolated static func parse(data: Data, now: Date = Date()) throws -> QuotaSnapshot {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw QuotaError.decode("claude: not a json object")
+            return .failure(.decode("not json object"))
         }
+        return .success(parse(root: root))
+    }
+
+    nonisolated static func parse(root: [String: Any]) -> QuotaSnapshot {
+        let legacySession = parseWindow(root["five_hour"] as? [String: Any])
+        let legacyWeekly = parseWindow(root["seven_day"] as? [String: Any])
+        let generic = parseGenericLimits(root["limits"] as? [[String: Any]] ?? [])
+
+        let session = merge(
+            preferred: generic.session,
+            fallback: legacySession.map {
+                QuotaLimit.standard(kind: .fiveHour, window: $0, displayName: "Current session")
+            }
+        )
+        let weekly = merge(
+            preferred: generic.weekly,
+            fallback: legacyWeekly.map {
+                QuotaLimit.standard(kind: .weekly, window: $0, displayName: "All models")
+            }
+        )
+
+        var modelLimits = generic.models
+        appendLegacyModel(
+            name: "Opus",
+            window: parseWindow(root["seven_day_opus"] as? [String: Any]),
+            to: &modelLimits
+        )
+        appendLegacyModel(
+            name: "Sonnet",
+            window: parseWindow(root["seven_day_sonnet"] as? [String: Any]),
+            to: &modelLimits
+        )
+
         return QuotaSnapshot(
-            provider: .claude,
-            primary: parseWindow(root["five_hour"] as? [String: Any], kind: .fiveHour),
-            secondary: parseWindow(root["seven_day"] as? [String: Any], kind: .weekly),
-            extra: [
-                parseWindow(root["seven_day_opus"] as? [String: Any], kind: .weeklyOpus),
-                parseWindow(root["seven_day_sonnet"] as? [String: Any], kind: .weeklySonnet),
-                parseExtraUsage(root["extra_usage"] as? [String: Any])
-            ].compactMap { $0 },
+            app: .claude,
+            primaryLimit: session ?? weekly,
+            secondaryLimit: session == nil ? nil : weekly,
+            auxiliaryLimits: parseExtraUsage(root["extra_usage"] as? [String: Any]).map { [$0] } ?? [],
+            modelLimits: modelLimits,
             planType: nil,
-            fetchedAt: now
+            fetchedAt: Date()
         )
     }
 
-    /// `extra_usage` is the pay-as-you-go overage cap. Amounts arrive in minor
-    /// units (cents), the same convention CodexBar follows for OAuth and Web.
-    nonisolated private static func parseExtraUsage(_ dict: [String: Any]?) -> QuotaWindow? {
-        guard let dict, (dict["is_enabled"] as? Bool) == true,
-              let limitMinor = QuotaJSON.double(dict["monthly_limit"]), limitMinor > 0
-        else { return nil }
-        let usedMinor = QuotaJSON.double(dict["used_credits"]) ?? 0
-        let used = usedMinor / 100
-        let limit = limitMinor / 100
-        let percent = QuotaJSON.double(dict["utilization"]) ?? (used / limit * 100)
-        let symbol = currencySymbol(dict["currency"] as? String)
-        return QuotaWindow(
-            kind: .extraUsage,
-            usedPercent: percent,
-            resetsAt: nil,
-            windowSeconds: nil,
-            detail: "\(symbol)\(String(format: "%.2f", used)) / \(symbol)\(String(format: "%.2f", limit))"
-        )
-    }
-
-    nonisolated private static func currencySymbol(_ code: String?) -> String {
-        switch code?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
-        case nil, "", "USD": return "$"
-        case "EUR": return "€"
-        case "GBP": return "£"
-        case "JPY", "CNY": return "¥"
-        case let other?: return other + " "
+    /// `extra_usage {is_enabled, monthly_limit, used_credits, utilization, currency}`:
+    /// pay-as-you-go credits on top of the plan, amounts in cents. Only shown when enabled.
+    nonisolated static func parseExtraUsage(_ dict: [String: Any]?) -> QuotaLimit? {
+        guard let dict, dict["is_enabled"] as? Bool == true else { return nil }
+        let limitCents = number(dict["monthly_limit"])
+        let usedCents = number(dict["used_credits"])
+        var utilization = number(dict["utilization"])
+        if utilization == nil, let limitCents, limitCents > 0, let usedCents {
+            utilization = usedCents / limitCents * 100
         }
+        guard let utilization else { return nil }
+        var detail: String?
+        if let usedCents, let limitCents {
+            detail = String(format: "$%.2f / $%.2f", usedCents / 100, limitCents / 100)
+        }
+        return QuotaLimit(
+            id: "extra-usage",
+            kind: .unknown,
+            displayName: "Extra usage",
+            window: QuotaWindow(usedPercent: max(0, min(100, utilization)), resetsAt: nil, windowSeconds: nil, detail: detail),
+            isActive: nil
+        )
     }
 
-    nonisolated private static func parseWindow(_ dict: [String: Any]?, kind: QuotaWindowKind) -> QuotaWindow? {
+    nonisolated private struct GenericLimits {
+        var session: QuotaLimit?
+        var weekly: QuotaLimit?
+        var models: [QuotaLimit] = []
+    }
+
+    nonisolated private static func parseGenericLimits(_ rows: [[String: Any]]) -> GenericLimits {
+        var result = GenericLimits()
+        for row in rows {
+            guard let kind = row["kind"] as? String,
+                  let percent = number(row["percent"])
+            else { continue }
+            let window = QuotaWindow(
+                usedPercent: percent,
+                resetsAt: parseResetDate(row["resets_at"]),
+                windowSeconds: kind == "session" ? 5 * 60 * 60 : 7 * 24 * 60 * 60
+            )
+            let isActive = row["is_active"] as? Bool
+            switch kind {
+            case "session":
+                result.session = .standard(
+                    kind: .fiveHour,
+                    window: window,
+                    displayName: "Current session",
+                    isActive: isActive
+                )
+            case "weekly_all":
+                result.weekly = .standard(
+                    kind: .weekly,
+                    window: window,
+                    displayName: "All models",
+                    isActive: isActive
+                )
+            case "weekly_scoped":
+                guard let scope = row["scope"] as? [String: Any] else { continue }
+                let model = scope["model"] as? [String: Any]
+                let surface = scope["surface"] as? [String: Any]
+                let name = nonEmpty(model?["display_name"] as? String)
+                    ?? nonEmpty(surface?["display_name"] as? String)
+                    ?? nonEmpty(surface?["name"] as? String)
+                    ?? nonEmpty(scope["surface"] as? String)
+                guard let name else { continue }
+                let rawID = nonEmpty(model?["id"] as? String)
+                    ?? nonEmpty(surface?["id"] as? String)
+                let limit = QuotaLimit.model(
+                    id: rawID,
+                    displayName: name,
+                    window: window,
+                    isActive: isActive
+                )
+                if let index = result.models.firstIndex(where: { $0.id == limit.id }) {
+                    result.models[index] = limit
+                } else {
+                    result.models.append(limit)
+                }
+            default:
+                continue
+            }
+        }
+        return result
+    }
+
+    nonisolated private static func merge(
+        preferred: QuotaLimit?,
+        fallback: QuotaLimit?
+    ) -> QuotaLimit? {
+        guard var preferred else { return fallback }
+        if preferred.window.resetsAt == nil {
+            preferred.window.resetsAt = fallback?.window.resetsAt
+        }
+        if preferred.window.windowSeconds == nil {
+            preferred.window.windowSeconds = fallback?.window.windowSeconds
+        }
+        return preferred
+    }
+
+    nonisolated private static func appendLegacyModel(
+        name: String,
+        window: QuotaWindow?,
+        to limits: inout [QuotaLimit]
+    ) {
+        guard let window else { return }
+        if let index = limits.firstIndex(where: {
+            $0.displayName?.localizedCaseInsensitiveContains(name) == true
+        }) {
+            if limits[index].window.resetsAt == nil {
+                limits[index].window.resetsAt = window.resetsAt
+            }
+            return
+        }
+        limits.append(.model(id: nil, displayName: name, window: window, isActive: nil))
+    }
+
+    nonisolated private static func parseWindow(_ dict: [String: Any]?) -> QuotaWindow? {
         guard let dict else { return nil }
         let used: Double = {
             if let d = dict["utilization"] as? Double { return d }
@@ -90,20 +197,33 @@ nonisolated enum ClaudeQuotaClient {
             return 0
         }()
         var resetsAt: Date?
-        if let s = dict["resets_at"] as? String {
+        resetsAt = parseResetDate(dict["resets_at"])
+        return QuotaWindow(usedPercent: used, resetsAt: resetsAt, windowSeconds: nil)
+    }
+
+    nonisolated private static func parseResetDate(_ value: Any?) -> Date? {
+        if let s = value as? String {
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let d = iso.date(from: s) {
-                resetsAt = d
-            } else {
-                iso.formatOptions = [.withInternetDateTime]
-                resetsAt = iso.date(from: s)
-            }
-        } else if let n = dict["resets_at"] as? Double {
-            resetsAt = Date(timeIntervalSince1970: n)
-        } else if let i = dict["resets_at"] as? Int {
-            resetsAt = Date(timeIntervalSince1970: Double(i))
+            if let date = iso.date(from: s) { return date }
+            iso.formatOptions = [.withInternetDateTime]
+            return iso.date(from: s)
         }
-        return QuotaWindow(kind: kind, usedPercent: used, resetsAt: resetsAt, windowSeconds: kind.defaultSeconds)
+        if let n = value as? Double { return Date(timeIntervalSince1970: n) }
+        if let i = value as? Int { return Date(timeIntervalSince1970: Double(i)) }
+        return nil
+    }
+
+    nonisolated private static func number(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        return nil
+    }
+
+    nonisolated private static func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 }

@@ -5,6 +5,7 @@ enum CodexAuth {
         try load(from: authFileURL())
     }
 
+    /// Parses any Codex `auth.json`, e.g. a ccpm profile's `CODEX_HOME/auth.json`.
     nonisolated static func load(from url: URL) throws -> CodexAccount {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw CredentialError.fileNotFound(url.path)
@@ -18,6 +19,26 @@ enum CodexAuth {
         let accessToken = tokens["access_token"] as? String
         let refreshToken = tokens["refresh_token"] as? String
         let lastRefresh = parseDate(root["last_refresh"])
+
+        // personal access token 形态：{"OPENAI_API_KEY": null, "personal_access_token": "at-..."}
+        // 这是 Codex 工作区访问令牌，不透明、无 JWT，仅当没有可用 OAuth access_token 时才采用，
+        // 避免覆盖正常登录态。身份（email/plan/account_id）留空，由首次取数从 wham/usage 响应回填。
+        if nonEmpty(accessToken) == nil,
+           let pat = nonEmpty(root["personal_access_token"] as? String) {
+            return CodexAccount(
+                email: nil,
+                planType: nil,
+                accountId: nil,
+                chatgptUserId: nil,
+                lastRefresh: lastRefresh,
+                expiredGuess: false,
+                rawClaimKeys: [],
+                accessToken: pat,
+                refreshToken: nil,
+                idToken: nil,
+                isPersonalAccessToken: true
+            )
+        }
         let idClaims = idToken.flatMap { JWT.decodePayload($0) }
         let accessClaims = accessToken.flatMap { JWT.decodePayload($0) }
 

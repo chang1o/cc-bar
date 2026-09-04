@@ -71,7 +71,7 @@ final class FloatingPanelController: NSObject {
             FloatingContentView(settings: settings)
                 .environment(appState)
         )
-        let hosting = NSHostingView(rootView: content)
+        let hosting = DraggableHostingView(rootView: content)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         // hosting view 的 layer 默认会用系统底色填满矩形 content,会在 SwiftUI 圆角外露出"直角边"。
         // 强制 layer 透明,圆角外的像素就由窗口的透明背景接管,NSPanel 也会按真实 alpha 画阴影。
@@ -174,5 +174,34 @@ final class FloatingPanelController: NSObject {
             y: screenFrame.maxY - size.height - defaultMargin
         )
         return CGRect(origin: origin, size: size)
+    }
+}
+
+/// 悬浮窗专用的 hosting view,负责让整块 HUD 可以拖动窗口。
+///
+/// 只靠 `NSPanel.isMovableByWindowBackground` 不够:窗口背景拖拽要求 hitTest 命中的
+/// view 的 `mouseDownCanMoveWindow` 为 true,而 `NSHostingView` 为了 SwiftUI 手势
+/// 自己实现了 `mouseDown:`,默认返回 false,并且会先把事件吃掉。
+/// 这里三管齐下:
+/// 1. `hitTest` 一律返回自身,阻止 SwiftUI 内部子 view(如 NSVisualEffectView)抢走事件
+/// 2. `mouseDownCanMoveWindow` 放行系统的背景拖拽
+/// 3. `mouseDown` 里直接 `performDrag`,不依赖系统那条路径
+///
+/// 代价:悬浮窗内所有 SwiftUI 点击/手势都失效。当前 HUD 只有 tile、进度条和文本,
+/// 没有可交互控件;后续若要加点击交互,需要改成只在局部区域放行拖拽。
+///
+/// 这里**刻意不做成泛型**。Swift 6.2.4 在 Release(-O)下编译泛型 NSHostingView 子类的
+/// 隐式 deinit 时,SILPerformanceInliner 的 isCallerAndCalleeLayoutConstraintsCompatible
+/// 会无限递归,直接把 swift-frontend 打崩(CI 上 exit 65)。唯一的调用方本来就只传 AnyView,
+/// 固定成 NSHostingView<AnyView> 既绕开编译器 bug,也没有任何功能损失。
+private final class DraggableHostingView: NSHostingView<AnyView> {
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }

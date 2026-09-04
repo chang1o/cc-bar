@@ -20,6 +20,9 @@ nonisolated struct ImportedCodexAccount: Sendable, Equatable, Codable, Identifia
     var planType: String?
     var visibleInPopover: Bool
     var addedAt: Date
+    /// 该账号凭据为 Codex personal access token（不透明令牌）。可空以兼容旧数据，nil 视为 false。
+    /// 为 true 时刷新走「不续期、直接用令牌」路径，见 [[AppState]].loadImportedCodexQuota。
+    var isPersonalAccessToken: Bool? = nil
 
     /// 从复合 id 还原出用于 `ChatGPT-Account-Id` HTTP header 的纯 account_id。
     var chatgptAccountId: String {
@@ -63,6 +66,22 @@ enum ImportedCodexPaste {
                 return "无法从 JWT 中提取 chatgpt_account_id（Cannot find chatgpt_account_id in token JWT）"
             }
         }
+    }
+
+    /// 识别 personal access token 形态的粘贴：
+    /// `{"OPENAI_API_KEY": null, "personal_access_token": "at-..."}`（或裸 `{"personal_access_token": "..."}`）。
+    /// 仅在没有 OAuth tokens 时才认作 PAT；命中返回令牌本身。
+    /// PAT 是不透明令牌，本地解不出 account_id，身份要在保存时联网取数解析，故走与 `parse` 不同的路径。
+    static func personalAccessToken(in text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        if root["tokens"] is [String: Any] || root["access_token"] is String { return nil }
+        guard let pat = (root["personal_access_token"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !pat.isEmpty
+        else { return nil }
+        return pat
     }
 
     /// 批量解析:顶层 JSON 为数组时逐元素解析,跳过失败项,至少有一项成功才返回 .success。

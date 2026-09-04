@@ -2,12 +2,41 @@ import SwiftUI
 
 // MARK: - SettingsRootView
 //
-// PrefsGroup + PrefsRow cards (system `Form .grouped` is too weak for this look).
-// Every provider-specific list is generated from `Provider.allCases`.
+// 见 docs/04-界面布局.md §4。
+// 使用 prototype 的 PrefsGroup + PrefsRow 卡片结构,放弃 Form .grouped。
 
 struct SettingsRootView: View {
     @Environment(AppState.self) private var appState
-    @State private var launchAtLoginError: String?
+    @State private var launchAtLoginMessage: String?
+    @State private var launchAtLoginMessageIsError = false
+    @State private var isRecalculatingUsage = false
+    @State private var pricingCatalogMessage: String?
+    @State private var pricingCatalogMessageIsError = false
+
+    /// 重算进度文案。`filesTotal == 0` 表示该数据源无总量概念（SQLite 按行回报）。
+    private func scanProgressText(_ progress: ScanProgress) -> String {
+        let appName: String
+        switch progress.app {
+        case .codex: appName = "Codex"
+        case .claude: appName = "Claude Code"
+        case .cursor: appName = "Cursor"
+        case .pi: appName = "Pi"
+        case .opencode: appName = "OpenCode"
+        }
+        if progress.filesTotal > 0 {
+            return tr(
+                "Scanning \(appName): \(progress.filesCompleted)/\(progress.filesTotal) files",
+                "正在扫描 \(appName)：\(progress.filesCompleted)/\(progress.filesTotal) 个文件"
+            )
+        }
+        return tr(
+            "Scanning \(appName): \(progress.linesParsed) items",
+            "正在扫描 \(appName)：已处理 \(progress.linesParsed) 条"
+        )
+    }
+
+    @State private var showCodexResetCreditsSheet = false
+    @State private var showCommandCodeSheet = false
 
     var body: some View {
         @Bindable var settings = SettingsStore.shared
@@ -15,6 +44,7 @@ struct SettingsRootView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 accountsGroup(settings: settings)
+                statsServicesGroup(settings: settings)
                 menuBarGroup(settings: settings)
                 floatingGroup(settings: settings)
                 refreshGroup(settings: settings)
@@ -25,31 +55,39 @@ struct SettingsRootView: View {
             .padding(.vertical, 20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .sheet(isPresented: $showCommandCodeSheet) {
+            CommandCodeCredentialSheet()
+        }
+        .sheet(isPresented: $showCodexResetCreditsSheet) {
+            CodexResetCreditsSheet(
+                accountTitle: appState.codexAccount?.email ?? "Codex",
+                fetchCredits: { await appState.fetchCodexResetCredits() }
+            )
+        }
+        .onAppear {
+            settings.syncLaunchAtLoginStatus()
+            if settings.launchAtLoginRequiresApproval {
+                launchAtLoginMessage = launchAtLoginApprovalMessage
+                launchAtLoginMessageIsError = false
+            } else {
+                launchAtLoginMessage = nil
+            }
+        }
     }
 
     // MARK: Accounts
 
     private func accountsGroup(settings: SettingsStore) -> some View {
         VStack(alignment: .leading, spacing: 16) {
+            // Primary accounts (auto-detected) plus every provider reachable through ccpm profiles.
             PrefsGroup(
                 title: "Accounts",
                 chinese: "账号",
                 desc: "Auto-detected on your Mac and from ccpm. Toggle which services to display.",
                 chineseDesc: "从本机登录与 ccpm 自动检测,可勾选要显示的服务"
             ) {
-                ForEach(Provider.allCases, id: \.self) { provider in
-                    let accounts = appState.accounts(for: provider)
-                    AccountRow(
-                        provider: provider,
-                        email: accounts.first(where: { $0.identity.email != nil })?.identity.email,
-                        plan: accounts.first(where: { $0.identity.plan != nil })?.identity.plan,
-                        accountCount: accounts.count,
-                        isAvailable: accounts.contains { $0.credential.canFetchQuota || appState.quotaState(for: $0).snapshot != nil },
-                        isOn: Binding(
-                            get: { settings.isEnabled(provider) },
-                            set: { setServiceEnabled(provider, enabled: $0) }
-                        )
-                    )
+                ForEach(QuotaProviderDescriptor.allProviders) { provider in
+                    accountRow(provider, settings: settings)
                 }
             }
 
@@ -62,6 +100,7 @@ struct SettingsRootView: View {
                 CCPMProfilesView()
             }
 
+            // 其他 Codex 账号（手动导入）
             PrefsGroup(
                 title: "Other Codex Accounts",
                 chinese: "其他 Codex 账号",
@@ -69,6 +108,174 @@ struct SettingsRootView: View {
                 chineseDesc: "粘贴 auth.json 添加更多 Codex 账号额度，仅查看，不会切换 CLI 登录状态"
             ) {
                 ImportedCodexAccountsView()
+            }
+        }
+    }
+
+    private func accountRow(_ provider: QuotaProviderDescriptor, settings: SettingsStore) -> some View {
+        let app = provider.app
+        let presence = accountPresence(for: app)
+        return AccountRow(
+            title: provider.title,
+            subtitle: provider.vendor,
+            tint: app.tintColor,
+            logoName: provider.logoName,
+            fallback: provider.fallback,
+            email: presence.email,
+            plan: presence.plan,
+            availability: presence.availability,
+            isOn: Binding(
+                get: { settings.isProviderEnabled(app) },
+                set: { setProviderEnabled($0, for: app, settings: settings) }
+            ),
+            accessory: accountAccessory(for: app),
+            detailOverride: presence.detailOverride
+        )
+    }
+
+    private struct AccountPresence {
+        var email: String?
+        var plan: String?
+        var availability: AccountAvailability
+        /// Replaces the email/plan line, used when the only accounts come from ccpm.
+        var detailOverride: String?
+    }
+
+    /// Primary credentials win; otherwise the row reports how many ccpm profiles back this provider.
+    private func accountPresence(for app: QuotaApp) -> AccountPresence {
+        let ccpmCount = appState.ccpmAccounts(for: app).count
+        var presence: AccountPresence
+        switch app {
+        case .codex:
+            presence = AccountPresence(
+                email: appState.codexAccount?.email,
+                plan: appState.codexAccount?.planType,
+                availability: appState.codexAccount == nil ? .notDetected : .connected
+            )
+        case .claude:
+            presence = AccountPresence(
+                email: appState.claudeAccount?.email,
+                plan: appState.claudeAccount?.subscriptionType,
+                availability: appState.claudeAccount == nil ? .notDetected : .connected
+            )
+        case .antigravity:
+            presence = AccountPresence(
+                email: appState.antigravityAccount?.email,
+                plan: appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType,
+                availability: appState.antigravityAccount == nil ? .notDetected : .connected
+            )
+        case .cursor:
+            presence = AccountPresence(
+                email: appState.cursorAccount?.email,
+                plan: appState.cursorQuota?.planType,
+                availability: appState.cursorAccount == nil ? .notDetected : .connected
+            )
+        case .commandCode:
+            presence = AccountPresence(
+                email: appState.commandCodeAccount?.login,
+                plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                availability: appState.commandCodeAccount == nil ? .notDetected : .connected
+            )
+        case .kimi, .glm, .ollama:
+            presence = AccountPresence(email: nil, plan: nil, availability: .notDetected)
+        }
+        guard presence.availability == .notDetected else { return presence }
+        if ccpmCount > 0 {
+            presence.availability = .connected
+            presence.detailOverride = ccpmCount == 1
+                ? tr("1 ccpm profile", "1 个 ccpm profile")
+                : tr("\(ccpmCount) ccpm profiles", "\(ccpmCount) 个 ccpm profile")
+        } else if app == .kimi || app == .glm || app == .ollama {
+            presence.detailOverride = tr(
+                "Add a ccpm profile with --provider \(app.rawValue)",
+                "用 ccpm add --provider \(app.rawValue) 添加 profile"
+            )
+        }
+        return presence
+    }
+
+    private func accountAccessory(for app: QuotaApp) -> AnyView? {
+        switch app {
+        case .codex:
+            return appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
+        case .commandCode:
+            return AnyView(commandCodeCredentialButton)
+        case .claude, .antigravity, .cursor, .kimi, .glm, .ollama:
+            return nil
+        }
+    }
+
+    /// Codex / Claude are always fetched; every other provider only enters the refresh plan once enabled.
+    private func setProviderEnabled(_ enabled: Bool, for app: QuotaApp, settings: SettingsStore) {
+        settings.setProviderEnabled(enabled, for: app)
+        guard enabled, app != .codex, app != .claude else { return }
+        Task {
+            await appState.refreshQuotas(reason: .userInitiated)
+        }
+    }
+
+    private var commandCodeCredentialButton: some View {
+        Button {
+            showCommandCodeSheet = true
+        } label: {
+            Image(systemName: "key")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(tr("Command Code credentials", "Command Code 凭据设置"))
+    }
+
+    /// 主账号「使用限额重置」入口(🎁),点击打开弹窗。
+    private var codexResetCreditsButton: some View {
+        Button {
+            showCodexResetCreditsSheet = true
+        } label: {
+            Image(systemName: "gift")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(tr("Reset credits", "使用限额重置"))
+    }
+
+    // MARK: Stats services
+
+    private func statsServicesGroup(settings: SettingsStore) -> some View {
+        PrefsGroup(
+            title: "Stats services",
+            chinese: "统计服务",
+            desc: "Choose which services count in usage statistics.",
+            chineseDesc: "勾选要计入用量统计的服务,关闭后从统计中隐藏"
+        ) {
+            // Cursor 没有本地日志，但它的 Dashboard 日桶在统计页有独立入口；默认仍关闭。
+            // Stats 与额度卡片可独立显示，用户开启任一入口后才进入远端刷新链路。
+            // 账号未登录时不额外提示或置灰，与 Pi / OpenCode 保持同一套渲染规则；
+            // 统计页由 SettingsStore.isUsageServiceEffectivelyVisible 兜底不渲染空服务行。
+            ForEach(UsageApp.allCases, id: \.self) { app in
+                PrefsRow(
+                    label: app.displayName,
+                    chinese: app.displayName,
+                    leading: AnyView(ServiceMark(color: app.tintColor, size: 8))
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { settings.isUsageServiceVisible(app) },
+                        set: { visible in
+                            settings.setUsageServiceVisible(visible, for: app)
+                            guard app == .cursor else { return }
+                            if visible {
+                                Task {
+                                    await appState.refreshQuotas(reason: .userInitiated)
+                                }
+                            }
+                        }
+                    ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(.green)
+                }
             }
         }
     }
@@ -82,16 +289,18 @@ struct SettingsRootView: View {
             desc: "What appears next to the icon.",
             chineseDesc: "图标旁显示什么"
         ) {
-            ForEach(Provider.allCases, id: \.self) { provider in
-                PrefsRow(label: "Show \(provider.displayName)", chinese: "显示 \(provider.displayName)") {
+            ForEach(QuotaProviderDescriptor.menuBarProviders) { provider in
+                PrefsRow(
+                    label: "Show \(provider.title)",
+                    chinese: "显示 \(provider.title)"
+                ) {
                     Toggle("", isOn: Binding(
-                        get: { settings.menuBarProviders.contains(provider) },
-                        set: { settings.setMenuBar(provider, $0) }
+                        get: { settings.isProviderShownInMenuBar(provider.app) },
+                        set: { settings.setProviderShownInMenuBar($0, for: provider.app) }
                     ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
-                    .disabled(!settings.isEnabled(provider) || !appState.presentProviders.contains(provider))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(.green)
                 }
             }
             PrefsRow(
@@ -131,18 +340,12 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Quota period",
                 chinese: "额度周期",
-                desc: "Which window to display: primary (5H, monthly for Ollama) or secondary (WK).",
-                chineseDesc: "显示主窗口(5H,Ollama 为月)还是副窗口(WK)"
+                desc: "Which window to display in the menu bar.",
+                chineseDesc: "菜单栏显示哪个窗口"
             ) {
-                Picker("", selection: Binding(
-                    get: { settings.menuBarWindow },
-                    set: { newValue in
-                        settings.menuBarWindow = newValue
-                        FloatingPanelController.shared.sync()
-                    }
-                )) {
-                    Text(tr("Primary · 5H", "主窗口 · 5H")).tag(MenuBarWindowChoice.primary)
-                    Text(tr("Secondary · WK", "副窗口 · WK")).tag(MenuBarWindowChoice.secondary)
+                Picker("", selection: Binding(get: { settings.menuBarWindow }, set: { settings.menuBarWindow = $0 })) {
+                    Text(tr("Main", "主要")).tag(MenuBarWindowChoice.primary)
+                    Text(tr("Weekly", "周额度")).tag(MenuBarWindowChoice.weekly)
                     Text(tr("Both", "都显示")).tag(MenuBarWindowChoice.both)
                 }
                 .labelsHidden()
@@ -173,19 +376,22 @@ struct SettingsRootView: View {
                 .toggleStyle(.switch)
                 .tint(.green)
             }
-            ForEach(Provider.allCases, id: \.self) { provider in
-                PrefsRow(label: "Show \(provider.displayName) row", chinese: "显示 \(provider.displayName) 行") {
+            ForEach(QuotaProviderDescriptor.floatingProviders) { provider in
+                PrefsRow(
+                    label: "Show \(provider.title) row",
+                    chinese: "显示 \(provider.title) 行"
+                ) {
                     Toggle("", isOn: Binding(
-                        get: { settings.floatingProviders.contains(provider) },
+                        get: { settings.isProviderShownInFloatingHUD(provider.app) },
                         set: { newValue in
-                            settings.setFloating(provider, newValue)
+                            settings.setProviderShownInFloatingHUD(newValue, for: provider.app)
                             FloatingPanelController.shared.sync()
                         }
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
-                    .disabled(!settings.floatingEnabled || !settings.isEnabled(provider) || !appState.presentProviders.contains(provider))
+                    .disabled(!settings.floatingEnabled)
                 }
             }
         }
@@ -250,18 +456,26 @@ struct SettingsRootView: View {
                 .fixedSize()
             }
             PrefsRow(label: "Last refresh", chinese: "上次刷新") {
-                Text(lastRefreshText)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                HStack(spacing: 6) {
+                    if appState.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(lastRefreshText)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
             PrefsRow(
                 label: "Quota notifications",
                 chinese: "额度通知",
-                desc: "Notify at 20% left, when a window is exhausted, and when a weekly window resets.",
-                chineseDesc: "剩余 20%、用尽以及周额度重置时通知"
+                desc: "Notify at 10% left, when a window is exhausted, and when it resets.",
+                chineseDesc: "剩余 10%、用尽以及窗口重置时通知"
             ) {
-                Toggle("", isOn: Binding(get: { settings.quotaNotifications }, set: { settings.quotaNotifications = $0 }))
+                Toggle("", isOn: Binding(
+                    get: { settings.quotaNotificationsEnabled },
+                    set: { settings.quotaNotificationsEnabled = $0 }
+                ))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
@@ -276,6 +490,75 @@ struct SettingsRootView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
+            }
+            PrefsRow(
+                label: "Price catalog",
+                chinese: "价格目录",
+                desc: "Fetch the latest Standard and Fast pricing. Applies to new records only; use Recalculate to reprice history.",
+                chineseDesc: "获取最新的 Standard 与 Fast 模型价格；只对新记录生效，历史费用需用「重新计算」对齐"
+            ) {
+                HStack(spacing: 8) {
+                    if let pricingCatalogMessage {
+                        Text(pricingCatalogMessage)
+                            .font(.system(size: 11))
+                            .foregroundStyle(pricingCatalogMessageIsError ? Color.red : Color.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Button {
+                        pricingCatalogMessage = nil
+                        Task {
+                            let succeeded = await appState.usageService.refreshPricingCatalog()
+                            pricingCatalogMessageIsError = !succeeded
+                            pricingCatalogMessage = succeeded
+                                ? tr("Updated", "已更新")
+                                : tr("Update failed", "更新失败")
+                        }
+                    } label: {
+                        if appState.usageService.isRefreshingPricingCatalog {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(tr("Update", "更新"))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(appState.usageService.isRefreshingPricingCatalog)
+                }
+            }
+            PrefsRow(
+                label: "Recalculate usage",
+                chinese: "重新计算用量",
+                desc: "Rescan all local logs, fill in missing prices, and recompute every cost with the current pricing table.",
+                chineseDesc: "重新扫描全部本地日志，补齐缺价并按当前定价表重算所有费用"
+            ) {
+                HStack(spacing: 8) {
+                    if let progress = appState.usageService.scanProgress, isRecalculatingUsage {
+                        Text(scanProgressText(progress))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                    Button {
+                        isRecalculatingUsage = true
+                        Task {
+                            await appState.usageService.forceRescan()
+                            isRecalculatingUsage = false
+                        }
+                    } label: {
+                        if isRecalculatingUsage {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(tr("Recalculate", "重新计算"))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isRecalculatingUsage)
+                }
             }
         }
     }
@@ -300,8 +583,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Privacy mode",
                 chinese: "隐私模式",
-                desc: "Hide emails and account names in the popover.",
-                chineseDesc: "弹出窗口中隐藏邮箱与账号名称"
+                desc: "Hide provider emails in the popover and names for other Codex accounts.",
+                chineseDesc: "弹出窗口中隐藏 Provider 邮箱,并隐藏 Codex 副账号名称"
             ) {
                 Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
                     .labelsHidden()
@@ -314,9 +597,16 @@ struct SettingsRootView: View {
                     set: { newValue in
                         do {
                             try settings.setLaunchAtLogin(newValue)
-                            launchAtLoginError = nil
+                            if settings.launchAtLoginRequiresApproval {
+                                launchAtLoginMessage = launchAtLoginApprovalMessage
+                                launchAtLoginMessageIsError = false
+                            } else {
+                                launchAtLoginMessage = nil
+                            }
                         } catch {
-                            launchAtLoginError = error.localizedDescription
+                            settings.syncLaunchAtLoginStatus()
+                            launchAtLoginMessage = launchAtLoginErrorMessage(error)
+                            launchAtLoginMessageIsError = true
                         }
                     }
                 ))
@@ -324,13 +614,17 @@ struct SettingsRootView: View {
                 .toggleStyle(.switch)
                 .tint(.green)
             }
-            if let launchAtLoginError {
-                PrefsRow(label: "Error", chinese: "错误") {
-                    Text(launchAtLoginError)
+            if let launchAtLoginMessage {
+                PrefsRow(
+                    label: launchAtLoginMessageIsError ? "Error" : "Status",
+                    chinese: launchAtLoginMessageIsError ? "错误" : "状态"
+                ) {
+                    Text(launchAtLoginMessage)
                         .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                        .frame(maxWidth: 200, alignment: .trailing)
+                        .foregroundStyle(launchAtLoginMessageIsError ? Color.red : Color.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(4)
+                        .frame(maxWidth: 360, alignment: .trailing)
                 }
             }
             PrefsRow(label: "Version", chinese: "版本") {
@@ -339,13 +633,109 @@ struct SettingsRootView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+            PrefsRow(
+                label: "Check for updates",
+                chinese: "检查更新",
+                desc: "Fetch the newest release info from GitHub.",
+                chineseDesc: "从 GitHub 获取最新版本信息"
+            ) {
+                HStack(spacing: 8) {
+                    if let updateStatusText {
+                        Text(updateStatusText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(updateStatusIsError ? Color.red : (updateStatusHasNewVersion ? Color.accentColor : Color.secondary))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Button {
+                        if updateStatusHasNewVersion {
+                            appState.openReleasePage()
+                        } else {
+                            Task { await appState.checkForUpdates() }
+                        }
+                    } label: {
+                        if isUpdateCheckInProgress {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(updateButtonTitle)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isUpdateCheckInProgress)
+                }
+            }
+            PrefsRow(label: "Check at launch", chinese: "启动时自动检查") {
+                Toggle("", isOn: Binding(
+                    get: { settings.autoCheckForUpdates },
+                    set: { settings.autoCheckForUpdates = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(.green)
+            }
         }
+    }
+
+    // MARK: Update check helpers
+
+    private var isUpdateCheckInProgress: Bool {
+        appState.updateStatus == .checking
+    }
+
+    private var updateStatusHasNewVersion: Bool {
+        if case .updateAvailable = appState.updateStatus { return true }
+        return false
+    }
+
+    private var updateStatusIsError: Bool {
+        appState.updateStatus == .failed || appState.updateStatus == .rateLimited
+    }
+
+    private var updateStatusText: String? {
+        switch appState.updateStatus {
+        case .idle, .checking:
+            return nil
+        case .upToDate(let latest):
+            return tr("Up to date (\(latest))", "已是最新（\(latest)）")
+        case .updateAvailable(let version):
+            return tr("Version \(version) is available", "发现新版本 \(version)")
+        case .failed:
+            return tr("Check failed", "检查失败")
+        case .rateLimited:
+            return tr("GitHub rate limit reached, try again later", "GitHub 暂时限流，请稍后再试")
+        }
+    }
+
+    private var updateButtonTitle: String {
+        updateStatusHasNewVersion
+            ? tr("Download", "前往下载")
+            : tr("Check", "检查")
+    }
+
+    private var launchAtLoginApprovalMessage: String {
+        tr(
+            "Approve CCBar in System Settings > General > Login Items & Extensions.",
+            "请在「系统设置 > 通用 > 登录项与扩展」中允许 CCBar。"
+        )
+    }
+
+    private func launchAtLoginErrorMessage(_ error: Error) -> String {
+        let description = (error as NSError).localizedDescription
+        if description.localizedCaseInsensitiveContains("operation not permitted") {
+            return tr(
+                "macOS rejected this change. Export a signed CCBar.app, move it to /Applications, launch it there, then try again.",
+                "macOS 拒绝了这次更改。请导出签名后的 CCBar.app，拖到 /Applications 后从那里启动，再重试。"
+            )
+        }
+        return description
     }
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text(tr("cc-bar \(appVersion) · quotas for every coding provider you use",
-                    "CCBar \(appVersion) · 多 Provider 额度与本地用量统计"))
+            Text(tr("CCBar \(shortVersion) · multi-service quota & local usage stats",
+                    "CCBar \(shortVersion) · 多服务额度与本地用量统计"))
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -355,19 +745,10 @@ struct SettingsRootView: View {
 
     // MARK: Helpers
 
-    private func setServiceEnabled(_ provider: Provider, enabled: Bool) {
-        SettingsStore.shared.setEnabled(provider, enabled)
-        FloatingPanelController.shared.sync()
-
-        guard enabled else { return }
-        Task {
-            await appState.refreshQuotas(reason: .userInitiated)
-            await appState.refreshServiceStatus()
-        }
-    }
-
     private var lastRefreshText: String {
-        let latest = appState.accounts.compactMap { appState.quotaState(for: $0).refresh.lastSuccessAt }.max()
+        let latest = QuotaApp.allCases.compactMap {
+            appState.refreshState(for: $0).lastSuccessAt
+        }.max()
         guard let latest else { return "—" }
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "HH:mm:ss"
@@ -379,11 +760,16 @@ struct SettingsRootView: View {
         let info = Bundle.main.infoDictionary
         return info?["CFBundleShortVersionString"] as? String ?? "0.0"
     }
+
+    private var shortVersion: String {
+        let info = Bundle.main.infoDictionary
+        return info?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
 }
 
 // MARK: - PrefsGroup
 
-struct PrefsGroup<Content: View>: View {
+private struct PrefsGroup<Content: View>: View {
     let title: String
     let chinese: String
     var desc: String? = nil
@@ -416,15 +802,17 @@ struct PrefsGroup<Content: View>: View {
 
 // MARK: - PrefsRow
 
-struct PrefsRow<Trailing: View>: View {
+private struct PrefsRow<Trailing: View>: View {
     let label: String
     let chinese: String
+    var leading: AnyView? = nil
     var desc: String? = nil
     var chineseDesc: String? = nil
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
+            if let leading { leading }
             VStack(alignment: .leading, spacing: 1) {
                 Text(tr(label, chinese))
                     .font(.system(size: 12.5))
@@ -445,31 +833,29 @@ struct PrefsRow<Trailing: View>: View {
 // MARK: - AccountRow
 
 private struct AccountRow: View {
-    let provider: Provider
+    let title: String
+    let subtitle: String
+    let tint: Color
+    let logoName: String
+    let fallback: String
     let email: String?
     let plan: String?
-    let accountCount: Int
-    let isAvailable: Bool
+    let availability: AccountAvailability
     @Binding var isOn: Bool
-
-    private var descriptor: ProviderDescriptor { provider.descriptor }
+    /// 可选的额外控件(如 Codex 主账号的重置次数入口),放在状态徽标与开关之间。
+    var accessory: AnyView? = nil
+    /// Replaces the email/plan line when set (ccpm-only providers, hints).
+    var detailOverride: String? = nil
 
     var body: some View {
         HStack(spacing: 11) {
-            ServiceTile(
-                logoName: descriptor.logoName,
-                fallback: descriptor.fallbackGlyph,
-                tint: provider.accent,
-                size: 28,
-                logoSize: 16,
-                cornerRadius: 7
-            )
+            ServiceTile(logoName: logoName, fallback: fallback, tint: tint, size: 28, logoSize: 16, cornerRadius: 7)
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(descriptor.displayName)
+                    Text(title)
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("· \(descriptor.vendor)")
+                    Text("· \(subtitle)")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
@@ -483,11 +869,12 @@ private struct AccountRow: View {
             HStack(spacing: 8) {
                 statusBadge
 
+                if let accessory { accessory }
+
                 Toggle("", isOn: $isOn)
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
-                    .disabled(!isAvailable)
             }
         }
         .padding(.vertical, 12)
@@ -495,39 +882,52 @@ private struct AccountRow: View {
     }
 
     private var detailText: String {
-        var parts: [String] = []
-        if let email, !SettingsStore.shared.privacyMode { parts.append(email) }
-        if let plan, !plan.isEmpty { parts.append(plan) }
-        if accountCount > 1 {
-            parts.append(tr("\(accountCount) accounts", "\(accountCount) 个账号"))
+        if let detailOverride { return detailOverride }
+        if let email {
+            if let plan, !plan.isEmpty {
+                return "\(email) · \(plan)"
+            }
+            return email
         }
-        if parts.isEmpty {
-            return isAvailable ? tr("Detected", "已识别") : tr("Not detected", "未识别")
+        switch availability {
+        case .connected: return plan ?? tr("Connected", "已连接")
+        case .notDetected: return tr("Not detected", "未检测到")
         }
-        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder
     private var statusBadge: some View {
-        if isAvailable {
+        if availability == .connected {
             HStack(spacing: 4) {
                 Circle().fill(Color.green).frame(width: 6, height: 6)
-                Text(email != nil ? tr("Connected", "已连接") : tr("Available", "可用"))
+                Text(tr("Connected", "已连接"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.green)
             }
         } else {
             HStack(spacing: 4) {
-                Circle().fill(Color.orange).frame(width: 6, height: 6)
-                Text(tr("Not detected", "未识别"))
+                Circle().fill(availability == .notDetected ? Color.orange : Color.secondary).frame(width: 6, height: 6)
+                Text(statusText)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(availability == .notDetected ? Color.orange : Color.secondary)
             }
+        }
+    }
+
+    private var statusText: String {
+        switch availability {
+        case .connected: tr("Connected", "已连接")
+        case .notDetected: tr("Not detected", "未检测到")
         }
     }
 }
 
-// MARK: - Bilingual display names for interval enums
+private enum AccountAvailability: Equatable {
+    case connected
+    case notDetected
+}
+
+// MARK: - Bilingual display names for existing enums
 
 extension QuotaIntervalChoice {
     @MainActor

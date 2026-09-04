@@ -119,38 +119,56 @@ enum ClaudeCLIFallbackQuotaClient {
             return .failure(.decode("claude cli usage output missing Current session"))
         }
 
+        let sessionWindow = makeWindow(
+            percentLeft: sessionLeft,
+            resetText: extractReset(after: ["Current session"], in: clean),
+            windowSeconds: 5 * 60 * 60
+        )
+        let weeklyWindow = makeWindow(
+            percentLeft: weeklyLeft,
+            resetText: extractReset(after: ["Current week (all models)", "Current week"], in: clean),
+            windowSeconds: 7 * 24 * 60 * 60
+        )
+        var modelLimits: [QuotaLimit] = []
+        if let opus = makeWindow(
+            percentLeft: opusLeft,
+            resetText: extractReset(after: ["Current week (Opus)"], in: clean),
+            windowSeconds: 7 * 24 * 60 * 60
+        ) {
+            modelLimits.append(.model(id: nil, displayName: "Opus", window: opus, isActive: nil))
+        }
+        if let sonnet = makeWindow(
+            percentLeft: sonnetLeft,
+            resetText: extractReset(after: ["Current week (Sonnet only)", "Current week (Sonnet)"], in: clean),
+            windowSeconds: 7 * 24 * 60 * 60
+        ) {
+            modelLimits.append(.model(id: nil, displayName: "Sonnet", window: sonnet, isActive: nil))
+        }
+
         return .success(QuotaSnapshot(
-            provider: .claude,
-            primary: makeWindow(kind: .fiveHour,
-                                percentLeft: sessionLeft,
-                                resetText: extractReset(after: ["Current session"], in: clean)),
-            secondary: makeWindow(kind: .weekly,
-                                  percentLeft: weeklyLeft,
-                                  resetText: extractReset(after: ["Current week (all models)", "Current week"], in: clean)),
-            extra: [
-                makeWindow(kind: .weeklyOpus,
-                           percentLeft: opusLeft,
-                           resetText: extractReset(after: ["Current week (Opus)"], in: clean)),
-                makeWindow(kind: .weeklySonnet,
-                           percentLeft: sonnetLeft,
-                           resetText: extractReset(after: ["Current week (Sonnet only)", "Current week (Sonnet)"], in: clean))
-            ].compactMap { $0 },
+            app: .claude,
+            primaryLimit: sessionWindow.map {
+                .standard(kind: .fiveHour, window: $0, displayName: "Current session")
+            },
+            secondaryLimit: weeklyWindow.map {
+                .standard(kind: .weekly, window: $0, displayName: "All models")
+            },
+            modelLimits: modelLimits,
             planType: nil,
             fetchedAt: Date()
         ))
     }
 
     nonisolated private static func makeWindow(
-        kind: QuotaWindowKind,
         percentLeft: Int?,
-        resetText: String?
+        resetText: String?,
+        windowSeconds: Int
     ) -> QuotaWindow? {
         guard let percentLeft else { return nil }
         return QuotaWindow(
-            kind: kind,
             usedPercent: max(0, min(100, 100 - Double(percentLeft))),
             resetsAt: parseResetDate(resetText),
-            windowSeconds: kind.defaultSeconds
+            windowSeconds: windowSeconds
         )
     }
 

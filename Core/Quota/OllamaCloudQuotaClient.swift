@@ -1,8 +1,8 @@
 import Foundation
 
-/// Ollama Cloud exposes no quota API; the numbers live on the signed-in
-/// settings page. We fetch it with a user-pasted `Cookie:` header and parse
-/// the "Included usage" / "Monthly usage" / "Weekly usage" blocks.
+/// Ollama Cloud exposes no quota API; the numbers live on the signed-in settings page.
+/// We fetch it with a user-pasted `Cookie:` header and parse the "Included usage" /
+/// "Monthly usage" / "Weekly usage" blocks.
 nonisolated enum OllamaCloudQuotaClient {
     nonisolated static let settingsURL = URL(string: "https://ollama.com/settings")!
 
@@ -67,30 +67,36 @@ nonisolated enum OllamaCloudQuotaClient {
             throw QuotaError.decode("ollama: usage blocks not found on settings page")
         }
 
-        let monthlyWindow = monthly.map {
-            QuotaWindow(kind: .monthly, usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: nil, detail: $0.detail)
+        let monthlyLimit = monthly.map {
+            QuotaLimit(
+                id: "monthly",
+                kind: .unknown,
+                displayName: "Monthly",
+                window: QuotaWindow(usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: nil, detail: $0.detail),
+                isActive: nil
+            )
         }
-        let sessionWindow = session.map {
-            QuotaWindow(kind: .fiveHour, usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: 5 * 3600, detail: nil)
+        let sessionLimit = session.map {
+            QuotaLimit.standard(
+                kind: .fiveHour,
+                window: QuotaWindow(usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: 5 * 3600)
+            )
         }
-        let weeklyWindow = weekly.map {
-            QuotaWindow(kind: .weekly, usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: 7 * 86400, detail: nil)
+        let weeklyLimit = weekly.map {
+            QuotaLimit.standard(
+                kind: .weekly,
+                window: QuotaWindow(usedPercent: $0.usedPercent, resetsAt: $0.resetsAt, windowSeconds: 7 * 86400)
+            )
         }
 
-        var extra: [QuotaWindow] = []
-        let primary: QuotaWindow?
-        if let monthlyWindow {
-            primary = monthlyWindow
-            if let sessionWindow { extra.append(sessionWindow) }
-        } else {
-            primary = sessionWindow
-        }
+        let primary = monthlyLimit ?? sessionLimit
+        let auxiliary = (monthlyLimit != nil ? sessionLimit : nil).map { [$0] } ?? []
 
         return QuotaSnapshot(
-            provider: .ollama,
-            primary: primary,
-            secondary: weeklyWindow,
-            extra: extra,
+            app: .ollama,
+            primaryLimit: primary ?? weeklyLimit,
+            secondaryLimit: primary == nil ? nil : weeklyLimit,
+            auxiliaryLimits: auxiliary,
             planType: planName(html),
             fetchedAt: now
         )
@@ -123,7 +129,7 @@ nonisolated enum OllamaCloudQuotaClient {
             return (value, nil)
         }
         let amount = #"((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)"#
-        if let regex = try? NSRegularExpression(pattern: #"\$\#(amount)\s+of\s+\$\#(amount)\s+used"#, options: [.caseInsensitive]) {
+        if let regex = try? NSRegularExpression(pattern: #"\$"# + amount + #"\s+of\s+\$"# + amount + #"\s+used"#, options: [.caseInsensitive]) {
             let range = NSRange(text.startIndex..<text.endIndex, in: text)
             if let match = regex.firstMatch(in: text, range: range), match.numberOfRanges > 2,
                let usedRange = Range(match.range(at: 1), in: text),
@@ -149,7 +155,7 @@ nonisolated enum OllamaCloudQuotaClient {
     nonisolated private static func planName(_ html: String) -> String? {
         let patterns = [
             #"Included usage\s*</span>\s*<span[^>]*>([^<]+)</span"#,
-            #"Cloud Usage\s*</span>\s*<span[^>]*>([^<]+)</span>"#
+            #"Cloud Usage\s*</span>\s*<span[^>]*>([^<]+)</span>"#,
         ]
         for pattern in patterns {
             if let raw = firstCapture(in: html, pattern: pattern, options: [.dotMatchesLineSeparators]) {

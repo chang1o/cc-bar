@@ -10,7 +10,7 @@ import Security
 // 用 SecItem 直接读写本进程自己的 Keychain 条目,不弹用户授权(与读 Claude/Codex CLI 凭据的
 // `/usr/bin/security` 通道完全分离)。
 
-struct ImportedCodexTokens: Sendable, Equatable, Codable {
+nonisolated struct ImportedCodexTokens: Sendable, Equatable, Codable {
     var accessToken: String
     var refreshToken: String?
     var idToken: String?
@@ -23,7 +23,7 @@ enum ImportedCodexStore {
 
     // MARK: - 元数据 (JSON)
 
-    private struct Payload: Codable, Equatable {
+    nonisolated private struct Payload: Codable, Equatable {
         var version: Int = 1
         var accounts: [ImportedCodexAccount] = []
     }
@@ -98,6 +98,17 @@ enum ImportedCodexStore {
         guard addStatus == errSecSuccess else {
             throw KeychainError.unexpected(addStatus)
         }
+    }
+
+    /// 镜像主账号时只在内容变化后写 Keychain，避免每轮额度刷新重复 SecItemUpdate。
+    @discardableResult
+    nonisolated static func saveTokensIfChanged(
+        _ tokens: ImportedCodexTokens,
+        accountId: String
+    ) throws -> Bool {
+        if loadTokens(accountId: accountId) == tokens { return false }
+        try saveTokens(tokens, accountId: accountId)
+        return true
     }
 
     nonisolated static func deleteTokens(accountId: String) {

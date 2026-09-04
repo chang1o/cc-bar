@@ -1,9 +1,28 @@
 import Foundation
+import os
 
-enum CodexTokenRefresher {
+/// Codex 凭据续期。
+///
+/// 与 Claude 侧不同,cc-bar **保留** Codex 的刷新能力:OpenAI 侧没有实测到
+/// "第三方刷新把 CLI 挤下线"的问题,而且 OpenUsage / CodexBar / cc-switch
+/// 也都在刷新并回写 `~/.codex/auth.json`。
+///
+/// 但 OpenAI 同样有 refresh_token 重用检测(`refresh_token_reused`),所以这里
+/// 装了三道防撞:
+/// 1. `Coordinator` 进程内串行 + 去重,避免 AppState 的多个入口同时拿同一份
+///    refresh_token 各发一次请求;
+/// 2. 发请求前 **重读存储**——`codex` CLI 可能已经自行轮换过,拿我们手里那份
+///    陈腐副本去刷就会撞上重用检测;
+/// 3. 写回失败不吞掉:重试一次,仍失败则大声记日志并继续返回本次刷到的 token
+///    (它这次会话仍然可用),避免"服务端已轮换、盘上还留着废票"的静默损坏。
+nonisolated enum CodexTokenRefresher {
+    private static let log = Logger(subsystem: "com.cc-bar", category: "codex-refresh")
+
     static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     static let tokenEndpoint = URL(string: "https://auth.openai.com/oauth/token")!
     static let refreshSkew: TimeInterval = 300
+    /// 写回失败后的重试间隔。
+    static let writeBackRetryDelay: TimeInterval = 0.2
 
     struct Refreshed: Sendable {
         var accessToken: String
@@ -15,10 +34,29 @@ enum CodexTokenRefresher {
     /// - `codexAuthJSON`:回写 `~/.codex/auth.json`,默认账号(与 codex CLI 共享)用。
     /// - `importedAccount(id:)`:回写到 Keychain (ImportedCodexStore),用户手动导入的副账号用,
     ///   绝不触碰 `~/.codex/auth.json`。
-    enum WriteBack: Sendable {
+    enum WriteBack: Sendable, Hashable {
         case codexAuthJSON
-        case codexAuthJSONAt(path: String)
         case importedAccount(id: String)
+        /// A ccpm Codex profile's own `auth.json` (`CODEX_HOME` of that profile).
+        case codexAuthJSONAt(path: String)
+
+        /// 去重键。不同导入账号必须各自独立,不能合流到同一次刷新。
+        var coordinationKey: String {
+            switch self {
+            case .codexAuthJSON: return "auth.json"
+            case .importedAccount(let id): return "imported:\(id)"
+            case .codexAuthJSONAt(let path): return "auth.json:\(path)"
+            }
+        }
+
+        /// File-backed write-back targets share one reader / writer.
+        fileprivate var authFileURL: URL? {
+            switch self {
+            case .codexAuthJSON: return CodexAuth.authFileURL()
+            case .codexAuthJSONAt(let path): return URL(fileURLWithPath: path)
+            case .importedAccount: return nil
+            }
+        }
     }
 
     /// 若 access_token 即将过期则用 refresh_token 续期并按 `writeBack` 指示原子落盘。
@@ -55,7 +93,11 @@ enum CodexTokenRefresher {
             return .failure(.tokenRefreshFailed("no refresh_token"))
         }
         do {
-            let r = try await refresh(using: refreshToken, writeBack: writeBack)
+            let r = try await Coordinator.shared.refresh(
+                initialRefresh: refreshToken,
+                fallbackIdToken: idToken,
+                writeBack: writeBack
+            )
             return .success(r)
         } catch let err as QuotaError {
             return .failure(err)
@@ -71,9 +113,80 @@ enum CodexTokenRefresher {
         return Date(timeIntervalSince1970: exp).timeIntervalSinceNow < refreshSkew
     }
 
-    nonisolated private static func refresh(
-        using refreshToken: String,
+    // MARK: - Coordinator
+
+    /// 进程内串行化 + 去重的刷新协调器,按 `WriteBack` 分键。
+    private actor Coordinator {
+        static let shared = Coordinator()
+        private var inFlight: [String: Task<Refreshed, Error>] = [:]
+
+        /// 同一账号的刷新合并:若已有刷新在飞行中,所有调用者共享同一结果,
+        /// 避免 AppState 的多个入口几乎同时拿同一个 refresh_token 各发一次请求。
+        func refresh(
+            initialRefresh: String,
+            fallbackIdToken: String?,
+            writeBack: WriteBack
+        ) async throws -> Refreshed {
+            let key = writeBack.coordinationKey
+            if let task = inFlight[key] {
+                return try await task.value
+            }
+            let task = Task {
+                try await CodexTokenRefresher.performRefresh(
+                    initialRefresh: initialRefresh,
+                    fallbackIdToken: fallbackIdToken,
+                    writeBack: writeBack
+                )
+            }
+            inFlight[key] = task
+            defer { inFlight[key] = nil }
+            return try await task.value
+        }
+    }
+
+    /// 真正的刷新主流程。
+    nonisolated private static func performRefresh(
+        initialRefresh: String,
+        fallbackIdToken: String?,
         writeBack: WriteBack
+    ) async throws -> Refreshed {
+        var refreshToken = initialRefresh
+
+        // 1) 拿锁后先 *重读* 一次存储:`codex` CLI(或 cc-bar 的另一个入口)
+        //    可能在我们排队等锁时已经刷新过并写回了新值。拿陈腐的 refresh_token
+        //    去刷会撞上 OpenAI 的重用检测,反而把有效登录搞掉。
+        if let onDisk = peekStored(writeBack: writeBack) {
+            if !isExpired(accessToken: onDisk.accessToken) {
+                // 存储里的 access_token 已经新鲜,直接用,不发请求。
+                return Refreshed(
+                    accessToken: onDisk.accessToken,
+                    refreshToken: onDisk.refreshToken ?? refreshToken,
+                    idToken: onDisk.idToken ?? fallbackIdToken
+                )
+            }
+            if let onDiskRefresh = onDisk.refreshToken, !onDiskRefresh.isEmpty {
+                // 即便 access_token 仍过期,也优先用存储里的最新 refresh_token。
+                refreshToken = onDiskRefresh
+            }
+        }
+
+        // 2) 真正发刷新请求。
+        let refreshed = try await performNetworkRefresh(
+            using: refreshToken,
+            fallbackIdToken: fallbackIdToken
+        )
+
+        // 3) 落盘。此时服务端已经轮换,旧 token 作废——写回失败绝不能静默,
+        //    否则盘上留着废票,下次启动直接登录失效。
+        await persist(refreshed, writeBack: writeBack)
+        return refreshed
+    }
+
+    // MARK: - Network
+
+    nonisolated private static func performNetworkRefresh(
+        using refreshToken: String,
+        fallbackIdToken: String?
     ) async throws -> Refreshed {
         var req = URLRequest(url: tokenEndpoint)
         req.httpMethod = "POST"
@@ -104,30 +217,93 @@ enum CodexTokenRefresher {
         guard let newAccess = root["access_token"] as? String else {
             throw QuotaError.tokenRefreshFailed("no access_token in response")
         }
-        let newId = root["id_token"] as? String
-        let newRefresh = root["refresh_token"] as? String ?? refreshToken
+        return Refreshed(
+            accessToken: newAccess,
+            refreshToken: root["refresh_token"] as? String ?? refreshToken,
+            idToken: root["id_token"] as? String ?? fallbackIdToken
+        )
+    }
+
+    // MARK: - Peek stored tokens
+
+    private struct StoredTokens: Sendable {
+        var accessToken: String
+        var refreshToken: String?
+        var idToken: String?
+    }
+
+    nonisolated private static func peekStored(writeBack: WriteBack) -> StoredTokens? {
         switch writeBack {
-        case .codexAuthJSON:
-            try writeBackToAuthJSON(
-                url: CodexAuth.authFileURL(),
-                accessToken: newAccess,
-                idToken: newId,
-                refreshToken: newRefresh
+        case .codexAuthJSON, .codexAuthJSONAt:
+            guard let url = writeBack.authFileURL,
+                  let data = try? Data(contentsOf: url),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tokens = root["tokens"] as? [String: Any],
+                  let access = tokens["access_token"] as? String, !access.isEmpty
+            else { return nil }
+            return StoredTokens(
+                accessToken: access,
+                refreshToken: tokens["refresh_token"] as? String,
+                idToken: tokens["id_token"] as? String
             )
-        case .codexAuthJSONAt(let path):
+        case .importedAccount(let id):
+            guard let tokens = ImportedCodexStore.loadTokens(accountId: id),
+                  !tokens.accessToken.isEmpty
+            else { return nil }
+            return StoredTokens(
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                idToken: tokens.idToken
+            )
+        }
+    }
+
+    // MARK: - Write back
+
+    /// 写回存储。失败时重试一次;仍失败则记 error 日志并放行——本次刷到的 token
+    /// 在内存里仍然可用,不该因为落盘失败就让整次取数失败。
+    nonisolated private static func persist(_ refreshed: Refreshed, writeBack: WriteBack) async {
+        do {
+            try write(refreshed, writeBack: writeBack)
+            return
+        } catch {
+            log.warning("token write-back failed, retrying: \(String(describing: error), privacy: .public)")
+        }
+        try? await Task.sleep(nanoseconds: UInt64(writeBackRetryDelay * 1_000_000_000))
+        do {
+            try write(refreshed, writeBack: writeBack)
+        } catch {
+            // 服务端已经轮换过 token,而盘上还是旧的那份废票。下次启动会登录失效,
+            // 需要用户重新 `codex login`。这条日志是排查这类"莫名掉线"的唯一线索。
+            log.error(
+                """
+                token write-back failed twice (\(writeBack.coordinationKey, privacy: .public)); \
+                stored credentials now hold a rotated-away token: \
+                \(String(describing: error), privacy: .public)
+                """
+            )
+        }
+    }
+
+    nonisolated private static func write(_ refreshed: Refreshed, writeBack: WriteBack) throws {
+        switch writeBack {
+        case .codexAuthJSON, .codexAuthJSONAt:
             try writeBackToAuthJSON(
-                url: URL(fileURLWithPath: path),
-                accessToken: newAccess,
-                idToken: newId,
-                refreshToken: newRefresh
+                url: writeBack.authFileURL ?? CodexAuth.authFileURL(),
+                accessToken: refreshed.accessToken,
+                idToken: refreshed.idToken,
+                refreshToken: refreshed.refreshToken
             )
         case .importedAccount(let id):
             try ImportedCodexStore.saveTokens(
-                ImportedCodexTokens(accessToken: newAccess, refreshToken: newRefresh, idToken: newId),
+                ImportedCodexTokens(
+                    accessToken: refreshed.accessToken,
+                    refreshToken: refreshed.refreshToken,
+                    idToken: refreshed.idToken
+                ),
                 accountId: id
             )
         }
-        return Refreshed(accessToken: newAccess, refreshToken: newRefresh, idToken: newId)
     }
 
     nonisolated private static func writeBackToAuthJSON(

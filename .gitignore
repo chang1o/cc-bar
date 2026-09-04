@@ -6,11 +6,14 @@
 .codex/
 .cursor/
 .vscode/
+.history/
 .idea/
 .superpowers/
 
 # Xcode
 build/
+build-dev/
+dist/
 DerivedData/
 *.xcuserstate
 *.xcuserdatad/

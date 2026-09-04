@@ -398,3 +398,20 @@ struct QuotaPace: Equatable {
 ### ccpm
 
 `internal/config/config.go`、`cmd/add.go`、`cmd/run.go`、`cmd/env.go`、`cmd/list.go`、`internal/claude/claude.go`、对应 `_test.go`、`README.md`
+
+## 8. 上游合并后的类型映射（2026-09-05）
+
+本 spec 最初实现在 0.9.0 基线上（`Provider` / `MonitoredAccount` / `QuotaFetcher`）。合并 nanvon/cc-bar v1.0.53 后，上游已经有了同构的 descriptor 表、语义化 lane 和持久化协调器，移植时保留上游模型，ccpm 账号作为附加层叠上去。旧概念与现行代码的对应关系：
+
+| 本 spec 中的概念 | 合并后的实现 |
+| :--- | :--- |
+| `Provider` 枚举 + `ProviderDescriptor` | `QuotaApp`（新增 `kimi` / `glm` / `ollama`）+ `QuotaProviderDescriptor`（新增 `dashboardURL` / `statusPageWebURL`） |
+| `MonitoredAccount` / `AccountID` / `AccountCredential` | 主账号沿用上游 `primaryQuotaStates[QuotaApp]`；ccpm 账号为 `CCPMAccount`（`Core/Quota/CCPMAccount.swift`），`id = "<app>:ccpm:<profile>"` |
+| `AccountCatalog.discover()` | `CCPMAccountCatalog.discover(primaryCodexAccountId:primaryClaudeEmail:)`，与主账号同身份的 profile 标记 `mirrorsPrimary` 复用主账号状态 |
+| `QuotaSnapshot{primary, secondary, extra}` | 上游 `QuotaSnapshot{primaryLimit, secondaryLimit, auxiliaryLimits, modelLimits}`；月度 / MCP / Extra usage 用 `kind: .unknown` + 显式 `id`/`displayName` 表达 |
+| `QuotaWindow.kind` | `QuotaLimit.kind`（按秒数归类）+ `QuotaLimit.laneTitle` |
+| `QuotaWindow.detail` | 同名字段，Codable 可选 |
+| `QuotaFetcher` | 各 provider 客户端直接产出上游快照：`KimiQuotaClient` / `GLMQuotaClient` / `OllamaCloudQuotaClient`；Codex / Claude 沿用上游客户端 |
+| `AppState.monitorSnapshot(for:)` | 同名，跨主账号与 ccpm 账号取 lane 最紧张者 |
+| `QuotaCache` v2 `records` | 上游 v4 payload 新增可选字段 `ccpmAccounts: [String: QuotaCacheRecord]`；ccpm 的 `statusline` 读取该字段 |
+| `scripts/selfcheck.sh` | 上游 XCTest target `CCBarTests`，用例在 `CCBarTests/MultiProviderTests.swift` |

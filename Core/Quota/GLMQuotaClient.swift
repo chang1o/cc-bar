@@ -1,8 +1,10 @@
 import Foundation
 
-/// GLM Coding Plan quota: `GET {host}/api/monitor/usage/quota/limit` with the
-/// coding-plan API key. Host follows `ANTHROPIC_BASE_URL` (open.bigmodel.cn or api.z.ai).
+/// GLM Coding Plan quota: `GET {host}/api/monitor/usage/quota/limit` with the coding-plan
+/// API key. Host follows `ANTHROPIC_BASE_URL` (open.bigmodel.cn or api.z.ai).
 nonisolated enum GLMQuotaClient {
+    nonisolated static let defaultBaseURL = URL(string: "https://open.bigmodel.cn/api/anthropic")!
+
     nonisolated static func quotaURL(baseURL: URL) -> URL {
         var components = URLComponents()
         components.scheme = baseURL.scheme ?? "https"
@@ -67,18 +69,18 @@ nonisolated enum GLMQuotaClient {
 
         let session = quotaLimits.count >= 2 ? quotaLimits.first : nil
         let longest = quotaLimits.last
-        var primary: QuotaWindow?
-        var secondary: QuotaWindow?
+        var primary: QuotaLimit?
+        var secondary: QuotaLimit?
         if let session, let longest {
-            primary = window(session, kind: kind(for: session, fallback: .fiveHour))
-            secondary = window(longest, kind: kind(for: longest, fallback: .weekly))
+            primary = quotaLimit(session, fallback: .fiveHour)
+            secondary = quotaLimit(longest, fallback: .weekly)
         } else if let longest {
-            primary = window(longest, kind: kind(for: longest, fallback: .fiveHour))
+            primary = quotaLimit(longest, fallback: .fiveHour)
         }
-        var extra: [QuotaWindow] = []
+        var auxiliary: [QuotaLimit] = []
         if let timeLimit {
-            let mcp = window(timeLimit, kind: .mcp)
-            if primary == nil { primary = mcp } else { extra.append(mcp) }
+            let mcp = QuotaLimit(id: "mcp", kind: .unknown, displayName: "MCP", window: window(timeLimit), isActive: nil)
+            if primary == nil { primary = mcp } else { auxiliary.append(mcp) }
         }
         guard primary != nil else {
             throw QuotaError.decode("glm: no usable limit entries")
@@ -86,29 +88,29 @@ nonisolated enum GLMQuotaClient {
 
         let plan = ["planName", "plan", "plan_type", "packageName", "level"]
             .compactMap { payload[$0] as? String }
-            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
 
         return QuotaSnapshot(
-            provider: .glm,
-            primary: primary,
-            secondary: secondary,
-            extra: extra,
-            planType: plan?.trimmingCharacters(in: .whitespaces),
+            app: .glm,
+            primaryLimit: primary,
+            secondaryLimit: secondary,
+            auxiliaryLimits: auxiliary,
+            planType: plan,
             fetchedAt: now
         )
     }
 
-    nonisolated private static func kind(for limit: Limit, fallback: QuotaWindowKind) -> QuotaWindowKind {
-        guard let seconds = limit.windowSeconds else { return fallback }
-        if seconds == 5 * 3600 { return .fiveHour }
-        if seconds == 7 * 86400 { return .weekly }
-        if seconds >= 28 * 86400 { return .monthly }
-        return fallback
+    nonisolated private static func quotaLimit(_ limit: Limit, fallback: QuotaLimitKind) -> QuotaLimit {
+        if let seconds = limit.windowSeconds, seconds >= 28 * 86400 {
+            return QuotaLimit(id: "monthly", kind: .unknown, displayName: "Monthly", window: window(limit), isActive: nil)
+        }
+        let window = window(limit)
+        return .standard(kind: QuotaSnapshot.kind(for: window, fallback: fallback), window: window)
     }
 
-    nonisolated private static func window(_ limit: Limit, kind: QuotaWindowKind) -> QuotaWindow {
+    nonisolated private static func window(_ limit: Limit) -> QuotaWindow {
         QuotaWindow(
-            kind: kind,
             usedPercent: limit.usedPercent,
             resetsAt: limit.resetsAt,
             windowSeconds: limit.isMonthlyMarker ? nil : limit.windowSeconds,
@@ -141,7 +143,7 @@ nonisolated enum GLMQuotaClient {
         let unit = QuotaJSON.int(raw["unit"]) ?? 0
         let number = QuotaJSON.int(raw["number"]) ?? 0
         let multipliers: [Int: Int] = [1: 86400, 3: 3600, 5: 60, 6: 7 * 86400]
-        var windowSeconds: Int? = (number > 0 && multipliers[unit] != nil) ? number * multipliers[unit]! : nil
+        var windowSeconds: Int? = multipliers[unit].flatMap { number > 0 ? number * $0 : nil }
         let isMonthlyMarker = type == "TIME_LIMIT" && unit == 5 && number == 1
         if isMonthlyMarker { windowSeconds = 30 * 86400 }
 

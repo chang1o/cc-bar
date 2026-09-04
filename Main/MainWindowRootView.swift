@@ -20,5 +20,12 @@ struct MainWindowRootView: View {
                 .tag(MainTab.settings)
         }
         .frame(minWidth: 1040, minHeight: 520)
+        .onAppear {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        .onDisappear {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }

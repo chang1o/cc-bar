@@ -13,6 +13,8 @@ struct ImportedCodexAccountsView: View {
     @State private var draggingId: String?
     @State private var dropTargetId: String?
 
+    @State private var selectedResetAccount: ImportedCodexAccount?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // 账号列表
@@ -72,6 +74,12 @@ struct ImportedCodexAccountsView: View {
         .sheet(isPresented: $showAddSheet) {
             AddImportedCodexAccountSheet { appState.reloadImportedCodexAccounts() }
         }
+        .sheet(item: $selectedResetAccount) { account in
+            CodexResetCreditsSheet(
+                accountTitle: rowTitle(account),
+                fetchCredits: { await appState.fetchImportedCodexResetCredits(account: account) }
+            )
+        }
         .confirmationDialog(
             tr("Remove account?", "删除此账号？"),
             isPresented: Binding(
@@ -92,8 +100,8 @@ struct ImportedCodexAccountsView: View {
         } message: {
             if let target = deleteTarget {
                 let name = rowTitle(target)
-                Text(tr("\u{201C}\(name)\u{201D} will be removed from cc-bar. The account itself is not affected.",
-                        "\u{201C}\(name)\u{201D} 将从 cc-bar 中移除，账号本身不受影响。"))
+                Text(tr("\u{201C}\(name)\u{201D} will be removed from CCBar. The account itself is not affected.",
+                        "\u{201C}\(name)\u{201D} 将从 CCBar 中移除，账号本身不受影响。"))
             }
         }
     }
@@ -143,6 +151,18 @@ struct ImportedCodexAccountsView: View {
 
             Spacer()
 
+            // 使用限额重置
+            Button {
+                selectedResetAccount = account
+            } label: {
+                Image(systemName: "gift")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help(tr("Reset credits", "使用限额重置"))
+
             // 显示开关
             Toggle("", isOn: Binding(
                 get: { account.visibleInPopover },
@@ -163,6 +183,7 @@ struct ImportedCodexAccountsView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
@@ -226,6 +247,8 @@ struct AddImportedCodexAccountSheet: View {
     @State private var parseResult: Result<[ImportedCodexPaste.Parsed], ImportedCodexPaste.Failure>?
     @State private var saveError: String?
     @State private var isSaving = false
+    /// 识别到的 personal access token（不透明令牌，身份在保存时联网解析）。
+    @State private var patToken: String?
 
     private var parsedBatch: [ImportedCodexPaste.Parsed]? {
         if case .success(let list) = parseResult { return list }
@@ -251,6 +274,7 @@ struct AddImportedCodexAccountSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .focusEffectDisabled()
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)
@@ -263,13 +287,15 @@ struct AddImportedCodexAccountSheet: View {
                     // JSON 粘贴区
                     jsonSection
                     // 预览
-                    if isBatch, let batch = parsedBatch {
+                    if let pat = patToken {
+                        patPreviewSection(pat)
+                    } else if isBatch, let batch = parsedBatch {
                         batchPreviewSection(batch)
                     } else if let p = parsed {
                         previewSection(p)
                     }
                     // 表单(显示开关,单账号 / 批量通用)
-                    if parsedBatch != nil { formSection }
+                    if parsedBatch != nil || patToken != nil { formSection }
                     // 错误
                     if let err = parseError ?? saveError {
                         Text(err)
@@ -292,7 +318,7 @@ struct AddImportedCodexAccountSheet: View {
 
                 Button(isBatch ? tr("Import All", "批量导入") : tr("Save", "保存")) { save() }
                     .keyboardShortcut(.return, modifiers: [])
-                    .disabled(parsedBatch == nil || isSaving)
+                    .disabled((parsedBatch == nil && patToken == nil) || isSaving)
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
             }
@@ -310,8 +336,8 @@ struct AddImportedCodexAccountSheet: View {
             Text(tr("Paste auth.json content", "粘贴 auth.json 内容"))
                 .font(.system(size: 12, weight: .semibold))
             Text(tr(
-                "Supports a single auth.json or a JSON array of multiple accounts (e.g. cc-switch export). The display name is taken from the email prefix automatically.",
-                "支持单个 auth.json,也支持多账号的 JSON 数组(如 cc-switch 导出)。显示名自动取邮箱 @ 前的部分。"
+                "Supports a single auth.json, a JSON array of multiple accounts (e.g. cc-switch export), or a personal access token form ({\"personal_access_token\": \"at-...\"}). The display name is taken from the email prefix automatically.",
+                "支持单个 auth.json、多账号 JSON 数组(如 cc-switch 导出),以及个人访问令牌形态({\"personal_access_token\": \"at-...\"})。显示名自动取邮箱 @ 前的部分。"
             ))
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
@@ -327,7 +353,7 @@ struct AddImportedCodexAccountSheet: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(
                             parseError != nil ? Color.red.opacity(0.6) :
-                            (parsed != nil ? Color.green.opacity(0.5) : Color.secondary.opacity(0.25)),
+                            ((parsed != nil || patToken != nil) ? Color.green.opacity(0.5) : Color.secondary.opacity(0.25)),
                             lineWidth: 1
                         )
                 )
@@ -365,6 +391,34 @@ struct AddImportedCodexAccountSheet: View {
                     .truncationMode(.middle)
             }
             Spacer()
+        }
+        .padding(10)
+        .background(.green.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    // MARK: PAT 预览
+
+    private func patPreviewSection(_ token: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "key.fill")
+                .foregroundStyle(.green)
+                .font(.system(size: 13))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tr("Personal access token", "个人访问令牌"))
+                    .font(.system(size: 12, weight: .semibold))
+                Text(tr(
+                    "Identity is verified online on save.",
+                    "身份将在保存时联网验证。"
+                ))
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isSaving {
+                ProgressView().controlSize(.small)
+            }
         }
         .padding(10)
         .background(.green.opacity(0.07))
@@ -441,14 +495,27 @@ struct AddImportedCodexAccountSheet: View {
         let trimmed = jsonText.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             parseResult = nil
+            patToken = nil
             saveError = nil
             return
         }
+        // 先认 personal access token 形态；命中则走 PAT 路径，不再按 OAuth 解析。
+        if let pat = ImportedCodexPaste.personalAccessToken(in: trimmed) {
+            patToken = pat
+            parseResult = nil
+            saveError = nil
+            return
+        }
+        patToken = nil
         parseResult = ImportedCodexPaste.parseAny(trimmed)
         saveError = nil
     }
 
     private func save() {
+        if let pat = patToken {
+            savePersonalAccessToken(pat)
+            return
+        }
         guard let batch = parsedBatch, !batch.isEmpty else { return }
         isSaving = true
         var firstError: String?
@@ -471,6 +538,26 @@ struct AddImportedCodexAccountSheet: View {
         } else {
             onSuccess()
             dismiss()
+        }
+    }
+
+    /// PAT 不透明、本地拿不到 account_id，保存时联网发一次 usage 验证并解析身份。
+    private func savePersonalAccessToken(_ token: String) {
+        isSaving = true
+        saveError = nil
+        Task {
+            do {
+                try await appState.importCodexPersonalAccessToken(
+                    token: token,
+                    visibleInPopover: visibleInPopover
+                )
+                isSaving = false
+                onSuccess()
+                dismiss()
+            } catch {
+                isSaving = false
+                saveError = error.localizedDescription
+            }
         }
     }
 }

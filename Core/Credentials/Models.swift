@@ -5,18 +5,6 @@ enum CredentialSource: String, Sendable {
     case keychain
 }
 
-enum ClaudeCredentialStorage: Sendable, Equatable, Hashable {
-    case file(path: String)
-    case keychain(service: String)
-
-    var cacheKey: String {
-        switch self {
-        case .file(let path): return "file:\(path)"
-        case .keychain(let service): return "keychain:\(service)"
-        }
-    }
-}
-
 struct CodexAccount: Sendable, Equatable {
     var email: String?
     var planType: String?
@@ -29,6 +17,10 @@ struct CodexAccount: Sendable, Equatable {
     var accessToken: String?
     var refreshToken: String?
     var idToken: String?
+    /// auth.json 走 `personal_access_token`（Codex 工作区访问令牌）时为 true。
+    /// 该令牌是不透明字符串、无 exp / refresh，取数时跳过 OAuth 续期，
+    /// 身份（email/plan/account_id）由 `wham/usage` 响应回填。
+    var isPersonalAccessToken: Bool = false
 }
 
 struct ClaudeAccount: Sendable, Equatable {

@@ -3,6 +3,8 @@ import Foundation
 /// Kimi Code quota: `GET {host}/coding/v1/usages` with the Kimi Code API key.
 /// `usage` is the weekly request quota, `limits[0]` the 5-hour rate limit.
 nonisolated enum KimiQuotaClient {
+    nonisolated static let defaultBaseURL = URL(string: "https://api.kimi.com/coding/")!
+
     nonisolated static func usageURL(baseURL: URL) -> URL {
         var components = URLComponents()
         components.scheme = baseURL.scheme ?? "https"
@@ -42,28 +44,34 @@ nonisolated enum KimiQuotaClient {
         guard let usage = root["usage"] as? [String: Any] else {
             throw QuotaError.decode("kimi: missing usage")
         }
-        guard let weekly = window(kind: .weekly, detail: usage, windowSeconds: QuotaWindowKind.weekly.defaultSeconds) else {
+        guard let weeklyWindow = window(detail: usage, windowSeconds: 7 * 24 * 60 * 60) else {
             throw QuotaError.decode("kimi: usage.limit missing")
         }
+        let weekly = QuotaLimit.standard(kind: .weekly, window: weeklyWindow, displayName: "Weekly requests")
 
-        var rateLimit: QuotaWindow?
+        var rateLimit: QuotaLimit?
         if let limits = root["limits"] as? [[String: Any]], let first = limits.first,
            let detail = first["detail"] as? [String: Any] {
-            let seconds = windowSeconds(first["window"] as? [String: Any]) ?? QuotaWindowKind.fiveHour.defaultSeconds
-            rateLimit = window(kind: .fiveHour, detail: detail, windowSeconds: seconds)
+            let seconds = windowSeconds(first["window"] as? [String: Any]) ?? 5 * 60 * 60
+            if let rateWindow = window(detail: detail, windowSeconds: seconds) {
+                rateLimit = .standard(
+                    kind: QuotaSnapshot.kind(for: rateWindow, fallback: .fiveHour),
+                    window: rateWindow,
+                    displayName: "Rate limit"
+                )
+            }
         }
 
         return QuotaSnapshot(
-            provider: .kimi,
-            primary: rateLimit,
-            secondary: weekly,
-            extra: [],
+            app: .kimi,
+            primaryLimit: rateLimit ?? weekly,
+            secondaryLimit: rateLimit == nil ? nil : weekly,
             planType: nil,
             fetchedAt: now
         )
     }
 
-    nonisolated private static func window(kind: QuotaWindowKind, detail: [String: Any], windowSeconds: Int?) -> QuotaWindow? {
+    nonisolated private static func window(detail: [String: Any], windowSeconds: Int?) -> QuotaWindow? {
         guard let limit = QuotaJSON.int(detail["limit"]), limit > 0 else { return nil }
         let used: Int
         if let raw = QuotaJSON.int(detail["used"]), raw >= 0 {
@@ -73,10 +81,8 @@ nonisolated enum KimiQuotaClient {
         } else {
             used = 0
         }
-        let clampedUsed = min(used, limit)
         return QuotaWindow(
-            kind: kind,
-            usedPercent: Double(clampedUsed) / Double(limit) * 100,
+            usedPercent: Double(min(used, limit)) / Double(limit) * 100,
             resetsAt: QuotaJSON.isoDate(detail["resetTime"] ?? detail["reset_time"] ?? detail["resetAt"]),
             windowSeconds: windowSeconds,
             detail: "\(used)/\(limit) requests"

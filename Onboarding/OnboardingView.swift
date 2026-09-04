@@ -76,13 +76,13 @@ private struct WelcomeStep: View {
             AppIconBlock()
                 .padding(.bottom, 24)
 
-            Text(tr("Welcome to cc-bar", "欢迎使用 cc-bar"))
+            Text(tr("Welcome to CCBar", "欢迎使用 CCBar"))
                 .font(.system(size: 22, weight: .bold))
                 .kerning(-0.4)
 
             Text(tr(
-                "Track Codex, Claude Code, Kimi, GLM and Ollama quota right from your menu bar. We'll detect your accounts automatically.",
-                "在菜单栏即时查看 Codex、Claude Code、Kimi、GLM 与 Ollama 的额度,我们将自动检测你的账号。"
+                "Track Codex, Claude Code, Kimi, GLM and more right from your menu bar. We'll detect local logins and ccpm profiles automatically.",
+                "在菜单栏即时查看 Codex、Claude Code、Kimi、GLM 等服务的额度,我们将自动检测本机登录与 ccpm profile。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -104,6 +104,20 @@ private struct WelcomeStep: View {
 
 private struct AppIconBlock: View {
     var body: some View {
+        Group {
+            if let icon = NSApplication.shared.applicationIconImage {
+                Image(nsImage: icon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                fallback
+            }
+        }
+        .frame(width: 96, height: 96)
+        .shadow(color: .black.opacity(0.3), radius: 30, x: 0, y: 10)
+    }
+
+    private var fallback: some View {
         RoundedRectangle(cornerRadius: 22, style: .continuous)
             .fill(LinearGradient(
                 colors: [
@@ -114,13 +128,11 @@ private struct AppIconBlock: View {
                 startPoint: UnitPoint(x: 0, y: 0),
                 endPoint: UnitPoint(x: 1, y: 1)
             ))
-            .frame(width: 96, height: 96)
             .overlay(
                 Image(systemName: "gauge.medium")
                     .font(.system(size: 44, weight: .semibold))
                     .foregroundStyle(.white)
             )
-            .shadow(color: .black.opacity(0.3), radius: 30, x: 0, y: 10)
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
@@ -136,27 +148,29 @@ private struct DetectAccountsStep: View {
     let onContinue: () -> Void
 
     var body: some View {
-        @Bindable var settings = SettingsStore.shared
-
         VStack(alignment: .leading, spacing: 0) {
-            Text(tr("We found these accounts", "检测到以下账号,请勾选要显示的服务"))
+            Text(anyDetected
+                 ? tr("We found these accounts", "检测到以下账号")
+                 : tr("No accounts detected yet", "未检测到账号,可稍后在设置中查看"))
                 .font(.system(size: 18, weight: .bold))
                 .kerning(-0.3)
 
-            VStack(spacing: 10) {
-                ForEach(Provider.allCases, id: \.self) { provider in
-                    let accounts = appState.accounts(for: provider)
-                    DetectedAccountRow(
-                        provider: provider,
-                        plan: accounts.first(where: { $0.identity.plan != nil })?.identity.plan,
-                        email: accounts.first(where: { $0.identity.email != nil })?.identity.email,
-                        source: sourceLabel(for: provider, accounts: accounts),
-                        isDetected: accounts.contains { $0.credential.canFetchQuota },
-                        isOn: Binding(
-                            get: { settings.isEnabled(provider) },
-                            set: { settings.setEnabled(provider, $0) }
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    ForEach(QuotaProviderDescriptor.allProviders) { provider in
+                        let row = detection(for: provider.app)
+                        DetectedAccountRow(
+                            title: provider.title,
+                            subtitle: provider.vendor,
+                            plan: row.plan,
+                            email: row.email,
+                            source: row.source,
+                            tint: provider.app.tintColor,
+                            logoName: provider.logoName,
+                            fallback: provider.fallback,
+                            isDetected: row.isDetected
                         )
-                    )
+                    }
                 }
             }
             .padding(.top, 18)
@@ -176,75 +190,126 @@ private struct DetectAccountsStep: View {
         .padding(.vertical, 28)
     }
 
-    private func sourceLabel(for provider: Provider, accounts: [MonitoredAccount]) -> String {
-        guard let first = accounts.first(where: { $0.credential.canFetchQuota }) else { return "—" }
-        switch first.source {
-        case .defaultLogin:
-            switch first.credential {
-            case .codexOAuth: return "~/.codex/auth.json"
-            case .claudeOAuth(let account, _):
-                return account.source == .file ? "~/.claude/.credentials.json" : "Keychain · claude-code"
-            default: return "—"
-            }
-        case .importedCodex: return "CCBar Keychain"
-        case .ccpm: return "~/.ccpm/config.json"
+    private struct Detection {
+        var plan: String?
+        var email: String?
+        var source: String
+        var isDetected: Bool
+    }
+
+    /// Primary credentials first; providers without one fall back to ccpm profiles.
+    private func detection(for app: QuotaApp) -> Detection {
+        var detection: Detection
+        switch app {
+        case .codex:
+            detection = Detection(
+                plan: appState.codexAccount?.planType,
+                email: appState.codexAccount?.email,
+                source: "~/.codex/auth.json",
+                isDetected: appState.codexAccount != nil
+            )
+        case .claude:
+            detection = Detection(
+                plan: appState.claudeAccount?.subscriptionType,
+                email: appState.claudeAccount?.email,
+                source: claudeSource,
+                isDetected: appState.claudeAccount != nil
+            )
+        case .antigravity:
+            detection = Detection(
+                plan: appState.antigravityQuota?.planType ?? appState.antigravityAccount?.planType,
+                email: appState.antigravityAccount?.email,
+                source: "~/.gemini/jetski-standalone-oauth-token",
+                isDetected: appState.antigravityAccount != nil
+            )
+        case .cursor:
+            detection = Detection(
+                plan: appState.cursorQuota?.planType,
+                email: appState.cursorAccount?.email,
+                source: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+                isDetected: appState.cursorAccount != nil
+            )
+        case .commandCode:
+            detection = Detection(
+                plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                email: appState.commandCodeAccount?.login ?? appState.commandCodeAccount?.email,
+                source: commandCodeSource,
+                isDetected: appState.commandCodeAccount != nil
+            )
+        case .kimi, .glm, .ollama:
+            detection = Detection(plan: nil, email: nil, source: "~/.ccpm/config.json", isDetected: false)
         }
+        guard !detection.isDetected else { return detection }
+        let profiles = appState.ccpmAccounts(for: app)
+        guard !profiles.isEmpty else { return detection }
+        detection.isDetected = true
+        detection.source = "~/.ccpm/config.json"
+        detection.email = profiles.map(\.profile.name).joined(separator: ", ")
+        return detection
+    }
+
+    private var claudeSource: String {
+        switch appState.claudeAccount?.source {
+        case .file: return "~/.claude/.credentials.json"
+        case .keychain: return "Keychain · claude-code"
+        case .none: return "—"
+        }
+    }
+
+    private var commandCodeSource: String {
+        switch appState.commandCodeAccount?.source {
+        case .commandCodeCLI: return "~/.commandcode/auth.json"
+        case .pi: return "~/.pi/agent/auth.json"
+        case .opencode: return "~/.local/share/opencode/auth.json"
+        case .environment: return "ENV · COMMAND_CODE_API_KEY"
+        case .manualKeychain: return "Keychain · command-code"
+        case .none: return "—"
+        }
+    }
+
+    private var anyDetected: Bool {
+        QuotaApp.allCases.contains { detection(for: $0).isDetected }
     }
 }
 
 private struct DetectedAccountRow: View {
-    let provider: Provider
+    let title: String
+    let subtitle: String
     let plan: String?
     let email: String?
     let source: String
+    let tint: Color
+    let logoName: String
+    let fallback: String
     let isDetected: Bool
-    @Binding var isOn: Bool
-
-    private var title: String { provider.descriptor.displayName }
-    private var subtitle: String { provider.descriptor.vendor }
 
     var body: some View {
-        Button {
-            guard isDetected else { return }
-            isOn.toggle()
-        } label: {
-            HStack(spacing: 13) {
-                CheckmarkBox(checked: isDetected && isOn)
-                ServiceTile(
-                    logoName: provider.descriptor.logoName,
-                    fallback: provider.descriptor.fallbackGlyph,
-                    tint: provider.accent,
-                    size: 34,
-                    logoSize: 16,
-                    cornerRadius: 8
-                )
+        HStack(spacing: 13) {
+            CheckmarkBox(checked: isDetected)
+            ServiceTile(logoName: logoName, fallback: fallback, tint: tint, size: 34, logoSize: 16, cornerRadius: 8)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        Text(title)
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("· \(subtitleText)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text(email ?? tr("Not detected", "未识别"))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                    Text(source)
-                        .font(.system(size: 10, design: .monospaced))
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("· \(subtitleText)")
+                        .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
-
-                Spacer()
+                Text(email ?? tr("Not detected", "未检测到"))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                Text(source)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
             }
+
+            Spacer()
         }
-        .buttonStyle(.plain)
-        .disabled(!isDetected)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
         .ccPanel(cornerRadius: 12)
-        .opacity(isDetected ? (isOn ? 1 : 0.72) : 0.6)
-        .pointingHandCursor()
+        .opacity(isDetected ? 1 : 0.6)
     }
 
     private var subtitleText: String {
@@ -257,21 +322,9 @@ private struct CheckmarkBox: View {
     let checked: Bool
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 3.5, style: .continuous)
-                .fill(checked ? Color.accentColor : Color.clear)
-                .frame(width: 13, height: 13)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.35), lineWidth: 1)
-                        .opacity(checked ? 0 : 1)
-                )
-            if checked {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-        }
+        Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(checked ? Color.accentColor : Color.secondary.opacity(0.35))
     }
 }
 
@@ -286,8 +339,8 @@ private struct ReadOnlyInfoCard: View {
                 Text(tr("Read-only access", "仅读取"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "cc-bar reads local credentials and only calls each provider's own API (OpenAI, Anthropic, Kimi, Zhipu, Ollama). It never sends credentials anywhere else.",
-                    "cc-bar 读取本机凭据,只请求各服务自己的官方 API(OpenAI、Anthropic、Kimi、智谱、Ollama),不会把凭据发送到其他服务器。"
+                    "CCBar reads quota status locally. It never sends your credentials anywhere.",
+                    "CCBar 仅本地读取额度,不会向任何地方发送你的凭据。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -324,17 +377,26 @@ private struct ConfigureStep: View {
             VStack(spacing: 14) {
                 ConfigureRow(title: "Show in menu bar",
                              chineseTitle: "菜单栏",
-                             subtitle: "Show each provider's percentage next to the menu bar icon.",
-                             chineseSubtitle: "在菜单栏图标旁显示各服务百分比") {
-                    VStack(alignment: .trailing, spacing: 6) {
-                        ForEach(appState.presentProviders.filter { settings.isEnabled($0) }, id: \.self) { provider in
-                            Toggle(provider.descriptor.displayName, isOn: Binding(
-                                get: { settings.menuBarProviders.contains(provider) },
-                                set: { settings.setMenuBar(provider, $0) }
+                             subtitle: "Show enabled providers next to the menu bar icon.",
+                             chineseSubtitle: "在菜单栏图标旁显示百分比") {
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 8) {
+                        ForEach(QuotaProviderDescriptor.menuBarProviders) { provider in
+                            Toggle(provider.title, isOn: Binding(
+                                get: { settings.isProviderShownInMenuBar(provider.app) },
+                                set: { shown in
+                                    settings.setProviderShownInMenuBar(shown, for: provider.app)
+                                    guard shown else { return }
+                                    settings.setProviderEnabled(true, for: provider.app)
+                                    Task {
+                                        await appState.refreshQuotas(reason: .userInitiated)
+                                    }
+                                }
                             ))
                             .toggleStyle(.switch)
+                            .tint(.green)
                         }
                     }
+                    .frame(maxWidth: 300)
                 }
 
                 ConfigureRow(title: "Floating HUD",
@@ -349,6 +411,7 @@ private struct ConfigureStep: View {
                         }
                     ))
                     .toggleStyle(.switch)
+                    .tint(.green)
                 }
             }
             .padding(.top, 18)

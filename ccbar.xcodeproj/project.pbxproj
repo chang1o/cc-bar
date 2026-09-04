@@ -7,21 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		49C1B1D1000000000001AABB /* QuotaNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1D1000000000001AAAA /* QuotaNotifier.swift */; };
-		49C1B1A1000000000001AABB /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A1000000000001AAAA /* Provider.swift */; };
-		49C1B1A2000000000001AABB /* MonitoredAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A2000000000001AAAA /* MonitoredAccount.swift */; };
-		49C1B1A3000000000001AABB /* AccountCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A3000000000001AAAA /* AccountCatalog.swift */; };
-		49C1B1A4000000000001AABB /* QuotaFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A4000000000001AAAA /* QuotaFetcher.swift */; };
-		49C1B1A5000000000001AABB /* QuotaPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A5000000000001AAAA /* QuotaPace.swift */; };
-		49C1B1A6000000000001AABB /* KimiQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A6000000000001AAAA /* KimiQuotaClient.swift */; };
-		49C1B1A7000000000001AABB /* GLMQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A7000000000001AAAA /* GLMQuotaClient.swift */; };
-		49C1B1A8000000000001AABB /* OllamaCloudQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A8000000000001AAAA /* OllamaCloudQuotaClient.swift */; };
-		49C1B1A9000000000001AABB /* CCPMKeystore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A9000000000001AAAA /* CCPMKeystore.swift */; };
-		49C1B1AA000000000001AABB /* OllamaCookieStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1AA000000000001AAAA /* OllamaCookieStore.swift */; };
-		49C1B1AB000000000001AABB /* ProviderSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1AB000000000001AAAA /* ProviderSection.swift */; };
-		49C1B1B1000000000001AABB /* kimi.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B1B1000000000001AAAA /* kimi.svg */; };
-		49C1B1B2000000000001AABB /* glm.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B1B2000000000001AAAA /* glm.svg */; };
-		49C1B1B3000000000001AABB /* ollama.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B1B3000000000001AAAA /* ollama.svg */; };
+		49C1CD00000000000001AABB /* QuotaNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD00000000000001AAAA /* QuotaNotifier.swift */; };
+		49C1CD01000000000001AABB /* CCPMProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD01000000000001AAAA /* CCPMProfiles.swift */; };
+		49C1CD02000000000001AABB /* CCPMKeystore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD02000000000001AAAA /* CCPMKeystore.swift */; };
+		49C1CD03000000000001AABB /* OllamaCookieStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD03000000000001AAAA /* OllamaCookieStore.swift */; };
+		49C1CD04000000000001AABB /* CCPMAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD04000000000001AAAA /* CCPMAccount.swift */; };
+		49C1CD05000000000001AABB /* QuotaPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD05000000000001AAAA /* QuotaPace.swift */; };
+		49C1CD06000000000001AABB /* KimiQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD06000000000001AAAA /* KimiQuotaClient.swift */; };
+		49C1CD07000000000001AABB /* GLMQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD07000000000001AAAA /* GLMQuotaClient.swift */; };
+		49C1CD08000000000001AABB /* OllamaCloudQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD08000000000001AAAA /* OllamaCloudQuotaClient.swift */; };
+		49C1CD09000000000001AABB /* CCPMAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD09000000000001AAAA /* CCPMAccountsSection.swift */; };
+		49C1CD0A000000000001AABB /* CCPMProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD0A000000000001AAAA /* CCPMProfilesView.swift */; };
+		49C1CD0B000000000001AABB /* MultiProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CD0B000000000001AAAA /* MultiProviderTests.swift */; };
+		49C1CD0C000000000001AABB /* kimi.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CD0C000000000001AAAA /* kimi.svg */; };
+		49C1CD0D000000000001AABB /* glm.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CD0D000000000001AAAA /* glm.svg */; };
+		49C1CD0E000000000001AABB /* ollama.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CD0E000000000001AAAA /* ollama.svg */; };
 		4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4931AC522FC02A4200EE598C /* Assets.xcassets */; };
 		4931AC622FC02A4200EE598C /* MenuBarLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */; };
 		4931AC632FC02A4200EE598C /* CCBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC412FC02A4200EE598C /* CCBarApp.swift */; };
@@ -31,61 +31,118 @@
 		4931AC672FC02A4200EE598C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC3E2FC02A4200EE598C /* AppDelegate.swift */; };
 		49C1B101000000000001AABB /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B101000000000001AAAA /* Models.swift */; };
 		49C1B102000000000001AABB /* JWT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B102000000000001AAAA /* JWT.swift */; };
+		49C1BC11000000000001AABB /* CursorAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC11000000000001AAAA /* CursorAuth.swift */; };
+		49C1D100000000000001AABB /* AntigravityCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1D100000000000001AAAA /* AntigravityCredentials.swift */; };
+		49C1BC13000000000001AABB /* CursorUsageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC13000000000001AAAA /* CursorUsageCache.swift */; };
 		49C1B103000000000001AABB /* CodexAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B103000000000001AAAA /* CodexAuth.swift */; };
 		49C1B104000000000001AABB /* ClaudeAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B104000000000001AAAA /* ClaudeAuth.swift */; };
 		49C1B105000000000001AABB /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B105000000000001AAAA /* Settings.swift */; };
 		49C1B106000000000001AABB /* QuotaCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B106000000000001AAAA /* QuotaCache.swift */; };
 		49C1B107000000000001AABB /* ScanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B107000000000001AAAA /* ScanCache.swift */; };
 		49C1B108000000000001AABB /* QuotaHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B108000000000001AAAA /* QuotaHistoryStore.swift */; };
+		49C1BA10000000000001AABB /* QuotaCycleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BA10000000000001AAAA /* QuotaCycleStore.swift */; };
 		49C1B120000000000001AABB /* QuotaModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B120000000000001AAAA /* QuotaModels.swift */; };
 		49C1B121000000000001AABB /* CodexTokenRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B121000000000001AAAA /* CodexTokenRefresher.swift */; };
 		49C1B122000000000001AABB /* CodexQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B122000000000001AAAA /* CodexQuotaClient.swift */; };
+		49C1D101000000000001AABB /* AntigravityQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1D101000000000001AAAA /* AntigravityQuotaClient.swift */; };
+		49C1BC10000000000001AABB /* CursorQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC10000000000001AAAA /* CursorQuotaClient.swift */; };
+		49C1BC14000000000001AABB /* CursorUsageFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC14000000000001AAAA /* CursorUsageFetcher.swift */; };
 		49C1B123000000000001AABB /* ClaudeQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B123000000000001AAAA /* ClaudeQuotaClient.swift */; };
 		49C1B124000000000001AABB /* ClaudeCLIFallbackQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B124000000000001AAAA /* ClaudeCLIFallbackQuotaClient.swift */; };
 		49C1B125000000000001AABB /* ClaudeTokenRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */; };
 		49C1B126000000000001AABB /* ServiceStatusClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B126000000000001AAAA /* ServiceStatusClient.swift */; };
-		49C1B127000000000001AABB /* ClaudeDelegatedRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */; };
+		49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */; };
+		49C1BF01000000000001AABB /* QuotaRefreshPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */; };
+		49C1BF06000000000001AABB /* QuotaPersistenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */; };
+		49C1BF07000000000001AABB /* QuotaPersistenceCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */; };
+		49C1BF08000000000001AABB /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF08000000000001AAAA /* UpdateChecker.swift */; };
+		49C1BF09000000000001AABB /* UpdateCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF09000000000001AAAA /* UpdateCheckerTests.swift */; };
+		49C1BF02000000000001AABB /* QuotaRefreshPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF02000000000001AAAA /* QuotaRefreshPlanTests.swift */; };
+		49C1CC05000000000001AABB /* CommandCodeQuotaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC05000000000001AAAA /* CommandCodeQuotaTests.swift */; };
+		49C1BF03000000000001AABB /* ImportedCodexStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */; };
+		49C1BF04000000000001AABB /* ScannerIncrementalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */; };
+		49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */; };
 		49C1B131000000000001AABB /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B131000000000001AAAA /* Scheduler.swift */; };
 		49C1B132000000000001AABB /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B132000000000001AAAA /* L10n.swift */; };
 		49C1B140000000000001AABB /* codex.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B140000000000001AAAA /* codex.svg */; };
 		49C1B141000000000001AABB /* claude.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B141000000000001AAAA /* claude.svg */; };
+		49C1B143000000000001AABB /* antigravity.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B143000000000001AAAA /* antigravity.svg */; };
+		49C1BC16000000000001AABB /* cursor.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1BC16000000000001AAAA /* cursor.svg */; };
+		49C1CC01000000000001AABB /* commandcode.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CC01000000000001AAAA /* commandcode.svg */; };
+		49C1CC02000000000001AABB /* CommandCodeAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC02000000000001AAAA /* CommandCodeAuth.swift */; };
+		49C1CC03000000000001AABB /* CommandCodeQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC03000000000001AAAA /* CommandCodeQuotaClient.swift */; };
+		49C1CC04000000000001AABB /* CommandCodeCredentialSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC04000000000001AAAA /* CommandCodeCredentialSheet.swift */; };
 		49C1B150000000000001AABB /* UsageModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B150000000000001AAAA /* UsageModels.swift */; };
 		49C1B151000000000001AABB /* Pricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B151000000000001AAAA /* Pricing.swift */; };
 		49C1B152000000000001AABB /* JSONLLineReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B152000000000001AAAA /* JSONLLineReader.swift */; };
 		49C1B153000000000001AABB /* ClaudeJSONLScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B153000000000001AAAA /* ClaudeJSONLScanner.swift */; };
 		49C1B154000000000001AABB /* CodexJSONLScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B154000000000001AAAA /* CodexJSONLScanner.swift */; };
+		49C1B32000000000000FAABB /* PiJSONLScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B32000000000000FAAAA /* PiJSONLScanner.swift */; };
+		49C1B90000000000000FAABB /* OpencodeScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B90000000000000FAAAA /* OpencodeScanner.swift */; };
 		49C1B155000000000001AABB /* UsageAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B155000000000001AAAA /* UsageAggregator.swift */; };
 		49C1B156000000000001AABB /* UsageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B156000000000001AAAA /* UsageService.swift */; };
+		49C1B197000000000001AABB /* UsageLogWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B197000000000001AAAA /* UsageLogWatcher.swift */; };
+		49C1BA11000000000001AABB /* CycleUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BA11000000000001AAAA /* CycleUsage.swift */; };
+		49C1B157000000000001AABB /* PricingCatalogModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B157000000000001AAAA /* PricingCatalogModels.swift */; };
+		49C1B158000000000001AABB /* LiteLLMPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */; };
+		49C1B159000000000001AABB /* ModelsDevPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */; };
+		49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B15A000000000001AAAA /* PricingCatalogStore.swift */; };
+		49C1B16A000000000001AABB /* ModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B16A000000000001AAAA /* ModelProvider.swift */; };
 		49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B161000000000001AAAA /* MainWindowRootView.swift */; };
 		49C1B162000000000001AABB /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B162000000000001AAAA /* StatsView.swift */; };
 		49C1B163000000000001AABB /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B163000000000001AAAA /* DesignSystem.swift */; };
+		49C1B164000000000001AABB /* ConversationStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B164000000000001AAAA /* ConversationStatsView.swift */; };
+		49C1BA12000000000001AABB /* CycleStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BA12000000000001AAAA /* CycleStatsView.swift */; };
+		49C1B165000000000001AABB /* ConversationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B165000000000001AAAA /* ConversationModels.swift */; };
+		49C1B166000000000001AABB /* ConversationAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B166000000000001AAAA /* ConversationAggregator.swift */; };
+		49C1B167000000000001AABB /* ConversationTitleIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B167000000000001AAAA /* ConversationTitleIndex.swift */; };
+		49C1B168000000000001AABB /* ConversationRollupCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B168000000000001AAAA /* ConversationRollupCache.swift */; };
 		49C1B171000000000001AABB /* FloatingPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B171000000000001AAAA /* FloatingPanel.swift */; };
 		49C1B172000000000001AABB /* FloatingContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B172000000000001AAAA /* FloatingContentView.swift */; };
 		49C1B173000000000001AABB /* FloatingPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B173000000000001AAAA /* FloatingPanelController.swift */; };
 		49C1B181000000000001AABB /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B181000000000001AAAA /* OnboardingView.swift */; };
 		49C1B191000000000001AABB /* ImportedCodexAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B191000000000001AAAA /* ImportedCodexAccount.swift */; };
 		49C1B192000000000001AABB /* ImportedCodexStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B192000000000001AAAA /* ImportedCodexStore.swift */; };
+		49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */; };
 		49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */; };
-		49C1B195000000000001AABB /* CCPMProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CCPMProfiles.swift */; };
-		49C1B197000000000001AABB /* CCPMProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B197000000000001AAAA /* CCPMProfilesView.swift */; };
+		49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */; };
+		49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */; };
+		49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B300000000000001AAAA /* QuotaParsingTests.swift */; };
+		49C1BC12000000000001AABB /* CursorAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC12000000000001AAAA /* CursorAuthTests.swift */; };
+		49C1BC15000000000001AABB /* CursorUsageFetcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */; };
+		49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */; };
+		49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */; };
+		49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */; };
+		49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */; };
+		49C1B3F4000000000001AABB /* claude-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		49C1B307000000000001AAAA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4931AC282FC029A000EE598C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4931AC2F2FC029A000EE598C;
+			remoteInfo = ccbar;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
-		49C1B1D1000000000001AAAA /* QuotaNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaNotifier.swift; sourceTree = "<group>"; };
-		49C1B1A1000000000001AAAA /* Provider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
-		49C1B1A2000000000001AAAA /* MonitoredAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitoredAccount.swift; sourceTree = "<group>"; };
-		49C1B1A3000000000001AAAA /* AccountCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountCatalog.swift; sourceTree = "<group>"; };
-		49C1B1A4000000000001AAAA /* QuotaFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaFetcher.swift; sourceTree = "<group>"; };
-		49C1B1A5000000000001AAAA /* QuotaPace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPace.swift; sourceTree = "<group>"; };
-		49C1B1A6000000000001AAAA /* KimiQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KimiQuotaClient.swift; sourceTree = "<group>"; };
-		49C1B1A7000000000001AAAA /* GLMQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GLMQuotaClient.swift; sourceTree = "<group>"; };
-		49C1B1A8000000000001AAAA /* OllamaCloudQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaCloudQuotaClient.swift; sourceTree = "<group>"; };
-		49C1B1A9000000000001AAAA /* CCPMKeystore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMKeystore.swift; sourceTree = "<group>"; };
-		49C1B1AA000000000001AAAA /* OllamaCookieStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaCookieStore.swift; sourceTree = "<group>"; };
-		49C1B1AB000000000001AAAA /* ProviderSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderSection.swift; sourceTree = "<group>"; };
-		49C1B1B1000000000001AAAA /* kimi.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = kimi.svg; sourceTree = "<group>"; };
-		49C1B1B2000000000001AAAA /* glm.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = glm.svg; sourceTree = "<group>"; };
-		49C1B1B3000000000001AAAA /* ollama.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = ollama.svg; sourceTree = "<group>"; };
+		49C1CD00000000000001AAAA /* QuotaNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaNotifier.swift; sourceTree = "<group>"; };
+		49C1CD01000000000001AAAA /* CCPMProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfiles.swift; sourceTree = "<group>"; };
+		49C1CD02000000000001AAAA /* CCPMKeystore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMKeystore.swift; sourceTree = "<group>"; };
+		49C1CD03000000000001AAAA /* OllamaCookieStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaCookieStore.swift; sourceTree = "<group>"; };
+		49C1CD04000000000001AAAA /* CCPMAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMAccount.swift; sourceTree = "<group>"; };
+		49C1CD05000000000001AAAA /* QuotaPace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPace.swift; sourceTree = "<group>"; };
+		49C1CD06000000000001AAAA /* KimiQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KimiQuotaClient.swift; sourceTree = "<group>"; };
+		49C1CD07000000000001AAAA /* GLMQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GLMQuotaClient.swift; sourceTree = "<group>"; };
+		49C1CD08000000000001AAAA /* OllamaCloudQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaCloudQuotaClient.swift; sourceTree = "<group>"; };
+		49C1CD09000000000001AAAA /* CCPMAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMAccountsSection.swift; sourceTree = "<group>"; };
+		49C1CD0A000000000001AAAA /* CCPMProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfilesView.swift; sourceTree = "<group>"; };
+		49C1CD0B000000000001AAAA /* MultiProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiProviderTests.swift; sourceTree = "<group>"; };
+		49C1CD0C000000000001AAAA /* kimi.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = kimi.svg; sourceTree = "<group>"; };
+		49C1CD0D000000000001AAAA /* glm.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = glm.svg; sourceTree = "<group>"; };
+		49C1CD0E000000000001AAAA /* ollama.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = ollama.svg; sourceTree = "<group>"; };
 		4931AC302FC029A000EE598C /* CCBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CCBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4931AC3E2FC02A4200EE598C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		4931AC3F2FC02A4200EE598C /* ccbar.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ccbar.xcodeproj; sourceTree = "<group>"; };
@@ -99,44 +156,91 @@
 		4931AC542FC02A4200EE598C /* SettingsRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRootView.swift; sourceTree = "<group>"; };
 		49C1B101000000000001AAAA /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		49C1B102000000000001AAAA /* JWT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JWT.swift; sourceTree = "<group>"; };
+		49C1BC11000000000001AAAA /* CursorAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorAuth.swift; sourceTree = "<group>"; };
+		49C1D100000000000001AAAA /* AntigravityCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityCredentials.swift; sourceTree = "<group>"; };
+		49C1BC13000000000001AAAA /* CursorUsageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageCache.swift; sourceTree = "<group>"; };
 		49C1B103000000000001AAAA /* CodexAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAuth.swift; sourceTree = "<group>"; };
 		49C1B104000000000001AAAA /* ClaudeAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeAuth.swift; sourceTree = "<group>"; };
 		49C1B105000000000001AAAA /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
 		49C1B106000000000001AAAA /* QuotaCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaCache.swift; sourceTree = "<group>"; };
 		49C1B107000000000001AAAA /* ScanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanCache.swift; sourceTree = "<group>"; };
 		49C1B108000000000001AAAA /* QuotaHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaHistoryStore.swift; sourceTree = "<group>"; };
+		49C1BA10000000000001AAAA /* QuotaCycleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaCycleStore.swift; sourceTree = "<group>"; };
 		49C1B120000000000001AAAA /* QuotaModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaModels.swift; sourceTree = "<group>"; };
 		49C1B121000000000001AAAA /* CodexTokenRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexTokenRefresher.swift; sourceTree = "<group>"; };
 		49C1B122000000000001AAAA /* CodexQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexQuotaClient.swift; sourceTree = "<group>"; };
+		49C1D101000000000001AAAA /* AntigravityQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityQuotaClient.swift; sourceTree = "<group>"; };
+		49C1BC10000000000001AAAA /* CursorQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorQuotaClient.swift; sourceTree = "<group>"; };
+		49C1BC14000000000001AAAA /* CursorUsageFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageFetcher.swift; sourceTree = "<group>"; };
 		49C1B123000000000001AAAA /* ClaudeQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeQuotaClient.swift; sourceTree = "<group>"; };
 		49C1B124000000000001AAAA /* ClaudeCLIFallbackQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCLIFallbackQuotaClient.swift; sourceTree = "<group>"; };
 		49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeTokenRefresher.swift; sourceTree = "<group>"; };
 		49C1B126000000000001AAAA /* ServiceStatusClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceStatusClient.swift; sourceTree = "<group>"; };
-		49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeDelegatedRefresh.swift; sourceTree = "<group>"; };
+		49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsClient.swift; sourceTree = "<group>"; };
+		49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRefreshPlan.swift; sourceTree = "<group>"; };
+		49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPersistenceCoordinator.swift; sourceTree = "<group>"; };
+		49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaPersistenceCoordinatorTests.swift; sourceTree = "<group>"; };
+		49C1BF08000000000001AAAA /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
+		49C1BF09000000000001AAAA /* UpdateCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckerTests.swift; sourceTree = "<group>"; };
+		49C1BF02000000000001AAAA /* QuotaRefreshPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaRefreshPlanTests.swift; sourceTree = "<group>"; };
+		49C1CC05000000000001AAAA /* CommandCodeQuotaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeQuotaTests.swift; sourceTree = "<group>"; };
+		49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexStoreTests.swift; sourceTree = "<group>"; };
+		49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerIncrementalTests.swift; sourceTree = "<group>"; };
+		49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageEquivalenceTests.swift; sourceTree = "<group>"; };
 		49C1B131000000000001AAAA /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		49C1B132000000000001AAAA /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		49C1B140000000000001AAAA /* codex.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = codex.svg; sourceTree = "<group>"; };
 		49C1B141000000000001AAAA /* claude.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = claude.svg; sourceTree = "<group>"; };
+		49C1B143000000000001AAAA /* antigravity.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = antigravity.svg; sourceTree = "<group>"; };
+		49C1BC16000000000001AAAA /* cursor.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = cursor.svg; sourceTree = "<group>"; };
+		49C1CC01000000000001AAAA /* commandcode.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = commandcode.svg; sourceTree = "<group>"; };
+		49C1CC02000000000001AAAA /* CommandCodeAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeAuth.swift; sourceTree = "<group>"; };
+		49C1CC03000000000001AAAA /* CommandCodeQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeQuotaClient.swift; sourceTree = "<group>"; };
+		49C1CC04000000000001AAAA /* CommandCodeCredentialSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeCredentialSheet.swift; sourceTree = "<group>"; };
 		49C1B150000000000001AAAA /* UsageModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModels.swift; sourceTree = "<group>"; };
 		49C1B151000000000001AAAA /* Pricing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pricing.swift; sourceTree = "<group>"; };
 		49C1B152000000000001AAAA /* JSONLLineReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONLLineReader.swift; sourceTree = "<group>"; };
 		49C1B153000000000001AAAA /* ClaudeJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeJSONLScanner.swift; sourceTree = "<group>"; };
 		49C1B154000000000001AAAA /* CodexJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexJSONLScanner.swift; sourceTree = "<group>"; };
+		49C1B32000000000000FAAAA /* PiJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScanner.swift; sourceTree = "<group>"; };
+		49C1B90000000000000FAAAA /* OpencodeScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScanner.swift; sourceTree = "<group>"; };
 		49C1B155000000000001AAAA /* UsageAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAggregator.swift; sourceTree = "<group>"; };
+		49C1B16A000000000001AAAA /* ModelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelProvider.swift; sourceTree = "<group>"; };
 		49C1B156000000000001AAAA /* UsageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageService.swift; sourceTree = "<group>"; };
+		49C1B197000000000001AAAA /* UsageLogWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageLogWatcher.swift; sourceTree = "<group>"; };
+		49C1BA11000000000001AAAA /* CycleUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CycleUsage.swift; sourceTree = "<group>"; };
+		49C1B157000000000001AAAA /* PricingCatalogModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogModels.swift; sourceTree = "<group>"; };
+		49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteLLMPricingDecoder.swift; sourceTree = "<group>"; };
+		49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsDevPricingDecoder.swift; sourceTree = "<group>"; };
+		49C1B15A000000000001AAAA /* PricingCatalogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogStore.swift; sourceTree = "<group>"; };
 		49C1B161000000000001AAAA /* MainWindowRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowRootView.swift; sourceTree = "<group>"; };
 		49C1B162000000000001AAAA /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
 		49C1B163000000000001AAAA /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		49C1B164000000000001AAAA /* ConversationStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatsView.swift; sourceTree = "<group>"; };
+		49C1BA12000000000001AAAA /* CycleStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CycleStatsView.swift; sourceTree = "<group>"; };
+		49C1B165000000000001AAAA /* ConversationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationModels.swift; sourceTree = "<group>"; };
+		49C1B166000000000001AAAA /* ConversationAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationAggregator.swift; sourceTree = "<group>"; };
+		49C1B167000000000001AAAA /* ConversationTitleIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTitleIndex.swift; sourceTree = "<group>"; };
+		49C1B168000000000001AAAA /* ConversationRollupCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRollupCache.swift; sourceTree = "<group>"; };
 		49C1B171000000000001AAAA /* FloatingPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanel.swift; sourceTree = "<group>"; };
 		49C1B172000000000001AAAA /* FloatingContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingContentView.swift; sourceTree = "<group>"; };
 		49C1B173000000000001AAAA /* FloatingPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanelController.swift; sourceTree = "<group>"; };
 		49C1B181000000000001AAAA /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		49C1B191000000000001AAAA /* ImportedCodexAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexAccount.swift; sourceTree = "<group>"; };
 		49C1B192000000000001AAAA /* ImportedCodexStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexStore.swift; sourceTree = "<group>"; };
+		49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OtherCodexAccountsSection.swift; sourceTree = "<group>"; };
 		49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexAccountsView.swift; sourceTree = "<group>"; };
-		49C1B195000000000001AAAA /* CCPMProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfiles.swift; sourceTree = "<group>"; };
-		49C1B197000000000001AAAA /* CCPMProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCPMProfilesView.swift; sourceTree = "<group>"; };
-		49C1B200000000000001AAAA /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsDetailView.swift; sourceTree = "<group>"; };
+		49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedUsageBackfill.swift; sourceTree = "<group>"; };
+		49C1B300000000000001AAAA /* QuotaParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaParsingTests.swift; sourceTree = "<group>"; };
+		49C1BC12000000000001AAAA /* CursorAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorAuthTests.swift; sourceTree = "<group>"; };
+		49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageFetcherTests.swift; sourceTree = "<group>"; };
+		49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScannerTests.swift; sourceTree = "<group>"; };
+		49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScannerTests.swift; sourceTree = "<group>"; };
+		49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationProjectResolverTests.swift; sourceTree = "<group>"; };
+		49C1B301000000000001AAAA /* CCBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CCBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "codex-fast-scan.jsonl"; sourceTree = "<group>"; };
+		49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "claude-fast-scan.jsonl"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -147,19 +251,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		49C1B304000000000001AABB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		49C1B1C0000000000001AAAA /* Providers */ = {
-			isa = PBXGroup;
-			children = (
-				49C1B1A1000000000001AAAA /* Provider.swift */,
-				49C1B1A2000000000001AAAA /* MonitoredAccount.swift */,
-				49C1B1A3000000000001AAAA /* AccountCatalog.swift */,
-			);
-			path = Providers;
-			sourceTree = "<group>";
-		};
 		4931AC272FC029A000EE598C = {
 			isa = PBXGroup;
 			children = (
@@ -169,13 +270,13 @@
 				4931AC412FC02A4200EE598C /* CCBarApp.swift */,
 				4931AC432FC02A4200EE598C /* Core */,
 				49C1B170000000000001AAAA /* Floating */,
-				49C1B203000000000001AAAA /* Helpers */,
 				4931AC4E2FC02A4200EE598C /* Info.plist */,
 				49C1B160000000000001AAAA /* Main */,
 				4931AC512FC02A4200EE598C /* MenuBar */,
 				49C1B180000000000001AAAA /* Onboarding */,
 				4931AC532FC02A4200EE598C /* Resources */,
 				4931AC552FC02A4200EE598C /* Settings */,
+				49C1B302000000000001AAAA /* CCBarTests */,
 				4931AC312FC029A000EE598C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -184,6 +285,7 @@
 			isa = PBXGroup;
 			children = (
 				4931AC302FC029A000EE598C /* CCBar.app */,
+				49C1B301000000000001AAAA /* CCBarTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -191,15 +293,16 @@
 		4931AC432FC02A4200EE598C /* Core */ = {
 			isa = PBXGroup;
 			children = (
-				49C1B1D1000000000001AAAA /* QuotaNotifier.swift */,
-				49C1B1C0000000000001AAAA /* Providers */,
 				4931AC422FC02A4200EE598C /* AppState.swift */,
 				49C1B131000000000001AAAA /* Scheduler.swift */,
 				49C1B132000000000001AAAA /* L10n.swift */,
+				49C1BF08000000000001AAAA /* UpdateChecker.swift */,
 				49C1B110000000000001AAAA /* Credentials */,
 				49C1B112000000000001AAAA /* Quota */,
 				49C1B15F000000000001AAAA /* Usage */,
+				49C1B15B000000000001AAAA /* Pricing */,
 				49C1B111000000000001AAAA /* Storage */,
+				49C1CD00000000000001AAAA /* QuotaNotifier.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -207,9 +310,10 @@
 		4931AC512FC02A4200EE598C /* MenuBar */ = {
 			isa = PBXGroup;
 			children = (
-				49C1B1AB000000000001AAAA /* ProviderSection.swift */,
 				4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */,
 				4931AC502FC02A4200EE598C /* PopoverRootView.swift */,
+				49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */,
+				49C1CD09000000000001AAAA /* CCPMAccountsSection.swift */,
 			);
 			path = MenuBar;
 			sourceTree = "<group>";
@@ -227,8 +331,10 @@
 			isa = PBXGroup;
 			children = (
 				4931AC542FC02A4200EE598C /* SettingsRootView.swift */,
+				49C1CC04000000000001AAAA /* CommandCodeCredentialSheet.swift */,
 				49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */,
-				49C1B197000000000001AAAA /* CCPMProfilesView.swift */,
+				49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */,
+				49C1CD0A000000000001AAAA /* CCPMProfilesView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -241,15 +347,18 @@
 		49C1B110000000000001AAAA /* Credentials */ = {
 			isa = PBXGroup;
 			children = (
-				49C1B1AA000000000001AAAA /* OllamaCookieStore.swift */,
-				49C1B1A9000000000001AAAA /* CCPMKeystore.swift */,
 				49C1B101000000000001AAAA /* Models.swift */,
 				49C1B102000000000001AAAA /* JWT.swift */,
+				49C1BC11000000000001AAAA /* CursorAuth.swift */,
+				49C1D100000000000001AAAA /* AntigravityCredentials.swift */,
+				49C1CC02000000000001AAAA /* CommandCodeAuth.swift */,
 				49C1B103000000000001AAAA /* CodexAuth.swift */,
 				49C1B104000000000001AAAA /* ClaudeAuth.swift */,
-				49C1B195000000000001AAAA /* CCPMProfiles.swift */,
 				49C1B191000000000001AAAA /* ImportedCodexAccount.swift */,
 				49C1B192000000000001AAAA /* ImportedCodexStore.swift */,
+				49C1CD01000000000001AAAA /* CCPMProfiles.swift */,
+				49C1CD02000000000001AAAA /* CCPMKeystore.swift */,
+				49C1CD03000000000001AAAA /* OllamaCookieStore.swift */,
 			);
 			path = Credentials;
 			sourceTree = "<group>";
@@ -260,7 +369,11 @@
 				49C1B105000000000001AAAA /* Settings.swift */,
 				49C1B106000000000001AAAA /* QuotaCache.swift */,
 				49C1B108000000000001AAAA /* QuotaHistoryStore.swift */,
+				49C1BA10000000000001AAAA /* QuotaCycleStore.swift */,
 				49C1B107000000000001AAAA /* ScanCache.swift */,
+				49C1B168000000000001AAAA /* ConversationRollupCache.swift */,
+				49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */,
+				49C1BC13000000000001AAAA /* CursorUsageCache.swift */,
 			);
 			path = Storage;
 			sourceTree = "<group>";
@@ -268,19 +381,24 @@
 		49C1B112000000000001AAAA /* Quota */ = {
 			isa = PBXGroup;
 			children = (
-				49C1B1A8000000000001AAAA /* OllamaCloudQuotaClient.swift */,
-				49C1B1A7000000000001AAAA /* GLMQuotaClient.swift */,
-				49C1B1A6000000000001AAAA /* KimiQuotaClient.swift */,
-				49C1B1A5000000000001AAAA /* QuotaPace.swift */,
-				49C1B1A4000000000001AAAA /* QuotaFetcher.swift */,
 				49C1B120000000000001AAAA /* QuotaModels.swift */,
 				49C1B121000000000001AAAA /* CodexTokenRefresher.swift */,
 				49C1B122000000000001AAAA /* CodexQuotaClient.swift */,
+				49C1D101000000000001AAAA /* AntigravityQuotaClient.swift */,
+				49C1BC10000000000001AAAA /* CursorQuotaClient.swift */,
+				49C1CC03000000000001AAAA /* CommandCodeQuotaClient.swift */,
+				49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */,
 				49C1B123000000000001AAAA /* ClaudeQuotaClient.swift */,
 				49C1B124000000000001AAAA /* ClaudeCLIFallbackQuotaClient.swift */,
 				49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */,
 				49C1B126000000000001AAAA /* ServiceStatusClient.swift */,
-				49C1B127000000000001AAAA /* ClaudeDelegatedRefresh.swift */,
+				49C1BF01000000000001AAAA /* QuotaRefreshPlan.swift */,
+				49C1BF06000000000001AAAA /* QuotaPersistenceCoordinator.swift */,
+				49C1CD04000000000001AAAA /* CCPMAccount.swift */,
+				49C1CD05000000000001AAAA /* QuotaPace.swift */,
+				49C1CD06000000000001AAAA /* KimiQuotaClient.swift */,
+				49C1CD07000000000001AAAA /* GLMQuotaClient.swift */,
+				49C1CD08000000000001AAAA /* OllamaCloudQuotaClient.swift */,
 			);
 			path = Quota;
 			sourceTree = "<group>";
@@ -288,13 +406,27 @@
 		49C1B142000000000001AAAA /* Logos */ = {
 			isa = PBXGroup;
 			children = (
-				49C1B1B3000000000001AAAA /* ollama.svg */,
-				49C1B1B2000000000001AAAA /* glm.svg */,
-				49C1B1B1000000000001AAAA /* kimi.svg */,
 				49C1B140000000000001AAAA /* codex.svg */,
 				49C1B141000000000001AAAA /* claude.svg */,
+				49C1B143000000000001AAAA /* antigravity.svg */,
+				49C1BC16000000000001AAAA /* cursor.svg */,
+				49C1CC01000000000001AAAA /* commandcode.svg */,
+				49C1CD0C000000000001AAAA /* kimi.svg */,
+				49C1CD0D000000000001AAAA /* glm.svg */,
+				49C1CD0E000000000001AAAA /* ollama.svg */,
 			);
 			path = Logos;
+			sourceTree = "<group>";
+		};
+		49C1B15B000000000001AAAA /* Pricing */ = {
+			isa = PBXGroup;
+			children = (
+				49C1B157000000000001AAAA /* PricingCatalogModels.swift */,
+				49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */,
+				49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */,
+				49C1B15A000000000001AAAA /* PricingCatalogStore.swift */,
+			);
+			path = Pricing;
 			sourceTree = "<group>";
 		};
 		49C1B15F000000000001AAAA /* Usage */ = {
@@ -305,8 +437,17 @@
 				49C1B152000000000001AAAA /* JSONLLineReader.swift */,
 				49C1B153000000000001AAAA /* ClaudeJSONLScanner.swift */,
 				49C1B154000000000001AAAA /* CodexJSONLScanner.swift */,
+				49C1B32000000000000FAAAA /* PiJSONLScanner.swift */,
+				49C1B90000000000000FAAAA /* OpencodeScanner.swift */,
 				49C1B155000000000001AAAA /* UsageAggregator.swift */,
+				49C1BC14000000000001AAAA /* CursorUsageFetcher.swift */,
+				49C1B16A000000000001AAAA /* ModelProvider.swift */,
 				49C1B156000000000001AAAA /* UsageService.swift */,
+				49C1B197000000000001AAAA /* UsageLogWatcher.swift */,
+				49C1BA11000000000001AAAA /* CycleUsage.swift */,
+				49C1B165000000000001AAAA /* ConversationModels.swift */,
+				49C1B166000000000001AAAA /* ConversationAggregator.swift */,
+				49C1B167000000000001AAAA /* ConversationTitleIndex.swift */,
 			);
 			path = Usage;
 			sourceTree = "<group>";
@@ -317,6 +458,8 @@
 				49C1B161000000000001AAAA /* MainWindowRootView.swift */,
 				49C1B162000000000001AAAA /* StatsView.swift */,
 				49C1B163000000000001AAAA /* DesignSystem.swift */,
+				49C1B164000000000001AAAA /* ConversationStatsView.swift */,
+				49C1BA12000000000001AAAA /* CycleStatsView.swift */,
 			);
 			path = Main;
 			sourceTree = "<group>";
@@ -339,20 +482,35 @@
 			path = Onboarding;
 			sourceTree = "<group>";
 		};
-		49C1B201000000000001AAAA /* CCBarClaudeWatchdog */ = {
+		49C1B302000000000001AAAA /* CCBarTests */ = {
 			isa = PBXGroup;
 			children = (
-				49C1B200000000000001AAAA /* main.swift */,
+				49C1B300000000000001AAAA /* QuotaParsingTests.swift */,
+				49C1BC12000000000001AAAA /* CursorAuthTests.swift */,
+				49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */,
+				49C1BF02000000000001AAAA /* QuotaRefreshPlanTests.swift */,
+				49C1CC05000000000001AAAA /* CommandCodeQuotaTests.swift */,
+				49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */,
+				49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */,
+				49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */,
+				49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */,
+				49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */,
+				49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */,
+				49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */,
+				49C1BF09000000000001AAAA /* UpdateCheckerTests.swift */,
+				49C1B3F2000000000001AAAA /* Fixtures */,
+				49C1CD0B000000000001AAAA /* MultiProviderTests.swift */,
 			);
-			path = CCBarClaudeWatchdog;
+			path = CCBarTests;
 			sourceTree = "<group>";
 		};
-		49C1B203000000000001AAAA /* Helpers */ = {
+		49C1B3F2000000000001AAAA /* Fixtures */ = {
 			isa = PBXGroup;
 			children = (
-				49C1B201000000000001AAAA /* CCBarClaudeWatchdog */,
+				49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */,
+				49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */,
 			);
-			path = Helpers;
+			path = Fixtures;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -365,7 +523,6 @@
 				4931AC2C2FC029A000EE598C /* Sources */,
 				4931AC2D2FC029A000EE598C /* Frameworks */,
 				4931AC2E2FC029A000EE598C /* Resources */,
-				49C1B202000000000001AABB /* Embed CCBarClaudeWatchdog */,
 			);
 			buildRules = (
 			);
@@ -378,6 +535,26 @@
 			productReference = 4931AC302FC029A000EE598C /* CCBar.app */;
 			productType = "com.apple.product-type.application";
 		};
+		49C1B306000000000001AAAA /* CCBarTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 49C1B30B000000000001AAAA /* Build configuration list for PBXNativeTarget "CCBarTests" */;
+			buildPhases = (
+				49C1B303000000000001AABB /* Sources */,
+				49C1B304000000000001AABB /* Frameworks */,
+				49C1B305000000000001AABB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				49C1B308000000000001AAAA /* PBXTargetDependency */,
+			);
+			name = CCBarTests;
+			packageProductDependencies = (
+			);
+			productName = CCBarTests;
+			productReference = 49C1B301000000000001AAAA /* CCBarTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -386,10 +563,14 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2650;
-				LastUpgradeCheck = 2650;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					4931AC2F2FC029A000EE598C = {
 						CreatedOnToolsVersion = 26.5;
+					};
+					49C1B306000000000001AAAA = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 4931AC2F2FC029A000EE598C;
 					};
 				};
 			};
@@ -414,6 +595,7 @@
 			projectRoot = "";
 			targets = (
 				4931AC2F2FC029A000EE598C /* ccbar */,
+				49C1B306000000000001AAAA /* CCBarTests */,
 			);
 		};
 /* End PBXProject section */
@@ -423,65 +605,47 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				49C1B1B1000000000001AABB /* kimi.svg in Resources */,
-				49C1B1B2000000000001AABB /* glm.svg in Resources */,
-				49C1B1B3000000000001AABB /* ollama.svg in Resources */,
 				4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */,
 				49C1B140000000000001AABB /* codex.svg in Resources */,
 				49C1B141000000000001AABB /* claude.svg in Resources */,
+				49C1B143000000000001AABB /* antigravity.svg in Resources */,
+				49C1BC16000000000001AABB /* cursor.svg in Resources */,
+				49C1CC01000000000001AABB /* commandcode.svg in Resources */,
+				49C1CD0C000000000001AABB /* kimi.svg in Resources */,
+				49C1CD0D000000000001AABB /* glm.svg in Resources */,
+				49C1CD0E000000000001AABB /* ollama.svg in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		49C1B305000000000001AABB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */,
+				49C1B3F4000000000001AABB /* claude-fast-scan.jsonl in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		49C1B202000000000001AABB /* Embed CCBarClaudeWatchdog */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/Helpers/CCBarClaudeWatchdog/main.swift",
-			);
-			name = "Embed CCBarClaudeWatchdog";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/CCBarClaudeWatchdog",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n\nSOURCE=\"${SRCROOT}/Helpers/CCBarClaudeWatchdog/main.swift\"\nOUTPUT_DIR=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\nOUTPUT_BIN=\"${OUTPUT_DIR}/CCBarClaudeWatchdog\"\n\nmkdir -p \"${OUTPUT_DIR}\"\n\n# 编译为当前架构。cc-bar 是个人 / 单机分发,native arch 够用;\n# 真要做 universal 在这里加 lipo 即可。\nARCH=\"${NATIVE_ARCH_ACTUAL:-$(uname -m)}\"\nDEPLOYMENT_TARGET=\"${MACOSX_DEPLOYMENT_TARGET:-13.0}\"\n\nxcrun -sdk macosx swiftc -O \\\n  -target \"${ARCH}-apple-macos${DEPLOYMENT_TARGET}\" \\\n  -o \"${OUTPUT_BIN}\" \\\n  \"${SOURCE}\"\n\n# 跟父 target 同一个签名身份,签上;Debug 下 EXPANDED_CODE_SIGN_IDENTITY 可能是 -,\n# 等价 ad-hoc 签名,够用。\nIDENT=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\ncodesign --force --sign \"${IDENT}\" --options runtime --timestamp=none \"${OUTPUT_BIN}\"\n\necho \"embedded watchdog: ${OUTPUT_BIN}\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4931AC2C2FC029A000EE598C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				49C1B1D1000000000001AABB /* QuotaNotifier.swift in Sources */,
-				49C1B1A1000000000001AABB /* Provider.swift in Sources */,
-				49C1B1A2000000000001AABB /* MonitoredAccount.swift in Sources */,
-				49C1B1A3000000000001AABB /* AccountCatalog.swift in Sources */,
-				49C1B1A4000000000001AABB /* QuotaFetcher.swift in Sources */,
-				49C1B1A5000000000001AABB /* QuotaPace.swift in Sources */,
-				49C1B1A6000000000001AABB /* KimiQuotaClient.swift in Sources */,
-				49C1B1A7000000000001AABB /* GLMQuotaClient.swift in Sources */,
-				49C1B1A8000000000001AABB /* OllamaCloudQuotaClient.swift in Sources */,
-				49C1B1A9000000000001AABB /* CCPMKeystore.swift in Sources */,
-				49C1B1AA000000000001AABB /* OllamaCookieStore.swift in Sources */,
-				49C1B1AB000000000001AABB /* ProviderSection.swift in Sources */,
 				4931AC622FC02A4200EE598C /* MenuBarLabel.swift in Sources */,
 				4931AC632FC02A4200EE598C /* CCBarApp.swift in Sources */,
 				4931AC642FC02A4200EE598C /* SettingsRootView.swift in Sources */,
+				49C1CC04000000000001AABB /* CommandCodeCredentialSheet.swift in Sources */,
 				4931AC652FC02A4200EE598C /* PopoverRootView.swift in Sources */,
 				4931AC662FC02A4200EE598C /* AppState.swift in Sources */,
 				4931AC672FC02A4200EE598C /* AppDelegate.swift in Sources */,
 				49C1B101000000000001AABB /* Models.swift in Sources */,
 				49C1B102000000000001AABB /* JWT.swift in Sources */,
+				49C1BC11000000000001AABB /* CursorAuth.swift in Sources */,
+				49C1D100000000000001AABB /* AntigravityCredentials.swift in Sources */,
+				49C1CC02000000000001AABB /* CommandCodeAuth.swift in Sources */,
+				49C1BC13000000000001AABB /* CursorUsageCache.swift in Sources */,
 				49C1B103000000000001AABB /* CodexAuth.swift in Sources */,
 				49C1B104000000000001AABB /* ClaudeAuth.swift in Sources */,
 				49C1B105000000000001AABB /* Settings.swift in Sources */,
@@ -489,38 +653,102 @@
 				49C1B120000000000001AABB /* QuotaModels.swift in Sources */,
 				49C1B121000000000001AABB /* CodexTokenRefresher.swift in Sources */,
 				49C1B122000000000001AABB /* CodexQuotaClient.swift in Sources */,
+				49C1D101000000000001AABB /* AntigravityQuotaClient.swift in Sources */,
+				49C1BC10000000000001AABB /* CursorQuotaClient.swift in Sources */,
+				49C1CC03000000000001AABB /* CommandCodeQuotaClient.swift in Sources */,
+				49C1BC14000000000001AABB /* CursorUsageFetcher.swift in Sources */,
+				49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */,
+				49C1BF01000000000001AABB /* QuotaRefreshPlan.swift in Sources */,
+				49C1BF06000000000001AABB /* QuotaPersistenceCoordinator.swift in Sources */,
 				49C1B123000000000001AABB /* ClaudeQuotaClient.swift in Sources */,
 				49C1B124000000000001AABB /* ClaudeCLIFallbackQuotaClient.swift in Sources */,
 				49C1B125000000000001AABB /* ClaudeTokenRefresher.swift in Sources */,
 				49C1B126000000000001AABB /* ServiceStatusClient.swift in Sources */,
-				49C1B127000000000001AABB /* ClaudeDelegatedRefresh.swift in Sources */,
 				49C1B131000000000001AABB /* Scheduler.swift in Sources */,
 				49C1B132000000000001AABB /* L10n.swift in Sources */,
+				49C1BF08000000000001AABB /* UpdateChecker.swift in Sources */,
 				49C1B107000000000001AABB /* ScanCache.swift in Sources */,
+				49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */,
 				49C1B108000000000001AABB /* QuotaHistoryStore.swift in Sources */,
+				49C1BA10000000000001AABB /* QuotaCycleStore.swift in Sources */,
 				49C1B150000000000001AABB /* UsageModels.swift in Sources */,
 				49C1B151000000000001AABB /* Pricing.swift in Sources */,
 				49C1B152000000000001AABB /* JSONLLineReader.swift in Sources */,
 				49C1B153000000000001AABB /* ClaudeJSONLScanner.swift in Sources */,
 				49C1B154000000000001AABB /* CodexJSONLScanner.swift in Sources */,
+				49C1B32000000000000FAABB /* PiJSONLScanner.swift in Sources */,
+				49C1B90000000000000FAABB /* OpencodeScanner.swift in Sources */,
 				49C1B155000000000001AABB /* UsageAggregator.swift in Sources */,
+				49C1B16A000000000001AABB /* ModelProvider.swift in Sources */,
 				49C1B156000000000001AABB /* UsageService.swift in Sources */,
+				49C1B197000000000001AABB /* UsageLogWatcher.swift in Sources */,
+				49C1BA11000000000001AABB /* CycleUsage.swift in Sources */,
+				49C1B157000000000001AABB /* PricingCatalogModels.swift in Sources */,
+				49C1B158000000000001AABB /* LiteLLMPricingDecoder.swift in Sources */,
+				49C1B159000000000001AABB /* ModelsDevPricingDecoder.swift in Sources */,
+				49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */,
 				49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */,
 				49C1B162000000000001AABB /* StatsView.swift in Sources */,
 				49C1B163000000000001AABB /* DesignSystem.swift in Sources */,
+				49C1B164000000000001AABB /* ConversationStatsView.swift in Sources */,
+				49C1BA12000000000001AABB /* CycleStatsView.swift in Sources */,
+				49C1B165000000000001AABB /* ConversationModels.swift in Sources */,
+				49C1B166000000000001AABB /* ConversationAggregator.swift in Sources */,
+				49C1B167000000000001AABB /* ConversationTitleIndex.swift in Sources */,
+				49C1B168000000000001AABB /* ConversationRollupCache.swift in Sources */,
 				49C1B171000000000001AABB /* FloatingPanel.swift in Sources */,
 				49C1B172000000000001AABB /* FloatingContentView.swift in Sources */,
 				49C1B173000000000001AABB /* FloatingPanelController.swift in Sources */,
 				49C1B181000000000001AABB /* OnboardingView.swift in Sources */,
 				49C1B191000000000001AABB /* ImportedCodexAccount.swift in Sources */,
 				49C1B192000000000001AABB /* ImportedCodexStore.swift in Sources */,
+				49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */,
 				49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */,
-				49C1B195000000000001AABB /* CCPMProfiles.swift in Sources */,
-				49C1B197000000000001AABB /* CCPMProfilesView.swift in Sources */,
+				49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */,
+				49C1CD00000000000001AABB /* QuotaNotifier.swift in Sources */,
+				49C1CD01000000000001AABB /* CCPMProfiles.swift in Sources */,
+				49C1CD02000000000001AABB /* CCPMKeystore.swift in Sources */,
+				49C1CD03000000000001AABB /* OllamaCookieStore.swift in Sources */,
+				49C1CD04000000000001AABB /* CCPMAccount.swift in Sources */,
+				49C1CD05000000000001AABB /* QuotaPace.swift in Sources */,
+				49C1CD06000000000001AABB /* KimiQuotaClient.swift in Sources */,
+				49C1CD07000000000001AABB /* GLMQuotaClient.swift in Sources */,
+				49C1CD08000000000001AABB /* OllamaCloudQuotaClient.swift in Sources */,
+				49C1CD09000000000001AABB /* CCPMAccountsSection.swift in Sources */,
+				49C1CD0A000000000001AABB /* CCPMProfilesView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		49C1B303000000000001AABB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */,
+				49C1BC12000000000001AABB /* CursorAuthTests.swift in Sources */,
+				49C1BC15000000000001AABB /* CursorUsageFetcherTests.swift in Sources */,
+				49C1BF02000000000001AABB /* QuotaRefreshPlanTests.swift in Sources */,
+				49C1CC05000000000001AABB /* CommandCodeQuotaTests.swift in Sources */,
+				49C1BF03000000000001AABB /* ImportedCodexStoreTests.swift in Sources */,
+				49C1BF04000000000001AABB /* ScannerIncrementalTests.swift in Sources */,
+				49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */,
+				49C1BF07000000000001AABB /* QuotaPersistenceCoordinatorTests.swift in Sources */,
+				49C1BF09000000000001AABB /* UpdateCheckerTests.swift in Sources */,
+				49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */,
+				49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */,
+				49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */,
+				49C1CD0B000000000001AABB /* MultiProviderTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		49C1B308000000000001AAAA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4931AC2F2FC029A000EE598C /* ccbar */;
+			targetProxy = 49C1B307000000000001AAAA /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		4931AC392FC029A100EE598C /* Debug */ = {
@@ -557,7 +785,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 324F7B2X9T;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -581,6 +811,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -620,7 +851,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 324F7B2X9T;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -637,6 +870,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -651,7 +885,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 324F7B2X9T;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -661,7 +895,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.0;
+				MARKETING_VERSION = 1.0.53;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
@@ -684,7 +918,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 324F7B2X9T;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -694,7 +928,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.9.0;
+				MARKETING_VERSION = 1.0.53;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
@@ -704,6 +938,56 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		49C1B309000000000001AAAA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 324F7B2X9T;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CCBar.app/Contents/MacOS/CCBar";
+			};
+			name = Debug;
+		};
+		49C1B30A000000000001AAAA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 324F7B2X9T;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CCBar.app/Contents/MacOS/CCBar";
 			};
 			name = Release;
 		};
@@ -724,6 +1008,15 @@
 			buildConfigurations = (
 				4931AC3C2FC029A100EE598C /* Debug */,
 				4931AC3D2FC029A100EE598C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		49C1B30B000000000001AAAA /* Build configuration list for PBXNativeTarget "CCBarTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				49C1B309000000000001AAAA /* Debug */,
+				49C1B30A000000000001AAAA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

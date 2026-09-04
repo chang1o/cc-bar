@@ -6,6 +6,7 @@ import SwiftUI
 // 复用 Statuspage.io 公开接口:
 // - OpenAI    https://status.openai.com/api/v2/status.json
 // - Anthropic https://status.claude.com/api/v2/status.json
+// - Cursor    https://status.cursor.com/api/v2/status.json
 // 返回 status.indicator 字符串枚举:none / minor / major / critical / maintenance,
 // 解析失败统一归为 .unknown。
 //
@@ -55,6 +56,7 @@ struct ServiceStatus: Sendable, Equatable {
 enum ServiceStatusClient {
     static let openAIStatusURL = URL(string: "https://status.openai.com/api/v2/status.json")!
     static let anthropicStatusURL = URL(string: "https://status.claude.com/api/v2/status.json")!
+    static let cursorStatusURL = URL(string: "https://status.cursor.com/api/v2/status.json")!
 
     /// 拉取 Statuspage.io status.json 并解析为 ServiceStatus;
     /// 任何网络 / 解码错误都抛出,调用方负责保留旧快照。
