@@ -4,14 +4,15 @@
 
 ## 项目概况
 
-cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于展示 Codex 和 Claude Code 的额度、刷新状态、本地用量统计和桌面悬浮窗。
+cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于展示 Codex、Claude Code、Kimi Code、GLM Coding Plan、Ollama Cloud 的额度、消耗节奏、刷新状态、本地用量统计和桌面悬浮窗。第三方 provider 的账号全部来自 ccpm profile（`~/.ccpm/config.json` 的 `provider` 字段），cc-bar 自身不提供填 key 的入口。
 
 项目主体功能已开发完成，后续以新需求和迭代为主，不再按初始里程碑推进。
 
 工程结构：
 
 - 入口：`CCBarApp.swift`
-- 全局状态：`Core/AppState.swift`
+- 全局状态：`Core/AppState.swift`（账号列表 + 按 `AccountID` 的额度状态）
+- Provider 与账号模型：`Core/Providers/`（`Provider` / `ProviderDescriptor` / `MonitoredAccount` / `AccountCatalog`）
 - 菜单栏：`MenuBar/`
 - 主窗口：`Main/`
 - 悬浮窗：`Floating/`
@@ -46,12 +47,14 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于
 
 - UI 优先使用 SwiftUI / AppKit 系统默认控件和 macOS 原生风格。
 - 视觉规则以 `docs/设计风格.md` 为准：
-  - Codex 使用石墨灰识别色，Claude Code 使用桃橙识别色；识别色仅用于 tile / logo 等品牌识别，不再用于额度状态着色。
+  - 识别色统一通过 `Provider.accent` 取：Codex 石墨灰、Claude Code 桃橙、Kimi 橘红、GLM 玫红、Ollama 中性灰；识别色仅用于 tile / logo / 图表等品牌识别，不再用于额度状态着色。
   - 额度状态色按剩余比例分 4 档交通灯（统一走 `statusColor`）：剩余 `>50%` 绿、`20%~50%` 黄、`<20%` 橙、`=0` 红。
   - 数字使用 `.monospacedDigit()`。
   - 图标优先使用 SF Symbols。
 - 不自造大面积背景、玻璃阴影、Web 风格控件或无关装饰。
-- 菜单栏和 Popover 中 Codex 永远排在 Claude 前。
+- provider 显示顺序固定为 `Provider.allCases`（Codex → Claude Code → Kimi Code → GLM → Ollama Cloud），菜单栏和 Popover 中 Codex 永远排在 Claude 前。
+- 新增 provider 只改 `ProviderDescriptor.all`、`AccountCatalog` 的 ccpm 映射和一个额度客户端；UI 层不允许再按 provider 写硬编码分支，一律遍历 `appState.accounts` / `presentProviders`。
+- 不做浏览器 Cookie 自动导入；Ollama Cloud 只接受用户在设置里手动粘贴的 Cookie 头。
 - 网络请求失败时保留已有快照，不要清空可展示数据。
 - 429 后必须遵守现有退避策略，不要为了手动刷新绕过限流。
 
@@ -59,6 +62,7 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于
 
 按任务风险选择最小验证手段：
 
+- 纯逻辑改动（额度解析器 / `QuotaPace` / ccpm keystore 解码）：跑 `scripts/selfcheck.sh`，用 `swiftc` 单独编译，不需要 Xcode。
 - 小范围 UI 改动：先做静态检查和代码审阅。
 - 需要编译确认时，先说明原因，再询问是否运行 Xcode 构建。
 - 需要手动验收时，说明在 Xcode 中打开 `ccbar.xcodeproj` 并运行 App，按本次需求的验收点检查。

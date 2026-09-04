@@ -81,8 +81,8 @@ private struct WelcomeStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Track Codex and Claude Code quota right from your menu bar. We'll detect your accounts automatically.",
-                "在菜单栏即时查看 Codex 与 Claude Code 的额度,我们将自动检测你的账号。"
+                "Track Codex, Claude Code, Kimi, GLM and Ollama quota right from your menu bar. We'll detect your accounts automatically.",
+                "在菜单栏即时查看 Codex、Claude Code、Kimi、GLM 与 Ollama 的额度,我们将自动检测你的账号。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -144,36 +144,20 @@ private struct DetectAccountsStep: View {
                 .kerning(-0.3)
 
             VStack(spacing: 10) {
-                DetectedAccountRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    plan: appState.codexAccount?.planType
-                        ?? appState.ccpmCodexProfilesForMonitoring.first?.planType,
-                    email: appState.codexAccount?.email
-                        ?? appState.ccpmCodexProfilesForMonitoring.first?.email,
-                    source: codexSource,
-                    tint: .codexAccent,
-                    logoName: "codex",
-                    fallback: "C",
-                    isDetected: appState.codexAccount != nil
-                        || !appState.importedCodexAccounts.isEmpty
-                        || appState.hasCCPMCodexProfiles,
-                    isOn: Binding(get: { settings.showCodex }, set: { settings.showCodex = $0 })
-                )
-                DetectedAccountRow(
-                    title: "Claude Code",
-                    subtitle: "Anthropic",
-                    plan: appState.claudeAccount?.subscriptionType
-                        ?? appState.ccpmClaudeProfilesForMonitoring.first?.organizationType,
-                    email: appState.claudeAccount?.email
-                        ?? appState.ccpmClaudeProfilesForMonitoring.first?.email,
-                    source: claudeSource,
-                    tint: .claudeAccent,
-                    logoName: "claude",
-                    fallback: "K",
-                    isDetected: appState.claudeAccount != nil || appState.hasCCPMClaudeProfiles,
-                    isOn: Binding(get: { settings.showClaude }, set: { settings.showClaude = $0 })
-                )
+                ForEach(Provider.allCases, id: \.self) { provider in
+                    let accounts = appState.accounts(for: provider)
+                    DetectedAccountRow(
+                        provider: provider,
+                        plan: accounts.first(where: { $0.identity.plan != nil })?.identity.plan,
+                        email: accounts.first(where: { $0.identity.email != nil })?.identity.email,
+                        source: sourceLabel(for: provider, accounts: accounts),
+                        isDetected: accounts.contains { $0.credential.canFetchQuota },
+                        isOn: Binding(
+                            get: { settings.isEnabled(provider) },
+                            set: { settings.setEnabled(provider, $0) }
+                        )
+                    )
+                }
             }
             .padding(.top, 18)
 
@@ -192,34 +176,32 @@ private struct DetectAccountsStep: View {
         .padding(.vertical, 28)
     }
 
-    private var codexSource: String {
-        if appState.codexAccount != nil { return "~/.codex/auth.json" }
-        if appState.hasCCPMCodexProfiles { return "~/.ccpm/config.json" }
-        if !appState.importedCodexAccounts.isEmpty { return "CCBar Keychain" }
-        return "—"
-    }
-
-    private var claudeSource: String {
-        switch appState.claudeAccount?.source {
-        case .file: return "~/.claude/.credentials.json"
-        case .keychain: return "Keychain · claude-code"
-        case .none:
-            return appState.hasCCPMClaudeProfiles ? "~/.ccpm/config.json" : "—"
+    private func sourceLabel(for provider: Provider, accounts: [MonitoredAccount]) -> String {
+        guard let first = accounts.first(where: { $0.credential.canFetchQuota }) else { return "—" }
+        switch first.source {
+        case .defaultLogin:
+            switch first.credential {
+            case .codexOAuth: return "~/.codex/auth.json"
+            case .claudeOAuth(let account, _):
+                return account.source == .file ? "~/.claude/.credentials.json" : "Keychain · claude-code"
+            default: return "—"
+            }
+        case .importedCodex: return "CCBar Keychain"
+        case .ccpm: return "~/.ccpm/config.json"
         }
     }
 }
 
 private struct DetectedAccountRow: View {
-    let title: String
-    let subtitle: String
+    let provider: Provider
     let plan: String?
     let email: String?
     let source: String
-    let tint: Color
-    let logoName: String
-    let fallback: String
     let isDetected: Bool
     @Binding var isOn: Bool
+
+    private var title: String { provider.descriptor.displayName }
+    private var subtitle: String { provider.descriptor.vendor }
 
     var body: some View {
         Button {
@@ -228,7 +210,14 @@ private struct DetectedAccountRow: View {
         } label: {
             HStack(spacing: 13) {
                 CheckmarkBox(checked: isDetected && isOn)
-                ServiceTile(logoName: logoName, fallback: fallback, tint: tint, size: 34, logoSize: 16, cornerRadius: 8)
+                ServiceTile(
+                    logoName: provider.descriptor.logoName,
+                    fallback: provider.descriptor.fallbackGlyph,
+                    tint: provider.accent,
+                    size: 34,
+                    logoSize: 16,
+                    cornerRadius: 8
+                )
 
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
@@ -297,8 +286,8 @@ private struct ReadOnlyInfoCard: View {
                 Text(tr("Read-only access", "仅读取"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "cc-bar reads local credentials and only calls official OpenAI / Anthropic APIs. It never sends credentials to third-party servers.",
-                    "cc-bar 读取本机凭据,只请求 OpenAI / Anthropic 官方 API,不会把凭据发送到第三方服务器。"
+                    "cc-bar reads local credentials and only calls each provider's own API (OpenAI, Anthropic, Kimi, Zhipu, Ollama). It never sends credentials anywhere else.",
+                    "cc-bar 读取本机凭据,只请求各服务自己的官方 API(OpenAI、Anthropic、Kimi、智谱、Ollama),不会把凭据发送到其他服务器。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -320,6 +309,7 @@ private struct ReadOnlyInfoCard: View {
 // MARK: - Step 3: Configure menu bar + HUD
 
 private struct ConfigureStep: View {
+    @Environment(AppState.self) private var appState
     let onBack: () -> Void
     let onContinue: () -> Void
 
@@ -334,13 +324,16 @@ private struct ConfigureStep: View {
             VStack(spacing: 14) {
                 ConfigureRow(title: "Show in menu bar",
                              chineseTitle: "菜单栏",
-                             subtitle: "Show Codex / Claude percentage next to the menu bar icon.",
-                             chineseSubtitle: "在菜单栏图标旁显示百分比") {
-                    HStack(spacing: 12) {
-                        Toggle("Codex", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
+                             subtitle: "Show each provider's percentage next to the menu bar icon.",
+                             chineseSubtitle: "在菜单栏图标旁显示各服务百分比") {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        ForEach(appState.presentProviders.filter { settings.isEnabled($0) }, id: \.self) { provider in
+                            Toggle(provider.descriptor.displayName, isOn: Binding(
+                                get: { settings.menuBarProviders.contains(provider) },
+                                set: { settings.setMenuBar(provider, $0) }
+                            ))
                             .toggleStyle(.switch)
-                        Toggle("Claude", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
-                            .toggleStyle(.switch)
+                        }
                     }
                 }
 

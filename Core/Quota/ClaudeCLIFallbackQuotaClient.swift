@@ -120,34 +120,37 @@ enum ClaudeCLIFallbackQuotaClient {
         }
 
         return .success(QuotaSnapshot(
-            app: .claude,
-            fiveHour: makeWindow(percentLeft: sessionLeft,
-                                 resetText: extractReset(after: ["Current session"], in: clean),
-                                 windowSeconds: 5 * 60 * 60),
-            weekly: makeWindow(percentLeft: weeklyLeft,
-                               resetText: extractReset(after: ["Current week (all models)", "Current week"], in: clean),
-                               windowSeconds: 7 * 24 * 60 * 60),
-            weeklyOpus: makeWindow(percentLeft: opusLeft,
-                                   resetText: extractReset(after: ["Current week (Opus)"], in: clean),
-                                   windowSeconds: 7 * 24 * 60 * 60),
-            weeklySonnet: makeWindow(percentLeft: sonnetLeft,
-                                     resetText: extractReset(after: ["Current week (Sonnet only)", "Current week (Sonnet)"], in: clean),
-                                     windowSeconds: 7 * 24 * 60 * 60),
+            provider: .claude,
+            primary: makeWindow(kind: .fiveHour,
+                                percentLeft: sessionLeft,
+                                resetText: extractReset(after: ["Current session"], in: clean)),
+            secondary: makeWindow(kind: .weekly,
+                                  percentLeft: weeklyLeft,
+                                  resetText: extractReset(after: ["Current week (all models)", "Current week"], in: clean)),
+            extra: [
+                makeWindow(kind: .weeklyOpus,
+                           percentLeft: opusLeft,
+                           resetText: extractReset(after: ["Current week (Opus)"], in: clean)),
+                makeWindow(kind: .weeklySonnet,
+                           percentLeft: sonnetLeft,
+                           resetText: extractReset(after: ["Current week (Sonnet only)", "Current week (Sonnet)"], in: clean))
+            ].compactMap { $0 },
             planType: nil,
             fetchedAt: Date()
         ))
     }
 
     nonisolated private static func makeWindow(
+        kind: QuotaWindowKind,
         percentLeft: Int?,
-        resetText: String?,
-        windowSeconds: Int
+        resetText: String?
     ) -> QuotaWindow? {
         guard let percentLeft else { return nil }
         return QuotaWindow(
+            kind: kind,
             usedPercent: max(0, min(100, 100 - Double(percentLeft))),
             resetsAt: parseResetDate(resetText),
-            windowSeconds: windowSeconds
+            windowSeconds: kind.defaultSeconds
         )
     }
 

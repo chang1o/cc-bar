@@ -7,6 +7,37 @@ import AppKit
 // 浅色 #6C6C70 / #D97757,深色 #98989D / #E68A6E。
 // Xcode 自动从 .xcassets 生成 `Color.codexAccent` / `Color.claudeAccent`,直接使用即可。
 // 见 docs/03-设计风格.md §4.2。
+// MARK: - Provider accent
+
+extension Provider {
+    /// Brand tint used for tiles, legend chips and rings. Never used for
+    /// quota status colouring (see `statusColor`).
+    var accent: Color {
+        switch self {
+        case .codex: return .codexAccent
+        case .claude: return .claudeAccent
+        case .kimi: return kimiAccent
+        case .glm: return glmAccent
+        case .ollama: return ollamaAccent
+        }
+    }
+}
+
+private let kimiAccent = quotaAdaptiveColor(
+    light: (red: 254, green: 96, blue: 60),   // #FE603C
+    dark: (red: 255, green: 128, blue: 96)
+)
+
+private let glmAccent = quotaAdaptiveColor(
+    light: (red: 232, green: 90, blue: 106),  // #E85A6A
+    dark: (red: 240, green: 122, blue: 136)
+)
+
+private let ollamaAccent = quotaAdaptiveColor(
+    light: (red: 96, green: 96, blue: 100),   // neutral grey
+    dark: (red: 170, green: 170, blue: 176)
+)
+
 // MARK: - Status color
 
 /// 按剩余百分比解析 4 档状态色:>50% → normal / 20~50% → warning / <20% → low / <=0 → empty。
@@ -35,6 +66,12 @@ private let quotaWarningColor = quotaAdaptiveColor(
 private let quotaLowColor = quotaAdaptiveColor(
     light: (red: 255, green: 122, blue: 47),  // #FF7A2F
     dark: (red: 255, green: 161, blue: 95)    // #FFA15F
+)
+
+/// Pace "ahead of budget" tint: the warning amber, not the empty red.
+let quotaPaceAheadColor = quotaAdaptiveColor(
+    light: (red: 255, green: 122, blue: 47),
+    dark: (red: 255, green: 161, blue: 95)
 )
 
 private let quotaEmptyColor = quotaAdaptiveColor(

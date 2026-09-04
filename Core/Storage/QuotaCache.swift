@@ -1,20 +1,17 @@
 import Foundation
 
-struct QuotaCacheRecord: Sendable, Equatable, Codable {
+nonisolated struct QuotaCacheRecord: Sendable, Equatable, Codable {
     var snapshot: QuotaSnapshot
     var source: QuotaSnapshotSource
     var updatedAt: Date
 }
 
-struct QuotaCachePayload: Sendable, Equatable, Codable {
-    var version: Int = 1
-    var codex: QuotaCacheRecord?
-    var claude: QuotaCacheRecord?
-    /// 用户导入的 Codex 账号配额缓存,key = ImportedCodexAccount.id (= chatgpt_account_id)。
-    /// 字段缺失时解码为 nil,旧缓存文件兼容。
-    var importedCodex: [String: QuotaCacheRecord]?
-    var ccpmCodex: [String: QuotaCacheRecord]?
-    var ccpmClaude: [String: QuotaCacheRecord]?
+/// v2: one record per monitored account, keyed by `AccountID.raw`.
+/// Older payloads are discarded; the next refresh repopulates them.
+nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
+    static let currentVersion = 2
+    var version: Int = QuotaCachePayload.currentVersion
+    var records: [String: QuotaCacheRecord] = [:]
 }
 
 enum QuotaCache {
@@ -25,7 +22,7 @@ enum QuotaCache {
         let url = cacheFileURL()
         guard let data = try? Data(contentsOf: url),
               let payload = try? JSONDecoder().decode(QuotaCachePayload.self, from: data),
-              payload.version == 1
+              payload.version == QuotaCachePayload.currentVersion
         else {
             return QuotaCachePayload()
         }

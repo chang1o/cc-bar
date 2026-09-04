@@ -1,26 +1,34 @@
 import Foundation
 
-/// 扫 `~/.claude/projects/**/*.jsonl`，把 assistant 行解析成 UsageEntry。
-/// 增量逻辑：file mtime + byte offset；同一条 message.id 跨调用只计一次（持久化到 ScanFileState.seenMessageIds）。
+/// Scans Claude Code style `projects/**/*.jsonl` roots and turns assistant
+/// lines into `UsageEntry`. Incremental by mtime + byte offset; a message.id
+/// is counted once across every file (sidechain / subagent files repeat it).
+/// Third-party providers driven through Claude Code (Kimi, GLM, Ollama) write
+/// the same format, so the caller passes the provider to attribute to.
 enum ClaudeJSONLScanner {
     struct Result: Sendable {
         var entries: [UsageEntry]
         var newState: [String: ScanFileState]
-        var newSeenIds: [String]
+        var alivePaths: Set<String>
+        var newSeenIds: Set<String>
         var filesScanned: Int
         var linesParsed: Int
     }
 
-    nonisolated static func scan(previous: [String: ScanFileState], seenMessageIds: [String]) -> Result {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let root = home.appendingPathComponent(".claude/projects", isDirectory: true)
-        let files = JSONLDirectoryEnumerator.files(at: root)
+    nonisolated static func scan(
+        roots: [URL],
+        accountId: String,
+        provider: Provider,
+        previous: [String: ScanFileState],
+        seenMessageIds: Set<String>
+    ) -> Result {
+        var files: [URL] = []
+        for root in roots { files.append(contentsOf: JSONLDirectoryEnumerator.files(at: root)) }
 
-        var newState: [String: ScanFileState] = previous
+        var newState: [String: ScanFileState] = [:]
         var entries: [UsageEntry] = []
         var linesParsed = 0
-        // 跨文件全局去重：同一 message.id 在 sidechain / subagent 文件中会反复出现。
-        var seen = Set(seenMessageIds)
+        var seen = seenMessageIds
 
         for url in files {
             let path = url.path
@@ -70,7 +78,8 @@ enum ClaudeJSONLScanner {
                     cacheCreation: p.cacheCreationTokens
                 )
                 entries.append(UsageEntry(
-                    app: .claude,
+                    accountId: accountId,
+                    provider: provider,
                     model: Pricing.normalize(model: p.model),
                     day: day,
                     timestamp: p.timestamp,
@@ -87,17 +96,14 @@ enum ClaudeJSONLScanner {
             newState[path] = state
         }
 
-        // 删除已不存在的文件 watermark
-        let alive = Set(files.map { $0.path })
-        for key in newState.keys where !alive.contains(key) {
-            newState.removeValue(forKey: key)
-        }
-
-        // 控制全局 seen 集合大小：保留最近 20000 条
-        let seenArr = Array(seen)
-        let cappedSeen = seenArr.count > 20000 ? Array(seenArr.suffix(20000)) : seenArr
-
-        return Result(entries: entries, newState: newState, newSeenIds: cappedSeen, filesScanned: files.count, linesParsed: linesParsed)
+        return Result(
+            entries: entries,
+            newState: newState,
+            alivePaths: Set(files.map(\.path)),
+            newSeenIds: seen,
+            filesScanned: files.count,
+            linesParsed: linesParsed
+        )
     }
 
     private struct ParsedAssistant {

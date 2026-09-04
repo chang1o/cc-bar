@@ -1,23 +1,22 @@
 import Foundation
 
-/// 单个 JSONL 文件的扫描 watermark。
-struct ScanFileState: Sendable, Equatable, Codable {
+/// Per-file scan watermark.
+nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var mtime: Double          // file modification time, epoch seconds
-    var offset: UInt64         // 已扫到的字节数
-    /// Codex 用：当前会话最近一次 `turn_context` 里的模型，用于给后续 token_count 打标签。
+    var offset: UInt64         // bytes already consumed
+    /// Codex only: model from the latest `turn_context`, tags later token_count lines.
     var lastModel: String?
 }
 
-struct ScanState: Sendable, Equatable, Codable {
-    /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
-    /// v4: 引入 pricingFingerprint，价格表变化自动触发全量重扫，不再依赖手动 bump。
-    static let currentVersion: Int = 4
+nonisolated struct ScanState: Sendable, Equatable, Codable {
+    /// `version` covers structural changes; price changes are covered by `pricingFingerprint`.
+    /// v5: one file map keyed by absolute path across every account root.
+    static let currentVersion: Int = 5
     var version: Int = ScanState.currentVersion
-    /// 写盘时记录的价格表指纹；load 时与当前 `Pricing.fingerprint` 不一致即视为缓存失效、全量重扫重算。
     var pricingFingerprint: String = ""
-    var claude: [String: ScanFileState] = [:]
-    var codex: [String: ScanFileState] = [:]
-    /// 跨文件的 Claude message.id 去重集合（同一条 assistant 消息可能被 sidechain / subagent 在多个 jsonl 里重复引用）。
+    var files: [String: ScanFileState] = [:]
+    /// Claude `message.id` values already counted; the same assistant message
+    /// shows up again in sidechain / subagent files.
     var claudeSeenMessageIds: [String] = []
 }
 
@@ -57,13 +56,11 @@ enum ScanCache {
     }
 }
 
-/// 聚合结果磁盘缓存，启动后立刻 UI 有数。
-struct UsageRollupPayload: Sendable, Codable {
-    /// version 管「结构变更」；价格变更由 pricingFingerprint 接管。
-    /// v4: 引入 pricingFingerprint，价格表变化自动触发重算，丢弃用旧价存的桶。
-    static let currentVersion: Int = 4
+/// Aggregated buckets on disk so the UI has numbers right after launch.
+nonisolated struct UsageRollupPayload: Sendable, Codable {
+    /// v5: buckets carry accountId + provider.
+    static let currentVersion: Int = 5
     var version: Int = UsageRollupPayload.currentVersion
-    /// 写盘时记录的价格表指纹；load 时与当前 `Pricing.fingerprint` 不一致即丢弃，全量重扫重建。
     var pricingFingerprint: String = ""
     var buckets: [UsageBucket] = []
     var updatedAt: Date = Date()

@@ -1,11 +1,8 @@
 import Foundation
 import Observation
 
-/// 按 (day, app, model) 聚合的内存表。
-///
-/// 标记为 `@Observable`：`snapshot()` / `todayCost(...)` / `totals(...)` 在 SwiftUI
-/// body 内访问 `buckets` 时会自动登记依赖，扫描完成后 `ingest` 写回 `buckets`
-/// 触发的变更会驱动所有读这个聚合器的视图自动刷新。视图侧无需任何额外订阅。
+/// In-memory (day, accountId, model) table. `@Observable` so views that read
+/// totals in `body` refresh automatically after a scan ingests new entries.
 @MainActor
 @Observable
 final class UsageAggregator {
@@ -13,21 +10,20 @@ final class UsageAggregator {
 
     struct BucketKey: Hashable {
         let day: Date
-        let app: UsageApp
+        let accountId: String
         let model: String
     }
 
     func load(from snapshot: [UsageBucket]) {
         buckets.removeAll(keepingCapacity: true)
         for b in snapshot {
-            let key = BucketKey(day: b.day, app: b.app, model: b.model)
-            buckets[key] = b
+            buckets[BucketKey(day: b.day, accountId: b.accountId, model: b.model)] = b
         }
     }
 
     func ingest(_ entries: [UsageEntry]) {
         for e in entries {
-            let key = BucketKey(day: e.day, app: e.app, model: e.model)
+            let key = BucketKey(day: e.day, accountId: e.accountId, model: e.model)
             if var b = buckets[key] {
                 b.inputTokens += e.inputTokens
                 b.outputTokens += e.outputTokens
@@ -37,7 +33,8 @@ final class UsageAggregator {
                 buckets[key] = b
             } else {
                 buckets[key] = UsageBucket(
-                    app: e.app,
+                    accountId: e.accountId,
+                    provider: e.provider,
                     model: e.model,
                     day: e.day,
                     inputTokens: e.inputTokens,
@@ -54,19 +51,26 @@ final class UsageAggregator {
         Array(buckets.values)
     }
 
-    func todayCost(for app: UsageApp, now: Date = Date()) -> Decimal {
+    func todayCost(accountId: String, now: Date = Date()) -> Decimal {
         let today = UsageDay.startOfDay(for: now)
         var sum: Decimal = 0
-        for b in buckets.values where b.app == app && b.day == today {
+        for b in buckets.values where b.accountId == accountId && b.day == today {
             sum += b.costUSD
         }
         return sum
     }
 
-    /// 给 M6 复用：按时间范围 / 应用聚合。
-    func totals(app: UsageApp, from: Date, to: Date) -> UsageTotals {
+    func totals(provider: Provider, from: Date, to: Date) -> UsageTotals {
         var totals = UsageTotals.zero
-        for b in buckets.values where b.app == app && b.day >= from && b.day < to {
+        for b in buckets.values where b.provider == provider && b.day >= from && b.day < to {
+            totals.add(b)
+        }
+        return totals
+    }
+
+    func totals(accountId: String, from: Date, to: Date) -> UsageTotals {
+        var totals = UsageTotals.zero
+        for b in buckets.values where b.accountId == accountId && b.day >= from && b.day < to {
             totals.add(b)
         }
         return totals

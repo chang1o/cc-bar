@@ -1,26 +1,24 @@
 import Foundation
 
-enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
-    case codex
-    case claude
-}
-
-/// 单次 API 调用解析出的用量记录（内存中流转，不直接持久化）。
-struct UsageEntry: Sendable, Equatable {
-    var app: UsageApp
+/// One parsed API call from a local JSONL log. Attributed to the monitored
+/// account whose usage root the file lives under.
+nonisolated struct UsageEntry: Sendable, Equatable {
+    var accountId: String
+    var provider: Provider
     var model: String
-    var day: Date              // 本地时区 0 点
+    var day: Date              // local midnight
     var timestamp: Date
-    var inputTokens: Int       // 已扣 cacheRead（Codex 解析时已处理）
+    var inputTokens: Int       // cache-read already excluded
     var outputTokens: Int
     var cacheReadTokens: Int
     var cacheCreationTokens: Int
     var costUSD: Decimal
 }
 
-/// (day, app, model) 聚合桶；UsageAggregator 内存表的值。
-struct UsageBucket: Sendable, Equatable, Codable {
-    var app: UsageApp
+/// (day, accountId, model) aggregation bucket persisted in `usage-rollup.json`.
+nonisolated struct UsageBucket: Sendable, Equatable, Codable {
+    var accountId: String
+    var provider: Provider
     var model: String
     var day: Date
     var inputTokens: Int
@@ -30,7 +28,7 @@ struct UsageBucket: Sendable, Equatable, Codable {
     var costUSD: Decimal
 }
 
-struct UsageTotals: Sendable, Equatable {
+nonisolated struct UsageTotals: Sendable, Equatable {
     var inputTokens: Int = 0
     var outputTokens: Int = 0
     var cacheReadTokens: Int = 0
@@ -47,19 +45,17 @@ struct UsageTotals: Sendable, Equatable {
         costUSD += bucket.costUSD
     }
 
-    /// 含缓存的输入侧 token(input + cache_read + cache_creation)。与 cc-switch / ccusage 的 input 口径一致。
+    /// input + cache_read + cache_creation, the cc-switch / ccusage convention.
     var inputWithCacheTokens: Int {
         inputTokens + cacheReadTokens + cacheCreationTokens
     }
 
-    /// 全量 token(输入含缓存 + 输出)。与 cc-switch / ccusage 的总量口径一致。
     var totalTokens: Int {
         inputWithCacheTokens + outputTokens
     }
 }
 
-/// Decimal <-> String 编解码，避免 Double 精度漂。
-extension Decimal {
+nonisolated extension Decimal {
     var asPlainString: String {
         var copy = self
         return NSDecimalString(&copy, Locale(identifier: "en_US_POSIX"))
@@ -70,15 +66,15 @@ extension Decimal {
     }
 }
 
-/// UsageBucket 的 Codable 用 Decimal 字符串。
-extension UsageBucket {
+nonisolated extension UsageBucket {
     enum CodingKeys: String, CodingKey {
-        case app, model, day, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, costUSD
+        case accountId, provider, model, day, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, costUSD
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.app = try c.decode(UsageApp.self, forKey: .app)
+        self.accountId = try c.decode(String.self, forKey: .accountId)
+        self.provider = try c.decode(Provider.self, forKey: .provider)
         self.model = try c.decode(String.self, forKey: .model)
         self.day = try c.decode(Date.self, forKey: .day)
         self.inputTokens = try c.decode(Int.self, forKey: .inputTokens)
@@ -91,7 +87,8 @@ extension UsageBucket {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(app, forKey: .app)
+        try c.encode(accountId, forKey: .accountId)
+        try c.encode(provider, forKey: .provider)
         try c.encode(model, forKey: .model)
         try c.encode(day, forKey: .day)
         try c.encode(inputTokens, forKey: .inputTokens)
@@ -102,8 +99,7 @@ extension UsageBucket {
     }
 }
 
-enum UsageDay {
-    /// 本地时区 0 点。
+nonisolated enum UsageDay {
     static func startOfDay(for date: Date) -> Date {
         Calendar.current.startOfDay(for: date)
     }

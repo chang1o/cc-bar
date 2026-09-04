@@ -2,8 +2,8 @@ import SwiftUI
 
 // MARK: - SettingsRootView
 //
-// 见 docs/04-界面布局.md §4。
-// 使用 prototype 的 PrefsGroup + PrefsRow 卡片结构,放弃 Form .grouped。
+// PrefsGroup + PrefsRow cards (system `Form .grouped` is too weak for this look).
+// Every provider-specific list is generated from `Provider.allCases`.
 
 struct SettingsRootView: View {
     @Environment(AppState.self) private var appState
@@ -31,61 +31,37 @@ struct SettingsRootView: View {
 
     private func accountsGroup(settings: SettingsStore) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            // 主账号（自动检测）
             PrefsGroup(
                 title: "Accounts",
                 chinese: "账号",
-                desc: "Auto-detected on your Mac. Toggle which services to display.",
-                chineseDesc: "自动检测,可勾选要显示的服务"
+                desc: "Auto-detected on your Mac and from ccpm. Toggle which services to display.",
+                chineseDesc: "从本机登录与 ccpm 自动检测,可勾选要显示的服务"
             ) {
-                AccountRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    tint: .codexAccent,
-                    logoName: "codex",
-                    fallback: "C",
-                    email: appState.codexAccount?.email,
-                    plan: appState.codexAccount?.planType,
-                    fallbackDetail: appState.importedCodexAccounts.isEmpty && !appState.hasCCPMCodexProfiles
-                        ? nil
-                        : tr("Additional accounts configured", "已配置其他账号"),
-                    isAvailable: appState.codexAccount != nil
-                        || !appState.importedCodexAccounts.isEmpty
-                        || appState.hasCCPMCodexProfiles,
-                    isOn: Binding(
-                        get: { settings.showCodex },
-                        set: { setServiceEnabled(.codex, enabled: $0) }
+                ForEach(Provider.allCases, id: \.self) { provider in
+                    let accounts = appState.accounts(for: provider)
+                    AccountRow(
+                        provider: provider,
+                        email: accounts.first(where: { $0.identity.email != nil })?.identity.email,
+                        plan: accounts.first(where: { $0.identity.plan != nil })?.identity.plan,
+                        accountCount: accounts.count,
+                        isAvailable: accounts.contains { $0.credential.canFetchQuota || appState.quotaState(for: $0).snapshot != nil },
+                        isOn: Binding(
+                            get: { settings.isEnabled(provider) },
+                            set: { setServiceEnabled(provider, enabled: $0) }
+                        )
                     )
-                )
-                AccountRow(
-                    title: "Claude Code",
-                    subtitle: "Anthropic",
-                    tint: .claudeAccent,
-                    logoName: "claude",
-                    fallback: "K",
-                    email: appState.claudeAccount?.email,
-                    plan: appState.claudeAccount?.subscriptionType,
-                    fallbackDetail: appState.ccpmClaudeProfiles.isEmpty
-                        ? nil
-                        : tr("ccpm profiles configured", "已配置 ccpm profile"),
-                    isAvailable: appState.claudeAccount != nil || !appState.ccpmClaudeProfiles.isEmpty,
-                    isOn: Binding(
-                        get: { settings.showClaude },
-                        set: { setServiceEnabled(.claude, enabled: $0) }
-                    )
-                )
+                }
             }
 
             PrefsGroup(
-                title: "Codex Profiles",
-                chinese: "Codex 账号",
-                desc: "Auto-discovered from ccpm. OAuth profiles are monitored from their native auth.json.",
-                chineseDesc: "自动读取 ccpm 配置;OAuth profile 直接使用各自的 auth.json 独立监控"
+                title: "ccpm Profiles",
+                chinese: "ccpm 账号",
+                desc: "Auto-discovered from ~/.ccpm/config.json. OAuth profiles use their own credentials; Kimi / GLM read the key from the ccpm keystore; Ollama Cloud needs a pasted cookie.",
+                chineseDesc: "自动读取 ~/.ccpm/config.json;OAuth profile 用各自凭据,Kimi / GLM 从 ccpm keystore 取 key,Ollama Cloud 需要粘贴 Cookie"
             ) {
-                CCPMCodexProfilesView()
+                CCPMProfilesView()
             }
 
-            // 其他 Codex 账号（手动导入）
             PrefsGroup(
                 title: "Other Codex Accounts",
                 chinese: "其他 Codex 账号",
@@ -93,15 +69,6 @@ struct SettingsRootView: View {
                 chineseDesc: "粘贴 auth.json 添加更多 Codex 账号额度，仅查看，不会切换 CLI 登录状态"
             ) {
                 ImportedCodexAccountsView()
-            }
-
-            PrefsGroup(
-                title: "Claude Code Profiles",
-                chinese: "Claude Code 账号",
-                desc: "Auto-discovered from ccpm. OAuth profiles are monitored independently.",
-                chineseDesc: "自动读取 ccpm 配置;OAuth profile 会独立监控额度"
-            ) {
-                CCPMClaudeProfilesView()
             }
         }
     }
@@ -115,23 +82,57 @@ struct SettingsRootView: View {
             desc: "What appears next to the icon.",
             chineseDesc: "图标旁显示什么"
         ) {
-            PrefsRow(label: "Show Codex", chinese: "显示 Codex") {
-                Toggle("", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
+            ForEach(Provider.allCases, id: \.self) { provider in
+                PrefsRow(label: "Show \(provider.displayName)", chinese: "显示 \(provider.displayName)") {
+                    Toggle("", isOn: Binding(
+                        get: { settings.menuBarProviders.contains(provider) },
+                        set: { settings.setMenuBar(provider, $0) }
+                    ))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
+                    .disabled(!settings.isEnabled(provider) || !appState.presentProviders.contains(provider))
+                }
             }
-            PrefsRow(label: "Show Claude", chinese: "显示 Claude") {
-                Toggle("", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
+            PrefsRow(
+                label: "Display mode",
+                chinese: "显示模式",
+                desc: "All enabled providers, or only the one closest to its limit.",
+                chineseDesc: "显示所有已启用服务,或只显示剩余最低的那个"
+            ) {
+                Picker("", selection: Binding(
+                    get: { settings.menuBarMode },
+                    set: { settings.menuBarMode = $0 }
+                )) {
+                    Text(tr("All", "全部")).tag(MenuBarMode.all)
+                    Text(tr("Lowest only", "仅最低")).tag(MenuBarMode.lowestOnly)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            PrefsRow(
+                label: "Icon style",
+                chinese: "图标样式",
+                desc: "Percent text or a small vertical meter next to each logo.",
+                chineseDesc: "logo 旁显示百分比文字或竖向量表"
+            ) {
+                Picker("", selection: Binding(
+                    get: { settings.menuBarStyle },
+                    set: { settings.menuBarStyle = $0 }
+                )) {
+                    Text(tr("Percent", "百分比")).tag(MenuBarStyle.percent)
+                    Text(tr("Meter", "量表")).tag(MenuBarStyle.meter)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
             }
             PrefsRow(
                 label: "Quota period",
                 chinese: "额度周期",
-                desc: "Which window to display in the menu bar.",
-                chineseDesc: "菜单栏显示哪个窗口"
+                desc: "Which window to display: primary (5H, monthly for Ollama) or secondary (WK).",
+                chineseDesc: "显示主窗口(5H,Ollama 为月)还是副窗口(WK)"
             ) {
                 Picker("", selection: Binding(
                     get: { settings.menuBarWindow },
@@ -140,8 +141,8 @@ struct SettingsRootView: View {
                         FloatingPanelController.shared.sync()
                     }
                 )) {
-                    Text("5H").tag(MenuBarWindowChoice.fiveHour)
-                    Text("WK").tag(MenuBarWindowChoice.weekly)
+                    Text(tr("Primary · 5H", "主窗口 · 5H")).tag(MenuBarWindowChoice.primary)
+                    Text(tr("Secondary · WK", "副窗口 · WK")).tag(MenuBarWindowChoice.secondary)
                     Text(tr("Both", "都显示")).tag(MenuBarWindowChoice.both)
                 }
                 .labelsHidden()
@@ -172,31 +173,20 @@ struct SettingsRootView: View {
                 .toggleStyle(.switch)
                 .tint(.green)
             }
-            PrefsRow(label: "Show Codex row", chinese: "显示 Codex 行") {
-                Toggle("", isOn: Binding(
-                    get: { settings.floatingShowCodex },
-                    set: { newValue in
-                        settings.floatingShowCodex = newValue
-                        FloatingPanelController.shared.sync()
-                    }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(.green)
-                .disabled(!settings.floatingEnabled)
-            }
-            PrefsRow(label: "Show Claude row", chinese: "显示 Claude 行") {
-                Toggle("", isOn: Binding(
-                    get: { settings.floatingShowClaude },
-                    set: { newValue in
-                        settings.floatingShowClaude = newValue
-                        FloatingPanelController.shared.sync()
-                    }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .tint(.green)
-                .disabled(!settings.floatingEnabled)
+            ForEach(Provider.allCases, id: \.self) { provider in
+                PrefsRow(label: "Show \(provider.displayName) row", chinese: "显示 \(provider.displayName) 行") {
+                    Toggle("", isOn: Binding(
+                        get: { settings.floatingProviders.contains(provider) },
+                        set: { newValue in
+                            settings.setFloating(provider, newValue)
+                            FloatingPanelController.shared.sync()
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
+                    .disabled(!settings.floatingEnabled || !settings.isEnabled(provider) || !appState.presentProviders.contains(provider))
+                }
             }
         }
     }
@@ -266,6 +256,17 @@ struct SettingsRootView: View {
                     .monospacedDigit()
             }
             PrefsRow(
+                label: "Quota notifications",
+                chinese: "额度通知",
+                desc: "Notify at 20% left, when a window is exhausted, and when a weekly window resets.",
+                chineseDesc: "剩余 20%、用尽以及周额度重置时通知"
+            ) {
+                Toggle("", isOn: Binding(get: { settings.quotaNotifications }, set: { settings.quotaNotifications = $0 }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
+            }
+            PrefsRow(
                 label: "Service status dot",
                 chinese: "服务状态圆点",
                 desc: "Show OpenAI / Anthropic status next to each service in the popover.",
@@ -299,8 +300,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Privacy mode",
                 chinese: "隐私模式",
-                desc: "Hide email in the popover and account names for other Codex accounts.",
-                chineseDesc: "弹出窗口中隐藏主账号邮箱,并隐藏 Codex 副账号名称"
+                desc: "Hide emails and account names in the popover.",
+                chineseDesc: "弹出窗口中隐藏邮箱与账号名称"
             ) {
                 Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
                     .labelsHidden()
@@ -343,8 +344,8 @@ struct SettingsRootView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text(tr("cc-bar \(shortVersion) · made with Liquid Glass",
-                    "CCBar \(shortVersion) · 双应用额度与本地用量统计"))
+            Text(tr("cc-bar \(appVersion) · quotas for every coding provider you use",
+                    "CCBar \(appVersion) · 多 Provider 额度与本地用量统计"))
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -354,14 +355,8 @@ struct SettingsRootView: View {
 
     // MARK: Helpers
 
-    private func setServiceEnabled(_ service: UsageApp, enabled: Bool) {
-        let settings = SettingsStore.shared
-        switch service {
-        case .codex:
-            settings.showCodex = enabled
-        case .claude:
-            settings.showClaude = enabled
-        }
+    private func setServiceEnabled(_ provider: Provider, enabled: Bool) {
+        SettingsStore.shared.setEnabled(provider, enabled)
         FloatingPanelController.shared.sync()
 
         guard enabled else { return }
@@ -372,13 +367,7 @@ struct SettingsRootView: View {
     }
 
     private var lastRefreshText: String {
-        let latest = [
-            appState.codexRefreshState.lastSuccessAt,
-            appState.claudeRefreshState.lastSuccessAt,
-            appState.importedCodexRefreshStates.values.compactMap(\.lastSuccessAt).max(),
-            appState.ccpmCodexRefreshStates.values.compactMap(\.lastSuccessAt).max(),
-            appState.ccpmClaudeRefreshStates.values.compactMap(\.lastSuccessAt).max()
-        ].compactMap { $0 }.max()
+        let latest = appState.accounts.compactMap { appState.quotaState(for: $0).refresh.lastSuccessAt }.max()
         guard let latest else { return "—" }
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "HH:mm:ss"
@@ -390,16 +379,11 @@ struct SettingsRootView: View {
         let info = Bundle.main.infoDictionary
         return info?["CFBundleShortVersionString"] as? String ?? "0.0"
     }
-
-    private var shortVersion: String {
-        let info = Bundle.main.infoDictionary
-        return info?["CFBundleShortVersionString"] as? String ?? "1.0"
-    }
 }
 
 // MARK: - PrefsGroup
 
-private struct PrefsGroup<Content: View>: View {
+struct PrefsGroup<Content: View>: View {
     let title: String
     let chinese: String
     var desc: String? = nil
@@ -432,7 +416,7 @@ private struct PrefsGroup<Content: View>: View {
 
 // MARK: - PrefsRow
 
-private struct PrefsRow<Trailing: View>: View {
+struct PrefsRow<Trailing: View>: View {
     let label: String
     let chinese: String
     var desc: String? = nil
@@ -461,26 +445,31 @@ private struct PrefsRow<Trailing: View>: View {
 // MARK: - AccountRow
 
 private struct AccountRow: View {
-    let title: String
-    let subtitle: String
-    let tint: Color
-    let logoName: String
-    let fallback: String
+    let provider: Provider
     let email: String?
     let plan: String?
-    let fallbackDetail: String?
+    let accountCount: Int
     let isAvailable: Bool
     @Binding var isOn: Bool
 
+    private var descriptor: ProviderDescriptor { provider.descriptor }
+
     var body: some View {
         HStack(spacing: 11) {
-            ServiceTile(logoName: logoName, fallback: fallback, tint: tint, size: 28, logoSize: 16, cornerRadius: 7)
+            ServiceTile(
+                logoName: descriptor.logoName,
+                fallback: descriptor.fallbackGlyph,
+                tint: provider.accent,
+                size: 28,
+                logoSize: 16,
+                cornerRadius: 7
+            )
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(title)
+                    Text(descriptor.displayName)
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("· \(subtitle)")
+                    Text("· \(descriptor.vendor)")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
@@ -506,31 +495,24 @@ private struct AccountRow: View {
     }
 
     private var detailText: String {
-        if let email {
-            if let plan, !plan.isEmpty {
-                return "\(email) · \(plan)"
-            }
-            return email
+        var parts: [String] = []
+        if let email, !SettingsStore.shared.privacyMode { parts.append(email) }
+        if let plan, !plan.isEmpty { parts.append(plan) }
+        if accountCount > 1 {
+            parts.append(tr("\(accountCount) accounts", "\(accountCount) 个账号"))
         }
-        if let fallbackDetail {
-            return fallbackDetail
+        if parts.isEmpty {
+            return isAvailable ? tr("Detected", "已识别") : tr("Not detected", "未识别")
         }
-        return tr("Not detected", "未识别")
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder
     private var statusBadge: some View {
-        if email != nil {
+        if isAvailable {
             HStack(spacing: 4) {
                 Circle().fill(Color.green).frame(width: 6, height: 6)
-                Text(tr("Connected", "已连接"))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.green)
-            }
-        } else if isAvailable {
-            HStack(spacing: 4) {
-                Circle().fill(Color.green).frame(width: 6, height: 6)
-                Text(tr("Available", "可用"))
+                Text(email != nil ? tr("Connected", "已连接") : tr("Available", "可用"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.green)
             }
@@ -545,7 +527,7 @@ private struct AccountRow: View {
     }
 }
 
-// MARK: - Bilingual display names for existing enums
+// MARK: - Bilingual display names for interval enums
 
 extension QuotaIntervalChoice {
     @MainActor

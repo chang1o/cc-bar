@@ -2,14 +2,14 @@ import Foundation
 import CryptoKit
 
 /// 模型价格（USD / 百万 token）。命中不到的模型 cost 计 0，token 仍记录。
-struct ModelPrice: Sendable {
+nonisolated struct ModelPrice: Sendable {
     var input: Decimal
     var output: Decimal
     var cacheRead: Decimal
     var cacheCreation: Decimal
 }
 
-enum Pricing {
+nonisolated enum Pricing {
     /// 价格表与 cc-switch `seed_model_pricing` / CodexBar `CostUsagePricing` 对齐（2026 上半年价位）。
     /// 命中不到时返回 nil。键为归一化后的模型名（剥 `openai/` 前缀和末尾 `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
     static let table: [String: ModelPrice] = [

@@ -1,6 +1,6 @@
 # cc-bar
 
-> macOS 菜单栏小工具 —— 一眼看清 Codex 与 Claude Code 的用量与花费。
+> macOS 菜单栏小工具 —— 一眼看清 Codex、Claude Code、Kimi Code、GLM Coding Plan 与 Ollama Cloud 的额度与用量。
 
 <p>
   <img alt="platform" src="https://img.shields.io/badge/macOS-14+-blue.svg">
@@ -14,11 +14,12 @@
 
 ## 功能
 
-- **用量显示** —— Codex 与 Claude Code 的 5 小时 / 周窗口剩余额度,实时同步
-- **菜单栏 + 悬浮窗** —— 状态栏图标显示剩余百分比;可选桌面悬浮 HUD,可拖动、边缘吸附、置顶不抢焦
-- **多 Codex 账号** —— 自动发现 ccpm Codex profiles,也支持手动导入,主副账号在 Popover 同屏展示
-- **Token 与费用统计** —— 按今天 / 昨天 / 本周 / 本月 / 本年 / 7 天 / 30 天 / 全部 / 自定义切换;KPI、堆叠柱状图、按服务占比、按模型明细
-- **丰富的设置** —— 账号开关、菜单栏显示项、悬浮窗、刷新间隔、重置时间显示、中英双语、开机自动启动
+- **多 Provider 额度** —— Codex、Claude Code、Kimi Code、GLM Coding Plan、Ollama Cloud 的主 / 副窗口剩余额度(5 小时 / 周,Ollama 为月 / 周),附带消耗节奏(超前 / 落后 / 预计耗尽)
+- **ccpm 联动** —— 自动发现 [ccpm](https://github.com/chang1o/claude-code-profile-manager) profiles:Codex / Claude OAuth 直接读各自凭据,Kimi / GLM 从 ccpm keystore 取 API key,Ollama Cloud 粘贴一次 Cookie;同一 provider 的多个账号在 Popover 分组展示,每个账号一张完整卡片;卡片底部可一键打开用量面板 / 状态页、在 Terminal 里 `ccpm run`、或 `ccpm set-default` 切换默认 profile
+- **菜单栏 + 悬浮窗** —— 每个 provider 可单独勾选;支持「仅显示剩余最低的服务」;图标可选百分比文字或竖向量表;可选桌面悬浮 HUD,可拖动、边缘吸附、置顶不抢焦
+- **额度通知** —— 剩余 20%、用尽、窗口重置三类本地通知,默认关闭;Claude 的 Extra usage(超额月上限)作为额外窗口显示
+- **Token 与费用统计** —— 按账号目录扫描本地 JSONL;按今天 / 昨天 / 本周 / 本月 / 本年 / 7 天 / 30 天 / 全部 / 自定义切换;KPI、堆叠柱状图、按服务占比、按模型与按账号明细;无公开价格的 provider 只显示 token
+- **丰富的设置** —— provider 开关、菜单栏显示项 / 模式 / 图标样式、悬浮窗、刷新间隔、额度通知、重置时间显示、中英双语、开机自动启动
 
 <p align="center">
   <img src="docs/Screenshots/statistics.png" width="720" alt="用量统计">
@@ -37,6 +38,14 @@
    ```
 
 3. 若本机无 `~/.claude/.credentials.json`,会弹出说明后请求 Keychain 授权,请选「**始终允许**」。
+
+4. 要监控 Kimi Code / GLM Coding Plan / Ollama Cloud,用 [ccpm fork](https://github.com/chang1o/claude-code-profile-manager) 建 profile:
+
+   ```bash
+   ccpm add kimi-work --provider kimi   # or --provider glm / --provider ollama
+   ```
+
+   ccpm 会写入默认 `ANTHROPIC_BASE_URL` 并在启动时把 key 注入为 `ANTHROPIC_AUTH_TOKEN`;cc-bar 重启后自动出现该账号。Ollama Cloud 的额度只在 ollama.com 设置页上,需在「设置 → ccpm 账号」为该 profile 粘贴一次 Cookie 头。
 
 ## 反馈
 

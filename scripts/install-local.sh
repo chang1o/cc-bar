@@ -47,7 +47,7 @@ SWIFT
 sources=()
 while IFS= read -r source; do
   sources+=("$source")
-done < <(find "$ROOT" -name '*.swift' ! -path "$ROOT/Helpers/*" -print | sort)
+done < <(find "$ROOT" -name '*.swift' ! -path "$ROOT/Helpers/*" ! -path "$ROOT/scripts/*" -print | sort)
 
 xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -parse-as-library \
   "${sources[@]}" "$BUILD_ROOT/Generated/AssetFallbacks.swift" \
@@ -92,8 +92,9 @@ PLIST
 
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 
-cp "$ROOT/Resources/Logos/codex.svg" "$APP_BUNDLE/Contents/Resources/codex.svg"
-cp "$ROOT/Resources/Logos/claude.svg" "$APP_BUNDLE/Contents/Resources/claude.svg"
+for logo in "$ROOT"/Resources/Logos/*.svg; do
+  cp "$logo" "$APP_BUNDLE/Contents/Resources/$(basename "$logo")"
+done
 cp "$ROOT/Resources/MenuBarIcon/menubar-22.png" "$APP_BUNDLE/Contents/Resources/menubar-22.png"
 cp "$ROOT/Resources/MenuBarIcon/menubar-44.png" "$APP_BUNDLE/Contents/Resources/menubar-44.png"
 

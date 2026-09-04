@@ -2,41 +2,29 @@ import SwiftUI
 
 // MARK: - FloatingContentView
 //
-// 见 docs/04-界面布局.md §2。
-// 默认变体:Two-row pill。
-// 结构:14pt 圆角 HUD 容器 + .hudWindow material 背景 + 两行 pill。
-// 每行:18pt ServiceTile + flex 4pt bar + 34pt 百分比(服务色)。
+// Always-on-top pill: one row per provider enabled for the HUD.
+// Row: 18pt ServiceTile + flexible 4pt bar + lane label + 34pt percent.
 
 struct FloatingContentView: View {
     @Environment(AppState.self) private var appState
     let settings: SettingsStore
 
     var body: some View {
-        let showCodex = settings.effectiveFloatingShowCodex
-        let showClaude = settings.effectiveFloatingShowClaude
-        let claudeQuota = appState.claudeMonitorQuota()
-        let quotaWindow = settings.menuBarWindow
+        let present = appState.presentProviders
+        let providers = settings.effectiveFloatingProviders.filter { present.contains($0) }
+        let choice = settings.menuBarWindow
 
         VStack(alignment: .leading, spacing: 7) {
-            if showCodex {
+            ForEach(providers, id: \.self) { provider in
+                let snapshot = appState.monitorSnapshot(for: provider)
+                let window = Self.laneWindow(snapshot, choice: choice)
                 FloatingRow(
-                    logoName: "codex",
-                    fallback: "C",
-                    tint: .codexAccent,
-                    label: floatingWindowLabel(for: quotaWindow),
-                    window: floatingWindow(appState.codexQuota, choice: quotaWindow)
+                    provider: provider,
+                    label: window?.kind.shortLabel ?? Self.laneKind(provider, choice: choice).shortLabel,
+                    window: window
                 )
             }
-            if showClaude {
-                FloatingRow(
-                    logoName: "claude",
-                    fallback: "K",
-                    tint: .claudeAccent,
-                    label: floatingWindowLabel(for: quotaWindow),
-                    window: floatingWindow(claudeQuota, choice: quotaWindow)
-                )
-            }
-            if !showCodex && !showClaude {
+            if providers.isEmpty {
                 Text(tr("No services", "未启用"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -46,10 +34,7 @@ struct FloatingContentView: View {
         .padding(.vertical, 10)
         .frame(minWidth: 190, alignment: .leading)
         .background {
-            // 三层叠加,解决 `.hudWindow` 在彩色桌面下前景被吃掉的问题:
-            // 1) 实色窗背景压一层,使桌面像素不再直接透上来
-            // 2) `.popover` material 接管毛玻璃质感(比 .hudWindow 厚)
-            // 3) hairline 描边,任何背景下都能勾出 HUD 边缘
+            // Solid layer + popover material + hairline: keeps the HUD legible on busy wallpapers.
             ZStack {
                 Color(nsColor: .windowBackgroundColor).opacity(0.55)
                 VisualEffectBackground(material: .popover, blendingMode: .behindWindow)
@@ -60,43 +45,38 @@ struct FloatingContentView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
         )
-        // 阴影交给 NSPanel 的 hasShadow,它按内容 alpha 自动取圆角形状,
-        // SwiftUI 这层 shadow 会被 panel 边界裁掉而且和系统阴影叠加,所以移除。
         .fixedSize()
     }
 
-    private func floatingWindow(_ snapshot: QuotaSnapshot?, choice: MenuBarWindowChoice) -> QuotaWindow? {
+    private static func laneWindow(_ snapshot: QuotaSnapshot?, choice: MenuBarWindowChoice) -> QuotaWindow? {
         switch choice {
-        case .fiveHour, .both:
-            return snapshot?.fiveHour
-        case .weekly:
-            return snapshot?.weekly
+        case .primary, .both:
+            return snapshot?.primary
+        case .secondary:
+            return snapshot?.secondary ?? snapshot?.primary
         }
     }
 
-    private func floatingWindowLabel(for choice: MenuBarWindowChoice) -> String {
+    private static func laneKind(_ provider: Provider, choice: MenuBarWindowChoice) -> QuotaWindowKind {
+        let descriptor = provider.descriptor
         switch choice {
-        case .fiveHour, .both:
-            return "5H"
-        case .weekly:
-            return "WK"
+        case .primary, .both: return descriptor.primaryKind
+        case .secondary: return descriptor.secondaryKind ?? descriptor.primaryKind
         }
     }
 }
 
 private struct FloatingRow: View {
-    let logoName: String
-    let fallback: String
-    let tint: Color
+    let provider: Provider
     let label: String
     let window: QuotaWindow?
 
     var body: some View {
         HStack(spacing: 8) {
             ServiceTile(
-                logoName: logoName,
-                fallback: fallback,
-                tint: tint,
+                logoName: provider.logoName,
+                fallback: provider.descriptor.fallbackGlyph,
+                tint: provider.accent,
                 size: 18,
                 logoSize: 12,
                 cornerRadius: 5
@@ -109,7 +89,7 @@ private struct FloatingRow: View {
                 .font(.system(size: 9, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(.quaternary)
-                .frame(width: 16, alignment: .trailing)
+                .frame(width: 22, alignment: .trailing)
 
             Text(percentText)
                 .font(.system(size: 13, weight: .semibold))
@@ -131,6 +111,6 @@ private struct FloatingRow: View {
     }
 
     private var barColor: Color {
-        statusColor(remainingPercent: window?.remainingPercent, tint: tint)
+        statusColor(remainingPercent: window?.remainingPercent, tint: provider.accent)
     }
 }

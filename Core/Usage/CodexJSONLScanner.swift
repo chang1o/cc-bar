@@ -10,20 +10,16 @@ enum CodexJSONLScanner {
     struct Result: Sendable {
         var entries: [UsageEntry]
         var newState: [String: ScanFileState]
+        var alivePaths: Set<String>
         var filesScanned: Int
         var linesParsed: Int
     }
 
-    nonisolated static func scan(previous: [String: ScanFileState]) -> Result {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let roots = [
-            home.appendingPathComponent(".codex/sessions", isDirectory: true),
-            home.appendingPathComponent(".codex/archived_sessions", isDirectory: true)
-        ]
+    nonisolated static func scan(roots: [URL], accountId: String, previous: [String: ScanFileState]) -> Result {
         var files: [URL] = []
         for r in roots { files.append(contentsOf: JSONLDirectoryEnumerator.files(at: r)) }
 
-        var newState: [String: ScanFileState] = previous
+        var newState: [String: ScanFileState] = [:]
         var entries: [UsageEntry] = []
         var linesParsed = 0
 
@@ -93,7 +89,8 @@ enum CodexJSONLScanner {
                     cacheCreation: 0
                 )
                 entries.append(UsageEntry(
-                    app: .codex,
+                    accountId: accountId,
+                    provider: .codex,
                     model: Pricing.normalize(model: model),
                     day: UsageDay.startOfDay(for: ts),
                     timestamp: ts,
@@ -111,12 +108,13 @@ enum CodexJSONLScanner {
             newState[path] = state
         }
 
-        let alive = Set(files.map { $0.path })
-        for key in newState.keys where !alive.contains(key) {
-            newState.removeValue(forKey: key)
-        }
-
-        return Result(entries: entries, newState: newState, filesScanned: files.count, linesParsed: linesParsed)
+        return Result(
+            entries: entries,
+            newState: newState,
+            alivePaths: Set(files.map(\.path)),
+            filesScanned: files.count,
+            linesParsed: linesParsed
+        )
     }
 
     private nonisolated static func parseISO(_ s: String) -> Date? {

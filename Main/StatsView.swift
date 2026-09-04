@@ -88,7 +88,7 @@ enum StatsRange: Hashable, CaseIterable {
         }
     }
 
-    /// 上一个等长区间(用于 delta 对比)。`.all` / `.custom` 返回 nil(无法对比)。
+    /// Previous range of equal length for deltas; nil for `.all` / `.custom`.
     func previousBounds(now: Date = Date(), customFrom: Date, customTo: Date) -> (from: Date, to: Date)? {
         switch self {
         case .all, .custom:
@@ -103,38 +103,6 @@ enum StatsRange: Hashable, CaseIterable {
     }
 }
 
-// MARK: - Service filter (sidebar)
-
-enum StatsServiceFilter: Hashable, CaseIterable {
-    case all
-    case codex
-    case claude
-
-    var englishLabel: String {
-        switch self {
-        case .all: return "All"
-        case .codex: return "Codex"
-        case .claude: return "Claude Code"
-        }
-    }
-
-    var chineseLabel: String {
-        switch self {
-        case .all: return "全部"
-        case .codex: return "OpenAI"
-        case .claude: return "Anthropic"
-        }
-    }
-
-    var tint: Color? {
-        switch self {
-        case .all: return nil
-        case .codex: return .codexAccent
-        case .claude: return .claudeAccent
-        }
-    }
-}
-
 enum StatsViewMode: Hashable {
     case overview
     case timeline
@@ -144,6 +112,7 @@ enum StatsViewMode: Hashable {
 enum BreakdownSort: Hashable {
     case day
     case service
+    case account
     case model
     case input
     case output
@@ -157,7 +126,8 @@ enum BreakdownSort: Hashable {
 struct StatsView: View {
     @Environment(AppState.self) private var appState
     @State private var range: StatsRange = .today
-    @State private var serviceFilter: StatsServiceFilter = .all
+    /// nil means every visible provider.
+    @State private var serviceFilter: Provider?
     @State private var viewMode: StatsViewMode = .overview
     @State private var breakdownSort: BreakdownSort = .day
     @State private var breakdownDescending: Bool = true
@@ -241,16 +211,17 @@ struct StatsView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 16) {
             sidebarGroup(title: "Service", chinese: "服务") {
-                ForEach(StatsServiceFilter.allCases, id: \.self) { item in
+                sidebarItem(english: "All", chinese: "全部", tint: nil, active: serviceFilter == nil) {
+                    serviceFilter = nil
+                }
+                ForEach(appState.visibleProviders, id: \.self) { provider in
                     sidebarItem(
-                        english: item.englishLabel,
-                        chinese: item.chineseLabel,
-                        tint: item.tint,
-                        active: serviceFilter == item,
-                        enabled: isServiceFilterAvailable(item)
+                        english: provider.descriptor.displayName,
+                        chinese: provider.descriptor.vendor,
+                        tint: provider.accent,
+                        active: serviceFilter == provider
                     ) {
-                        guard isServiceFilterAvailable(item) else { return }
-                        serviceFilter = item
+                        serviceFilter = provider
                     }
                 }
             }
@@ -288,15 +259,9 @@ struct StatsView: View {
         .padding(.vertical, 14)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
-        .onAppear {
-            normalizeServiceFilter()
-        }
-        .onChange(of: SettingsStore.shared.showCodex) { _, _ in
-            normalizeServiceFilter()
-        }
-        .onChange(of: SettingsStore.shared.showClaude) { _, _ in
-            normalizeServiceFilter()
-        }
+        .onAppear { normalizeServiceFilter() }
+        .onChange(of: SettingsStore.shared.enabledProviders) { _, _ in normalizeServiceFilter() }
+        .onChange(of: appState.accounts.map(\.id)) { _, _ in normalizeServiceFilter() }
     }
 
     @ViewBuilder
@@ -322,7 +287,6 @@ struct StatsView: View {
         tint: Color? = nil,
         icon: String? = nil,
         active: Bool,
-        enabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -354,12 +318,10 @@ struct StatsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.45)
         .pointingHandCursor()
     }
 
-    // MARK: Top bar (segmented + custom)
+    // MARK: Top bar
 
     private var topBar: some View {
         HStack(spacing: 12) {
@@ -398,33 +360,36 @@ struct StatsView: View {
                                     previous: Double(previousTotalsAll.totalTokens)),
                 tint: nil
             )
-            KPICard(
-                english: "Total spend",
-                chinese: "总花费",
-                value: StatsFormatter.cost(currentTotalsAll.costUSD),
-                delta: deltaPercent(current: currentTotalsAll.costUSD.doubleValue,
-                                    previous: previousTotalsAll.costUSD.doubleValue),
-                tint: nil
-            )
-            if includesCodex {
+            if anyCostProvider {
                 KPICard(
-                    english: "Codex",
-                    chinese: "OpenAI",
-                    value: StatsFormatter.cost(currentTotals(.codex).costUSD),
-                    delta: deltaPercent(current: currentTotals(.codex).costUSD.doubleValue,
-                                        previous: previousTotals(.codex).costUSD.doubleValue),
-                    tint: .codexAccent
+                    english: "Total spend",
+                    chinese: "总花费",
+                    value: StatsFormatter.cost(currentTotalsAll.costUSD),
+                    delta: deltaPercent(current: currentTotalsAll.costUSD.doubleValue,
+                                        previous: previousTotalsAll.costUSD.doubleValue),
+                    tint: nil
                 )
             }
-            if includesClaude {
-                KPICard(
-                    english: "Claude Code",
-                    chinese: "Anthropic",
-                    value: StatsFormatter.cost(currentTotals(.claude).costUSD),
-                    delta: deltaPercent(current: currentTotals(.claude).costUSD.doubleValue,
-                                        previous: previousTotals(.claude).costUSD.doubleValue),
-                    tint: .claudeAccent
-                )
+            ForEach(includedProviders, id: \.self) { provider in
+                let current = currentTotals(provider)
+                let previous = previousTotals(provider)
+                if provider.descriptor.supportsCost {
+                    KPICard(
+                        english: provider.descriptor.displayName,
+                        chinese: provider.descriptor.vendor,
+                        value: StatsFormatter.cost(current.costUSD),
+                        delta: deltaPercent(current: current.costUSD.doubleValue, previous: previous.costUSD.doubleValue),
+                        tint: provider.accent
+                    )
+                } else {
+                    KPICard(
+                        english: provider.descriptor.displayName,
+                        chinese: provider.descriptor.vendor,
+                        value: StatsFormatter.compactToken(current.totalTokens),
+                        delta: deltaPercent(current: Double(current.totalTokens), previous: Double(previous.totalTokens)),
+                        tint: provider.accent
+                    )
+                }
             }
         }
     }
@@ -432,13 +397,12 @@ struct StatsView: View {
     // MARK: Daily usage panel
 
     private var dailyUsagePanel: some View {
-        Panel(title: "Daily usage", chinese: "每日用量", right: AnyView(
+        Panel(title: chartUsesTokens ? "Daily tokens" : "Daily usage",
+              chinese: chartUsesTokens ? "每日 Tokens" : "每日用量",
+              right: AnyView(
             HStack(spacing: 8) {
-                if includesCodex {
-                    LegendChip(color: .codexAccent, label: "Codex")
-                }
-                if includesClaude {
-                    LegendChip(color: .claudeAccent, label: "Claude")
+                ForEach(includedProviders, id: \.self) { provider in
+                    LegendChip(color: provider.accent, label: provider.descriptor.displayName)
                 }
             }
         )) {
@@ -447,28 +411,18 @@ struct StatsView: View {
                     placeholderHeight(160, message: tr("No data", "无数据"))
                 } else {
                     Chart(dailySamples) { sample in
-                        if includesCodex {
+                        ForEach(includedProviders, id: \.self) { provider in
                             BarMark(
                                 x: .value("Day", sample.day, unit: .day),
-                                y: .value("Cost", sample.codexCost.doubleValue),
+                                y: .value("Value", sample.values[provider] ?? 0),
                                 stacking: .standard
                             )
-                            .foregroundStyle(Color.codexAccent)
-                            .cornerRadius(2)
-                        }
-
-                        if includesClaude {
-                            BarMark(
-                                x: .value("Day", sample.day, unit: .day),
-                                y: .value("Cost", sample.claudeCost.doubleValue),
-                                stacking: .standard
-                            )
-                            .foregroundStyle(Color.claudeAccent)
+                            .foregroundStyle(provider.accent)
                             .cornerRadius(2)
                         }
                     }
                     .chartXAxis {
-                        AxisMarks(values: .stride(by: .day, count: max(1, dailySamples.count / 5))) { value in
+                        AxisMarks(values: .stride(by: .day, count: max(1, dailySamples.count / 5))) { _ in
                             AxisValueLabel(format: .dateTime.month(.abbreviated).day(),
                                            centered: true)
                                 .font(.system(size: 10, design: .monospaced))
@@ -487,27 +441,21 @@ struct StatsView: View {
     private var byServicePanel: some View {
         Panel(title: "By service", chinese: "按服务") {
             VStack(alignment: .leading, spacing: 4) {
-                if includesCodex {
+                ForEach(includedProviders, id: \.self) { provider in
+                    let totals = currentTotals(provider)
                     ByServiceRow(
-                        title: "Codex",
-                        subtitle: "OpenAI",
-                        tint: .codexAccent,
-                        value: currentTotals(.codex).costUSD,
-                        totalValue: currentTotalsAll.costUSD,
-                        tokens: currentTotals(.codex).totalTokens
+                        title: provider.descriptor.displayName,
+                        subtitle: provider.descriptor.vendor,
+                        tint: provider.accent,
+                        valueText: provider.descriptor.supportsCost
+                            ? StatsFormatter.cost(totals.costUSD)
+                            : StatsFormatter.compactToken(totals.totalTokens),
+                        ratio: serviceRatio(provider),
+                        ratioLabel: chartUsesTokens ? tr("of tokens", "占比") : tr("of spend", "占比"),
+                        tokens: totals.totalTokens
                     )
                 }
-                if includesClaude {
-                    ByServiceRow(
-                        title: "Claude Code",
-                        subtitle: "Anthropic",
-                        tint: .claudeAccent,
-                        value: currentTotals(.claude).costUSD,
-                        totalValue: currentTotalsAll.costUSD,
-                        tokens: currentTotals(.claude).totalTokens
-                    )
-                }
-                if !includesCodex && !includesClaude {
+                if includedProviders.isEmpty {
                     placeholderHeight(96, message: tr("No services enabled", "暂无启用服务"))
                 }
             }
@@ -517,39 +465,41 @@ struct StatsView: View {
     // MARK: Current limits panel
 
     private var currentLimitsPanel: some View {
-        let claudeQuota = appState.claudeMonitorQuota()
-        return Panel(title: "Current limits", chinese: "当前限额") {
+        Panel(title: "Current limits", chinese: "当前限额") {
             VStack(spacing: 4) {
-                if includesCodex {
-                    LimitRingRow(label: "Codex 5H", window: appState.codexQuota?.fiveHour, tint: .codexAccent)
-                    LimitRingRow(label: "Codex WK", window: appState.codexQuota?.weekly, tint: .codexAccent)
+                ForEach(includedProviders, id: \.self) { provider in
+                    let snapshot = appState.monitorSnapshot(for: provider)
+                    let descriptor = provider.descriptor
+                    LimitRingRow(
+                        label: "\(descriptor.displayName) \((snapshot?.primary?.kind ?? descriptor.primaryKind).shortLabel)",
+                        window: snapshot?.primary,
+                        tint: provider.accent
+                    )
+                    if let secondaryKind = descriptor.secondaryKind {
+                        LimitRingRow(
+                            label: "\(descriptor.displayName) \((snapshot?.secondary?.kind ?? secondaryKind).shortLabel)",
+                            window: snapshot?.secondary,
+                            tint: provider.accent
+                        )
+                    }
                 }
-                if includesClaude {
-                    LimitRingRow(label: "Claude 5H", window: claudeQuota?.fiveHour, tint: .claudeAccent)
-                    LimitRingRow(label: "Claude WK", window: claudeQuota?.weekly, tint: .claudeAccent)
-                }
-                if !includesCodex && !includesClaude {
+                if includedProviders.isEmpty {
                     placeholderHeight(96, message: tr("No services enabled", "暂无启用服务"))
                 }
             }
         }
     }
 
-    // MARK: By model panel(保留旧的按模型聚合)
+    // MARK: By model panel
 
     private var byModelPanel: some View {
         Panel(title: "By model", chinese: "按模型") {
             VStack(alignment: .leading, spacing: 10) {
-                if includesCodex {
-                    modelGroup(title: "Codex", tint: .codexAccent, rows: modelRows(for: .codex))
+                ForEach(Array(includedProviders.enumerated()), id: \.element) { index, provider in
+                    if index > 0 { Divider() }
+                    modelGroup(provider: provider, rows: modelRows(for: provider))
                 }
-                if includesCodex && includesClaude {
-                    Divider()
-                }
-                if includesClaude {
-                    modelGroup(title: "Claude", tint: .claudeAccent, rows: modelRows(for: .claude))
-                }
-                if !includesCodex && !includesClaude {
+                if includedProviders.isEmpty {
                     placeholderHeight(96, message: tr("No services enabled", "暂无启用服务"))
                 }
             }
@@ -571,7 +521,7 @@ struct StatsView: View {
                             breakdownRow(row)
                         }
                     }
-                    .frame(minWidth: 948, alignment: .leading)
+                    .frame(minWidth: showsAccountColumn ? 1068 : 948, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -582,10 +532,17 @@ struct StatsView: View {
         }
     }
 
+    private var showsAccountColumn: Bool {
+        Set(filteredBuckets.map(\.accountId)).count > 1
+    }
+
     private var breakdownHeader: some View {
         HStack(spacing: 0) {
             breakdownHeaderCell("Day", "日期", sort: .day, width: 96, alignment: .leading)
             breakdownHeaderCell("Service", "服务", sort: .service, width: 110, alignment: .leading)
+            if showsAccountColumn {
+                breakdownHeaderCell("Account", "账号", sort: .account, width: 120, alignment: .leading)
+            }
             breakdownHeaderCell("Model", "模型", sort: .model, width: 230, alignment: .leading)
             breakdownHeaderCell("Input", "输入", sort: .input, width: 104, alignment: .trailing)
             breakdownHeaderCell("Output", "输出", sort: .output, width: 104, alignment: .trailing)
@@ -627,13 +584,22 @@ struct StatsView: View {
         HStack(spacing: 0) {
             breakdownText(StatsFormatter.day(row.day), width: 96, alignment: .leading)
             HStack(spacing: 6) {
-                ServiceMark(color: serviceTint(row.app), size: 7, cornerRadius: 1.8)
-                Text(serviceLabel(row.app))
+                ServiceMark(color: row.provider.accent, size: 7, cornerRadius: 1.8)
+                Text(row.provider.descriptor.displayName)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .frame(width: 110, alignment: .leading)
+
+            if showsAccountColumn {
+                Text(accountLabels[row.accountId] ?? row.accountId)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: 120, alignment: .leading)
+            }
 
             Text(row.model)
                 .font(.system(size: 11.5))
@@ -645,7 +611,8 @@ struct StatsView: View {
             breakdownText(StatsFormatter.compactToken(row.totals.outputTokens), width: 104, alignment: .trailing)
             breakdownText(StatsFormatter.compactToken(row.cacheTokens), width: 104, alignment: .trailing)
             breakdownText(StatsFormatter.compactToken(row.totals.totalTokens), width: 104, alignment: .trailing)
-            breakdownText(StatsFormatter.cost(row.totals.costUSD), width: 96, alignment: .trailing)
+            breakdownText(row.provider.descriptor.supportsCost ? StatsFormatter.cost(row.totals.costUSD) : "—",
+                          width: 96, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -688,85 +655,30 @@ struct StatsView: View {
 
     private var timelineSections: [QuotaTimelineSection] {
         var sections: [QuotaTimelineSection] = []
-
-        if includesCodex {
-            let key = QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
-            if shouldShowTimelineSection(key: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
-                sections.append(timelineSection(
-                    key: key,
-                    title: tr("Codex · Primary", "Codex · 主账号"),
-                    tint: .codexAccent,
-                    snapshot: appState.codexQuota
-                ))
-            }
-
-            for (idx, account) in appState.importedCodexAccounts.enumerated() {
-                let key = QuotaHistoryAccountKey.codexImported(id: account.id)
-                sections.append(timelineSection(
-                    key: key,
-                    title: importedCodexTimelineTitle(account, index: idx),
-                    tint: .codexAccent,
-                    snapshot: appState.importedCodexQuota(for: account)
-                ))
-            }
-
-            for (idx, profile) in appState.ccpmCodexProfilesForMonitoring.enumerated() {
-                let key = QuotaHistoryAccountKey.codexCCPMProfile(id: profile.id)
-                sections.append(timelineSection(
-                    key: key,
-                    title: ccpmCodexTimelineTitle(profile, index: idx),
-                    tint: .codexAccent,
-                    snapshot: appState.ccpmCodexQuota(for: profile)
+        let privacy = SettingsStore.shared.privacyMode
+        for provider in includedProviders {
+            for (index, account) in appState.accounts(for: provider).enumerated() {
+                let key = account.id.raw
+                let state = appState.quotaState(for: account)
+                let hasAnything = account.credential.canFetchQuota
+                    || state.snapshot != nil
+                    || appState.quotaHistory.lastSamples[key] != nil
+                    || !timelineEvents(for: key).isEmpty
+                guard hasAnything else { continue }
+                let events = timelineEvents(for: key)
+                let sample = appState.quotaHistory.lastSamples[key]
+                sections.append(QuotaTimelineSection(
+                    accountKey: key,
+                    title: "\(provider.descriptor.displayName) · \(account.shortTitle(index: index, privacy: privacy))",
+                    tint: provider.accent,
+                    currentRemaining: sample?.remainingPercent ?? roundedRemaining(state.snapshot),
+                    totalDelta: events.reduce(0) { $0 + $1.deltaPercent },
+                    latestEventAt: events.last?.sampledAt,
+                    events: events
                 ))
             }
         }
-
-        if includesClaude {
-            let key = QuotaHistoryAccountKey.claudePrimary()
-            if shouldShowTimelineSection(key: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
-                sections.append(timelineSection(
-                    key: key,
-                    title: tr("Claude Code · Default", "Claude Code · 默认"),
-                    tint: .claudeAccent,
-                    snapshot: appState.claudeQuota
-                ))
-            }
-
-            for (idx, profile) in appState.ccpmClaudeProfilesForMonitoring.enumerated() {
-                let key = QuotaHistoryAccountKey.claudeCCPMProfile(id: profile.id)
-                sections.append(timelineSection(
-                    key: key,
-                    title: ccpmClaudeTimelineTitle(profile, index: idx),
-                    tint: .claudeAccent,
-                    snapshot: appState.ccpmClaudeQuota(for: profile)
-                ))
-            }
-        }
-
         return sections
-    }
-
-    private func timelineSection(
-        key: String,
-        title: String,
-        tint: Color,
-        snapshot: QuotaSnapshot?
-    ) -> QuotaTimelineSection {
-        let events = timelineEvents(for: key)
-        let sample = appState.quotaHistory.lastSamples[key]
-        return QuotaTimelineSection(
-            accountKey: key,
-            title: title,
-            tint: tint,
-            currentRemaining: sample?.remainingPercent ?? roundedRemaining(snapshot),
-            totalDelta: events.reduce(0) { $0 + $1.deltaPercent },
-            latestEventAt: events.last?.sampledAt,
-            events: events
-        )
-    }
-
-    private func shouldShowTimelineSection(key: String, snapshot: QuotaSnapshot?, accountExists: Bool) -> Bool {
-        accountExists || snapshot != nil || appState.quotaHistory.lastSamples[key] != nil || !timelineEvents(for: key).isEmpty
     }
 
     private func timelineEvents(for key: String) -> [QuotaChangeEvent] {
@@ -776,50 +688,15 @@ struct StatsView: View {
     }
 
     private func roundedRemaining(_ snapshot: QuotaSnapshot?) -> Int? {
-        guard let remaining = snapshot?.fiveHour?.remainingPercent else { return nil }
+        guard let remaining = snapshot?.timelineWindow?.remainingPercent else { return nil }
         return max(0, min(100, Int(remaining.rounded())))
     }
 
-    private func importedCodexTimelineTitle(_ account: ImportedCodexAccount, index: Int) -> String {
-        if SettingsStore.shared.privacyMode {
-            return tr("Codex · Account \(index + 1)", "Codex · 账号 \(index + 1)")
-        }
-        if !account.alias.isEmpty { return "Codex · \(account.alias)" }
-        if let email = account.email, !email.isEmpty {
-            return "Codex · \(email.components(separatedBy: "@").first ?? email)"
-        }
-        return "Codex · \(account.id)"
-    }
-
-    private func ccpmCodexTimelineTitle(_ profile: CCPMCodexProfile, index: Int) -> String {
-        if SettingsStore.shared.privacyMode {
-            let offset = appState.importedCodexAccounts.count
-            return tr("Codex · Account \(offset + index + 1)", "Codex · 账号 \(offset + index + 1)")
-        }
-        if let email = profile.email, !email.isEmpty {
-            return "Codex · \(email.components(separatedBy: "@").first ?? email)"
-        }
-        return "Codex · \(profile.name)"
-    }
-
-    private func ccpmClaudeTimelineTitle(_ profile: CCPMClaudeProfile, index: Int) -> String {
-        if SettingsStore.shared.privacyMode {
-            return tr("Claude · Profile \(index + 1)", "Claude · 账号 \(index + 1)")
-        }
-        if let displayName = profile.displayName, !displayName.isEmpty {
-            return "Claude · \(displayName)"
-        }
-        if let email = profile.email, !email.isEmpty {
-            return "Claude · \(email.components(separatedBy: "@").first ?? email)"
-        }
-        return "Claude · \(profile.name)"
-    }
-
-    private func modelGroup(title: String, tint: Color, rows: [ModelRow]) -> some View {
+    private func modelGroup(provider: Provider, rows: [ModelRow]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                ServiceMark(color: tint, size: 6, cornerRadius: 1.5)
-                Text(title.uppercased())
+                ServiceMark(color: provider.accent, size: 6, cornerRadius: 1.5)
+                Text(provider.descriptor.displayName.uppercased())
                     .font(.system(size: 10, weight: .semibold))
                     .kerning(0.4)
                     .foregroundStyle(.tertiary)
@@ -843,7 +720,9 @@ struct StatsView: View {
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
-                        Text(StatsFormatter.cost(row.totals.costUSD))
+                        Text(provider.descriptor.supportsCost
+                             ? StatsFormatter.cost(row.totals.costUSD)
+                             : StatsFormatter.compactToken(row.totals.totalTokens))
                             .font(.system(size: 12.5, weight: .semibold))
                             .monospacedDigit()
                             .frame(width: 96, alignment: .trailing)
@@ -864,62 +743,45 @@ struct StatsView: View {
         range.previousBounds(customFrom: customFrom, customTo: customTo)
     }
 
-    private var includesCodex: Bool {
-        SettingsStore.shared.showCodex && serviceFilter != .claude
+    private var includedProviders: [Provider] {
+        appState.visibleProviders.filter { serviceFilter == nil || serviceFilter == $0 }
     }
 
-    private var includesClaude: Bool {
-        SettingsStore.shared.showClaude && serviceFilter != .codex
+    private func includes(_ provider: Provider) -> Bool {
+        includedProviders.contains(provider)
     }
 
-    private func includesApp(_ app: UsageApp) -> Bool {
-        switch app {
-        case .codex:
-            return includesCodex
-        case .claude:
-            return includesClaude
-        }
+    private var anyCostProvider: Bool {
+        includedProviders.contains { $0.descriptor.supportsCost }
     }
 
-    private func serviceLabel(_ app: UsageApp) -> String {
-        switch app {
-        case .codex:
-            return "Codex"
-        case .claude:
-            return "Claude"
-        }
-    }
-
-    private func serviceTint(_ app: UsageApp) -> Color {
-        switch app {
-        case .codex:
-            return .codexAccent
-        case .claude:
-            return .claudeAccent
-        }
-    }
-
-    private func isServiceFilterAvailable(_ filter: StatsServiceFilter) -> Bool {
-        switch filter {
-        case .all:
-            return true
-        case .codex:
-            return SettingsStore.shared.showCodex
-        case .claude:
-            return SettingsStore.shared.showClaude
-        }
+    /// Charts and ratios fall back to tokens when no included provider has prices.
+    private var chartUsesTokens: Bool {
+        !anyCostProvider
     }
 
     private func normalizeServiceFilter() {
-        guard !isServiceFilterAvailable(serviceFilter) else { return }
-        serviceFilter = .all
+        guard let filter = serviceFilter, !appState.visibleProviders.contains(filter) else { return }
+        serviceFilter = nil
+    }
+
+    private var accountLabels: [String: String] {
+        var labels: [String: String] = [:]
+        let privacy = SettingsStore.shared.privacyMode
+        for provider in Provider.allCases {
+            for (index, account) in appState.accounts(for: provider).enumerated() {
+                labels[account.id.raw] = account.shortTitle(index: index, privacy: privacy)
+            }
+        }
+        return labels
     }
 
     private var filteredBuckets: [UsageBucket] {
         let (from, to) = rangeBounds
+        let included = Set(includedProviders)
         return appState.usageService.aggregator.snapshot()
             .filter { $0.day >= from && $0.day < to }
-            .filter { includesApp($0.app) }
+            .filter { included.contains($0.provider) }
     }
 
     private var currentTotalsAll: UsageTotals {
@@ -928,31 +790,31 @@ struct StatsView: View {
         return t
     }
 
-    private func currentTotals(_ app: UsageApp) -> UsageTotals {
-        guard includesApp(app) else { return .zero }
+    private func currentTotals(_ provider: Provider) -> UsageTotals {
+        guard includes(provider) else { return .zero }
         var t = UsageTotals.zero
-        for b in filteredBuckets where b.app == app { t.add(b) }
+        for b in filteredBuckets where b.provider == provider { t.add(b) }
         return t
     }
 
     private var previousTotalsAll: UsageTotals {
         guard let bounds = previousRangeBounds else { return .zero }
-        let buckets = appState.usageService.aggregator.snapshot()
-            .filter { $0.day >= bounds.from && $0.day < bounds.to }
+        let included = Set(includedProviders)
         var t = UsageTotals.zero
-        for b in buckets where includesApp(b.app) {
+        for b in appState.usageService.aggregator.snapshot()
+            where included.contains(b.provider) && b.day >= bounds.from && b.day < bounds.to {
             t.add(b)
         }
         return t
     }
 
-    private func previousTotals(_ app: UsageApp) -> UsageTotals {
-        guard includesApp(app) else { return .zero }
-        guard let bounds = previousRangeBounds else { return .zero }
-        let buckets = appState.usageService.aggregator.snapshot()
-            .filter { $0.app == app && $0.day >= bounds.from && $0.day < bounds.to }
+    private func previousTotals(_ provider: Provider) -> UsageTotals {
+        guard includes(provider), let bounds = previousRangeBounds else { return .zero }
         var t = UsageTotals.zero
-        for b in buckets { t.add(b) }
+        for b in appState.usageService.aggregator.snapshot()
+            where b.provider == provider && b.day >= bounds.from && b.day < bounds.to {
+            t.add(b)
+        }
         return t
     }
 
@@ -962,41 +824,58 @@ struct StatsView: View {
         return ((current - previous) / previous) * 100
     }
 
+    private func serviceRatio(_ provider: Provider) -> Double {
+        let totals = currentTotals(provider)
+        let all = currentTotalsAll
+        if chartUsesTokens {
+            guard all.totalTokens > 0 else { return 0 }
+            return Double(totals.totalTokens) / Double(all.totalTokens)
+        }
+        let d = all.costUSD.doubleValue
+        guard d > 0 else { return 0 }
+        return totals.costUSD.doubleValue / d
+    }
+
     private var dailySamples: [DailySample] {
-        var byDay: [Date: (codex: Decimal, claude: Decimal)] = [:]
+        var byDay: [Date: [Provider: Double]] = [:]
         for b in filteredBuckets {
-            var pair = byDay[b.day] ?? (0, 0)
-            switch b.app {
-            case .codex: pair.codex += b.costUSD
-            case .claude: pair.claude += b.costUSD
-            }
-            byDay[b.day] = pair
+            var values = byDay[b.day] ?? [:]
+            let value = chartUsesTokens ? Double(b.inputTokens + b.outputTokens + b.cacheReadTokens + b.cacheCreationTokens)
+                                        : b.costUSD.doubleValue
+            values[b.provider, default: 0] += value
+            byDay[b.day] = values
         }
         return byDay
-            .map { DailySample(day: $0.key, codexCost: $0.value.codex, claudeCost: $0.value.claude) }
+            .map { DailySample(day: $0.key, values: $0.value) }
             .sorted { $0.day < $1.day }
     }
 
-    private func modelRows(for app: UsageApp) -> [ModelRow] {
+    private func modelRows(for provider: Provider) -> [ModelRow] {
         var byModel: [String: UsageTotals] = [:]
-        for b in filteredBuckets where b.app == app {
+        for b in filteredBuckets where b.provider == provider {
             var t = byModel[b.model] ?? .zero
             t.add(b)
             byModel[b.model] = t
         }
         return byModel
             .map { ModelRow(model: $0.key, totals: $0.value) }
-            .sorted { $0.totals.costUSD > $1.totals.costUSD }
+            .sorted { lhs, rhs in
+                if provider.descriptor.supportsCost { return lhs.totals.costUSD > rhs.totals.costUSD }
+                return lhs.totals.totalTokens > rhs.totals.totalTokens
+            }
     }
 
     private var breakdownRows: [BreakdownRow] {
-        filteredBuckets
+        let labels = accountLabels
+        return filteredBuckets
             .map { bucket in
                 var totals = UsageTotals.zero
                 totals.add(bucket)
                 return BreakdownRow(
                     day: bucket.day,
-                    app: bucket.app,
+                    provider: bucket.provider,
+                    accountId: bucket.accountId,
+                    accountLabel: labels[bucket.accountId] ?? bucket.accountId,
                     model: bucket.model,
                     totals: totals
                 )
@@ -1017,7 +896,9 @@ struct StatsView: View {
         case .day:
             return compare(lhs.day, rhs.day)
         case .service:
-            return lhs.app.rawValue.localizedStandardCompare(rhs.app.rawValue)
+            return lhs.provider.rawValue.localizedStandardCompare(rhs.provider.rawValue)
+        case .account:
+            return lhs.accountLabel.localizedStandardCompare(rhs.accountLabel)
         case .model:
             return lhs.model.localizedStandardCompare(rhs.model)
         case .input:
@@ -1035,7 +916,8 @@ struct StatsView: View {
 
     private func breakdownTieBreak(_ lhs: BreakdownRow, _ rhs: BreakdownRow) -> Bool {
         if lhs.day != rhs.day { return lhs.day > rhs.day }
-        if lhs.app != rhs.app { return lhs.app.rawValue < rhs.app.rawValue }
+        if lhs.provider != rhs.provider { return lhs.provider.rawValue < rhs.provider.rawValue }
+        if lhs.accountId != rhs.accountId { return lhs.accountId < rhs.accountId }
         return lhs.model.localizedStandardCompare(rhs.model) == .orderedAscending
     }
 
@@ -1144,8 +1026,9 @@ private struct ByServiceRow: View {
     let title: String
     let subtitle: String
     let tint: Color
-    let value: Decimal
-    let totalValue: Decimal
+    let valueText: String
+    let ratio: Double
+    let ratioLabel: String
     let tokens: Int
 
     var body: some View {
@@ -1158,7 +1041,7 @@ private struct ByServiceRow: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
                 Spacer()
-                Text(StatsFormatter.cost(value))
+                Text(valueText)
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
@@ -1170,7 +1053,7 @@ private struct ByServiceRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(Int((ratio * 100).rounded()))% \(tr("of spend", "占比"))")
+                Text("\(Int((ratio * 100).rounded()))% \(ratioLabel)")
                     .font(.system(size: 10.5))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -1178,14 +1061,6 @@ private struct ByServiceRow: View {
             .padding(.leading, 16)
         }
         .padding(.vertical, 8)
-    }
-
-    private var ratio: Double {
-        guard totalValue > 0 else { return 0 }
-        let n = NSDecimalNumber(decimal: value).doubleValue
-        let d = NSDecimalNumber(decimal: totalValue).doubleValue
-        guard d > 0 else { return 0 }
-        return n / d
     }
 }
 
@@ -1211,7 +1086,7 @@ private struct LimitRingRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(label)
                     .font(.system(size: 12, weight: .medium))
-                Text(resetText)
+                Text(window?.detail ?? formatResetHint(window?.resetsAt))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -1229,10 +1104,6 @@ private struct LimitRingRow: View {
     private var percentText: String {
         guard let window else { return "--" }
         return "\(Int(window.remainingPercent.rounded()))"
-    }
-
-    private var resetText: String {
-        formatResetHint(window?.resetsAt)
     }
 }
 
@@ -1319,7 +1190,7 @@ private struct QuotaTimelineChart: View {
         }
         .chartYScale(domain: 0...100)
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 5)) { value in
+            AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                 AxisGridLine()
                     .foregroundStyle(.quaternary)
                 AxisValueLabel(format: .dateTime.hour().minute())
@@ -1412,13 +1283,12 @@ private struct QuotaTimelineTable: View {
     }
 }
 
-// MARK: - Daily / Model row models
+// MARK: - Row models
 
 private struct DailySample: Identifiable {
     var id: Date { day }
     let day: Date
-    let codexCost: Decimal
-    let claudeCost: Decimal
+    let values: [Provider: Double]
 }
 
 private struct ModelRow: Identifiable {
@@ -1429,11 +1299,13 @@ private struct ModelRow: Identifiable {
 
 private struct BreakdownRow: Identifiable {
     var id: String {
-        "\(day.timeIntervalSince1970)-\(app.rawValue)-\(model)"
+        "\(day.timeIntervalSince1970)-\(accountId)-\(model)"
     }
 
     let day: Date
-    let app: UsageApp
+    let provider: Provider
+    let accountId: String
+    let accountLabel: String
     let model: String
     let totals: UsageTotals
 
@@ -1475,9 +1347,7 @@ enum StatsFormatter {
         return f.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
-    /// 紧凑显示。中文用 万 / 亿,英文用 k / M / B。
-    /// zh:  6772.37 万  /  1.23 亿  /  1,234
-    /// en:  67.7M  /  248.3k  /  1,234
+    /// Compact token count: zh uses 万 / 亿, en uses k / M / B.
     @MainActor
     static func compactToken(_ value: Int) -> String {
         let v = Double(value)
@@ -1504,7 +1374,6 @@ enum StatsFormatter {
         }
     }
 
-    /// 保留两位小数,去掉末尾多余的 0(如 6772.30 → 6772.3,1234.00 → 1234)。
     private static func trimTrailingZeros(_ value: Double) -> String {
         let s = String(format: "%.2f", value)
         var trimmed = s

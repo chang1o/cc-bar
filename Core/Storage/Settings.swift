@@ -21,16 +21,6 @@ enum QuotaIntervalChoice: String, CaseIterable, Identifiable {
         case .m10: return 10 * 60
         }
     }
-
-    var displayName: String {
-        switch self {
-        case .m1: return "1 分钟"
-        case .m2: return "2 分钟"
-        case .m3: return "3 分钟"
-        case .m5: return "5 分钟"
-        case .m10: return "10 分钟"
-        }
-    }
 }
 
 enum UsageIntervalChoice: String, CaseIterable, Identifiable {
@@ -51,16 +41,6 @@ enum UsageIntervalChoice: String, CaseIterable, Identifiable {
         case .m10: return 10 * 60
         }
     }
-
-    var displayName: String {
-        switch self {
-        case .m1: return "1 分钟"
-        case .m2: return "2 分钟"
-        case .m3: return "3 分钟"
-        case .m5: return "5 分钟"
-        case .m10: return "10 分钟"
-        }
-    }
 }
 
 enum ResetTimeDisplay: String, CaseIterable, Identifiable {
@@ -70,36 +50,39 @@ enum ResetTimeDisplay: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Which quota lane the menu bar, HUD and popover headline show. Raw values
+/// keep the pre-multi-provider spelling so stored preferences survive.
 enum MenuBarWindowChoice: String, CaseIterable, Identifiable {
-    case fiveHour
-    case weekly
+    case primary = "fiveHour"
+    case secondary = "weekly"
     case both
 
     var id: String { rawValue }
 
-    var displayName: String {
-        switch self {
-        case .fiveHour: return "5H 窗口"
-        case .weekly: return "WK 窗口"
-        case .both: return "两者都显示"
-        }
-    }
-
-    var shortLabel: String {
-        switch self {
-        case .fiveHour: return "5H"
-        case .weekly: return "WK"
-        case .both: return "5/W"
-        }
-    }
-
     var toggledForMenuBar: MenuBarWindowChoice {
         switch self {
-        case .fiveHour: return .weekly
-        case .weekly: return .fiveHour
-        case .both: return .weekly
+        case .primary: return .secondary
+        case .secondary: return .primary
+        case .both: return .secondary
         }
     }
+}
+
+enum MenuBarMode: String, CaseIterable, Identifiable {
+    /// One segment per enabled provider.
+    case all
+    /// Only the provider with the least remaining quota.
+    case lowestOnly
+
+    var id: String { rawValue }
+}
+
+/// How each menu bar segment renders its quota: a percent string or a small vertical meter.
+enum MenuBarStyle: String, CaseIterable, Identifiable {
+    case percent
+    case meter
+
+    var id: String { rawValue }
 }
 
 @Observable
@@ -109,60 +92,58 @@ final class SettingsStore {
 
     private let defaults: UserDefaults
 
-    // 账号
-    var showCodex: Bool { didSet { defaults.set(showCodex, forKey: Keys.showCodex) } }
-    var showClaude: Bool { didSet { defaults.set(showClaude, forKey: Keys.showClaude) } }
+    // Accounts: which providers are monitored at all.
+    var enabledProviders: Set<Provider> { didSet { save(enabledProviders, forKey: Keys.enabledProviders) } }
 
-    // 菜单栏
-    var menuBarShowCodex: Bool { didSet { defaults.set(menuBarShowCodex, forKey: Keys.menuBarShowCodex) } }
-    var menuBarShowClaude: Bool { didSet { defaults.set(menuBarShowClaude, forKey: Keys.menuBarShowClaude) } }
+    // Menu bar.
+    var menuBarProviders: Set<Provider> { didSet { save(menuBarProviders, forKey: Keys.menuBarProviders) } }
     var menuBarWindow: MenuBarWindowChoice { didSet { defaults.set(menuBarWindow.rawValue, forKey: Keys.menuBarWindow) } }
+    var menuBarMode: MenuBarMode { didSet { defaults.set(menuBarMode.rawValue, forKey: Keys.menuBarMode) } }
+    var menuBarStyle: MenuBarStyle { didSet { defaults.set(menuBarStyle.rawValue, forKey: Keys.menuBarStyle) } }
 
-    // 悬浮窗（占位，M8 接）
+    // Floating HUD.
     var floatingEnabled: Bool { didSet { defaults.set(floatingEnabled, forKey: Keys.floatingEnabled) } }
-    var floatingShowCodex: Bool { didSet { defaults.set(floatingShowCodex, forKey: Keys.floatingShowCodex) } }
-    var floatingShowClaude: Bool { didSet { defaults.set(floatingShowClaude, forKey: Keys.floatingShowClaude) } }
+    var floatingProviders: Set<Provider> { didSet { save(floatingProviders, forKey: Keys.floatingProviders) } }
 
-    // 刷新
+    // Refresh.
     var quotaInterval: QuotaIntervalChoice { didSet { defaults.set(quotaInterval.rawValue, forKey: Keys.quotaInterval) } }
     var usageInterval: UsageIntervalChoice { didSet { defaults.set(usageInterval.rawValue, forKey: Keys.usageInterval) } }
     var resetTimeDisplay: ResetTimeDisplay { didSet { defaults.set(resetTimeDisplay.rawValue, forKey: Keys.resetTimeDisplay) } }
-
-    /// 是否在 Popover 中显示 OpenAI / Anthropic 服务状态圆点
     var showServiceStatus: Bool { didSet { defaults.set(showServiceStatus, forKey: Keys.showServiceStatus) } }
+    /// Local notifications at 20% left, on exhaustion, and when a window resets.
+    var quotaNotifications: Bool { didSet { defaults.set(quotaNotifications, forKey: Keys.quotaNotifications) } }
 
-    // 通用
+    // General.
     var appLanguage: AppLanguage { didSet { defaults.set(appLanguage.rawValue, forKey: Keys.appLanguage) } }
     var launchAtLogin: Bool { didSet { defaults.set(launchAtLogin, forKey: Keys.launchAtLogin) } }
-
-    /// 隐私模式：Popover 中主账号邮箱、Codex 副账号名称均隐藏
     var privacyMode: Bool { didSet { defaults.set(privacyMode, forKey: Keys.privacyMode) } }
-
-    /// 是否已经向用户解释过"接下来会出现 Keychain 授权弹窗"
-    var didShowKeychainPrompt: Bool {
-        didSet { defaults.set(didShowKeychainPrompt, forKey: Keys.didShowKeychainPrompt) }
-    }
-
-    /// 是否已经完成首次启动引导
-    var didCompleteOnboarding: Bool {
-        didSet { defaults.set(didCompleteOnboarding, forKey: Keys.didCompleteOnboarding) }
-    }
+    var didShowKeychainPrompt: Bool { didSet { defaults.set(didShowKeychainPrompt, forKey: Keys.didShowKeychainPrompt) } }
+    var didCompleteOnboarding: Bool { didSet { defaults.set(didCompleteOnboarding, forKey: Keys.didCompleteOnboarding) } }
 
     private init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // 账号
-        showCodex = defaults.object(forKey: Keys.showCodex) as? Bool ?? true
-        showClaude = defaults.object(forKey: Keys.showClaude) as? Bool ?? true
-        // 菜单栏
-        menuBarShowCodex = defaults.object(forKey: Keys.menuBarShowCodex) as? Bool ?? true
-        menuBarShowClaude = defaults.object(forKey: Keys.menuBarShowClaude) as? Bool ?? true
-        let mbWindowRaw = defaults.string(forKey: Keys.menuBarWindow) ?? MenuBarWindowChoice.fiveHour.rawValue
-        menuBarWindow = MenuBarWindowChoice(rawValue: mbWindowRaw) ?? .fiveHour
-        // 悬浮窗
+
+        enabledProviders = Self.loadProviders(
+            defaults, key: Keys.enabledProviders,
+            legacy: (codex: Keys.legacyShowCodex, claude: Keys.legacyShowClaude)
+        )
+        menuBarProviders = Self.loadProviders(
+            defaults, key: Keys.menuBarProviders,
+            legacy: (codex: Keys.legacyMenuBarShowCodex, claude: Keys.legacyMenuBarShowClaude)
+        )
+        floatingProviders = Self.loadProviders(
+            defaults, key: Keys.floatingProviders,
+            legacy: (codex: Keys.legacyFloatingShowCodex, claude: Keys.legacyFloatingShowClaude)
+        )
+
+        let mbWindowRaw = defaults.string(forKey: Keys.menuBarWindow) ?? MenuBarWindowChoice.primary.rawValue
+        menuBarWindow = MenuBarWindowChoice(rawValue: mbWindowRaw) ?? .primary
+        let modeRaw = defaults.string(forKey: Keys.menuBarMode) ?? MenuBarMode.all.rawValue
+        menuBarMode = MenuBarMode(rawValue: modeRaw) ?? .all
+        let styleRaw = defaults.string(forKey: Keys.menuBarStyle) ?? MenuBarStyle.percent.rawValue
+        menuBarStyle = MenuBarStyle(rawValue: styleRaw) ?? .percent
         floatingEnabled = defaults.object(forKey: Keys.floatingEnabled) as? Bool ?? false
-        floatingShowCodex = defaults.object(forKey: Keys.floatingShowCodex) as? Bool ?? true
-        floatingShowClaude = defaults.object(forKey: Keys.floatingShowClaude) as? Bool ?? true
-        // 刷新
+
         let qiRaw = defaults.string(forKey: Keys.quotaInterval) ?? QuotaIntervalChoice.m2.rawValue
         quotaInterval = QuotaIntervalChoice(rawValue: qiRaw) ?? .m2
         let uiRaw = defaults.string(forKey: Keys.usageInterval) ?? UsageIntervalChoice.m2.rawValue
@@ -170,31 +151,68 @@ final class SettingsStore {
         let rtdRaw = defaults.string(forKey: Keys.resetTimeDisplay) ?? ResetTimeDisplay.relative.rawValue
         resetTimeDisplay = ResetTimeDisplay(rawValue: rtdRaw) ?? .relative
         showServiceStatus = defaults.object(forKey: Keys.showServiceStatus) as? Bool ?? true
-        // 通用：launchAtLogin 以系统当前注册状态为准
+        quotaNotifications = defaults.object(forKey: Keys.quotaNotifications) as? Bool ?? false
+
         let langRaw = defaults.string(forKey: Keys.appLanguage) ?? AppLanguage.system.rawValue
         appLanguage = AppLanguage(rawValue: langRaw) ?? .system
-        let stored = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
-        launchAtLogin = stored
+        launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? true
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false
     }
 
-    /// 账号与菜单栏开关的合取，最终决定菜单栏该不该画该应用
-    var effectiveMenuBarShowCodex: Bool { showCodex && menuBarShowCodex }
-    var effectiveMenuBarShowClaude: Bool { showClaude && menuBarShowClaude }
+    // MARK: - Provider sets
 
-    /// 悬浮窗的行可见性同样需要叠加全局「显示该应用」开关
-    var effectiveFloatingShowCodex: Bool { showCodex && floatingShowCodex }
-    var effectiveFloatingShowClaude: Bool { showClaude && floatingShowClaude }
+    func isEnabled(_ provider: Provider) -> Bool {
+        enabledProviders.contains(provider)
+    }
 
-    /// 把 `appLanguage` 解析为最终渲染语言。`.system` 看系统首选语言是否以 `zh` 开头。
-    /// 不用 `Locale.current`:它返回的是 App 当前生效的本地化语言,工程未添加中文资源时会回退到开发语言 `en`,
-    /// 导致即便系统设为中文也判定为英文。`Locale.preferredLanguages.first` 反映用户在系统设置中排首位的语言,
-    /// 与 App 本地化无关,例如 `zh-Hans-CN` / `zh-Hant-TW`,前缀判断对简繁均成立。
+    func setEnabled(_ provider: Provider, _ enabled: Bool) {
+        if enabled { enabledProviders.insert(provider) } else { enabledProviders.remove(provider) }
+    }
+
+    func setMenuBar(_ provider: Provider, _ shown: Bool) {
+        if shown { menuBarProviders.insert(provider) } else { menuBarProviders.remove(provider) }
+    }
+
+    func setFloating(_ provider: Provider, _ shown: Bool) {
+        if shown { floatingProviders.insert(provider) } else { floatingProviders.remove(provider) }
+    }
+
+    /// Providers drawn in the menu bar: enabled globally and enabled for the bar.
+    var effectiveMenuBarProviders: [Provider] {
+        Provider.allCases.filter { enabledProviders.contains($0) && menuBarProviders.contains($0) }
+    }
+
+    var effectiveFloatingProviders: [Provider] {
+        Provider.allCases.filter { enabledProviders.contains($0) && floatingProviders.contains($0) }
+    }
+
+    /// New installs and pre-provider installs: every provider on, with the two
+    /// legacy booleans honoured when they were explicitly set.
+    private static func loadProviders(
+        _ defaults: UserDefaults,
+        key: String,
+        legacy: (codex: String, claude: String)
+    ) -> Set<Provider> {
+        if let stored = defaults.array(forKey: key) as? [String] {
+            return Set(stored.compactMap(Provider.init(rawValue:)))
+        }
+        var set = Set(Provider.allCases)
+        if let codex = defaults.object(forKey: legacy.codex) as? Bool, !codex { set.remove(.codex) }
+        if let claude = defaults.object(forKey: legacy.claude) as? Bool, !claude { set.remove(.claude) }
+        return set
+    }
+
+    private func save(_ providers: Set<Provider>, forKey key: String) {
+        defaults.set(Provider.allCases.filter(providers.contains).map(\.rawValue), forKey: key)
+    }
+
     var resolvedLanguage: ResolvedLanguage {
         switch appLanguage {
         case .system:
+            // `Locale.current` falls back to the development language when the
+            // bundle has no zh lproj; preferredLanguages reflects the system setting.
             let code = Locale.preferredLanguages.first ?? "en"
             return code.hasPrefix("zh") ? .zh : .en
         case .zh: return .zh
@@ -204,7 +222,6 @@ final class SettingsStore {
 
     // MARK: - Floating panel frame
 
-    /// 悬浮窗 frame，nil 表示尚未拖动过；启动时由 controller 还原
     var floatingPanelFrame: CGRect? {
         get {
             guard
@@ -233,12 +250,10 @@ final class SettingsStore {
 
     // MARK: - Launch at login
 
-    /// 当前系统记录的注册状态
     var launchAtLoginRegistered: Bool {
         SMAppService.mainApp.status == .enabled
     }
 
-    /// 切换开机自启；失败时抛出原始错误
     func setLaunchAtLogin(_ enabled: Bool) throws {
         if enabled {
             try SMAppService.mainApp.register()
@@ -249,14 +264,20 @@ final class SettingsStore {
     }
 
     private enum Keys {
-        static let showCodex = "ccbar.settings.showCodex"
-        static let showClaude = "ccbar.settings.showClaude"
-        static let menuBarShowCodex = "ccbar.settings.menuBarShowCodex"
-        static let menuBarShowClaude = "ccbar.settings.menuBarShowClaude"
+        static let enabledProviders = "ccbar.settings.enabledProviders"
+        static let menuBarProviders = "ccbar.settings.menuBarProviders"
+        static let floatingProviders = "ccbar.settings.floatingProviders"
+        static let menuBarMode = "ccbar.settings.menuBarMode"
+        static let menuBarStyle = "ccbar.settings.menuBarStyle"
+        static let quotaNotifications = "ccbar.settings.quotaNotifications"
+        static let legacyShowCodex = "ccbar.settings.showCodex"
+        static let legacyShowClaude = "ccbar.settings.showClaude"
+        static let legacyMenuBarShowCodex = "ccbar.settings.menuBarShowCodex"
+        static let legacyMenuBarShowClaude = "ccbar.settings.menuBarShowClaude"
+        static let legacyFloatingShowCodex = "ccbar.settings.floatingShowCodex"
+        static let legacyFloatingShowClaude = "ccbar.settings.floatingShowClaude"
         static let menuBarWindow = "ccbar.settings.menuBarWindow"
         static let floatingEnabled = "ccbar.settings.floatingEnabled"
-        static let floatingShowCodex = "ccbar.settings.floatingShowCodex"
-        static let floatingShowClaude = "ccbar.settings.floatingShowClaude"
         static let quotaInterval = "ccbar.settings.quotaInterval"
         static let usageInterval = "ccbar.settings.usageInterval"
         static let resetTimeDisplay = "ccbar.settings.resetTimeDisplay"

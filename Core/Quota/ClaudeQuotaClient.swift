@@ -1,6 +1,6 @@
 import Foundation
 
-enum ClaudeQuotaClient {
+nonisolated enum ClaudeQuotaClient {
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private static let userAgent = "claude-code/2.1.0"
 
@@ -25,25 +25,64 @@ enum ClaudeQuotaClient {
             let msg = String(data: data, encoding: .utf8) ?? ""
             return .failure(.http(http.statusCode, msg))
         }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .failure(.decode("not json object"))
+        do {
+            return .success(try parse(data: data))
+        } catch let error as QuotaError {
+            return .failure(error)
+        } catch {
+            return .failure(.decode("\(error)"))
         }
-        return .success(parse(root: root))
     }
 
-    nonisolated private static func parse(root: [String: Any]) -> QuotaSnapshot {
-        QuotaSnapshot(
-            app: .claude,
-            fiveHour: parseWindow(root["five_hour"] as? [String: Any]),
-            weekly: parseWindow(root["seven_day"] as? [String: Any]),
-            weeklyOpus: parseWindow(root["seven_day_opus"] as? [String: Any]),
-            weeklySonnet: parseWindow(root["seven_day_sonnet"] as? [String: Any]),
+    nonisolated static func parse(data: Data, now: Date = Date()) throws -> QuotaSnapshot {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw QuotaError.decode("claude: not a json object")
+        }
+        return QuotaSnapshot(
+            provider: .claude,
+            primary: parseWindow(root["five_hour"] as? [String: Any], kind: .fiveHour),
+            secondary: parseWindow(root["seven_day"] as? [String: Any], kind: .weekly),
+            extra: [
+                parseWindow(root["seven_day_opus"] as? [String: Any], kind: .weeklyOpus),
+                parseWindow(root["seven_day_sonnet"] as? [String: Any], kind: .weeklySonnet),
+                parseExtraUsage(root["extra_usage"] as? [String: Any])
+            ].compactMap { $0 },
             planType: nil,
-            fetchedAt: Date()
+            fetchedAt: now
         )
     }
 
-    nonisolated private static func parseWindow(_ dict: [String: Any]?) -> QuotaWindow? {
+    /// `extra_usage` is the pay-as-you-go overage cap. Amounts arrive in minor
+    /// units (cents), the same convention CodexBar follows for OAuth and Web.
+    nonisolated private static func parseExtraUsage(_ dict: [String: Any]?) -> QuotaWindow? {
+        guard let dict, (dict["is_enabled"] as? Bool) == true,
+              let limitMinor = QuotaJSON.double(dict["monthly_limit"]), limitMinor > 0
+        else { return nil }
+        let usedMinor = QuotaJSON.double(dict["used_credits"]) ?? 0
+        let used = usedMinor / 100
+        let limit = limitMinor / 100
+        let percent = QuotaJSON.double(dict["utilization"]) ?? (used / limit * 100)
+        let symbol = currencySymbol(dict["currency"] as? String)
+        return QuotaWindow(
+            kind: .extraUsage,
+            usedPercent: percent,
+            resetsAt: nil,
+            windowSeconds: nil,
+            detail: "\(symbol)\(String(format: "%.2f", used)) / \(symbol)\(String(format: "%.2f", limit))"
+        )
+    }
+
+    nonisolated private static func currencySymbol(_ code: String?) -> String {
+        switch code?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+        case nil, "", "USD": return "$"
+        case "EUR": return "€"
+        case "GBP": return "£"
+        case "JPY", "CNY": return "¥"
+        case let other?: return other + " "
+        }
+    }
+
+    nonisolated private static func parseWindow(_ dict: [String: Any]?, kind: QuotaWindowKind) -> QuotaWindow? {
         guard let dict else { return nil }
         let used: Double = {
             if let d = dict["utilization"] as? Double { return d }
@@ -65,6 +104,6 @@ enum ClaudeQuotaClient {
         } else if let i = dict["resets_at"] as? Int {
             resetsAt = Date(timeIntervalSince1970: Double(i))
         }
-        return QuotaWindow(usedPercent: used, resetsAt: resetsAt, windowSeconds: nil)
+        return QuotaWindow(kind: kind, usedPercent: used, resetsAt: resetsAt, windowSeconds: kind.defaultSeconds)
     }
 }

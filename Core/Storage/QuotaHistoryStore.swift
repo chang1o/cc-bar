@@ -1,27 +1,17 @@
 import Foundation
 
-enum QuotaHistoryAccountKind: String, Sendable, Codable {
-    case codexPrimary
-    case codexImported
-    case codexCCPMProfile
-    case claudePrimary
-    case claudeCCPMProfile
-}
-
-struct QuotaHistorySample: Sendable, Equatable, Codable {
+nonisolated struct QuotaHistorySample: Sendable, Equatable, Codable {
     var accountKey: String
-    var app: QuotaApp
-    var kind: QuotaHistoryAccountKind
+    var provider: Provider
     var sampledAt: Date
     var remainingPercent: Int
     var resetsAt: Date?
 }
 
-struct QuotaChangeEvent: Sendable, Equatable, Codable, Identifiable {
+nonisolated struct QuotaChangeEvent: Sendable, Equatable, Codable, Identifiable {
     var id: String
     var accountKey: String
-    var app: QuotaApp
-    var kind: QuotaHistoryAccountKind
+    var provider: Provider
     var sampledAt: Date
     var beforeRemainingPercent: Int
     var afterRemainingPercent: Int
@@ -29,45 +19,14 @@ struct QuotaChangeEvent: Sendable, Equatable, Codable, Identifiable {
     var resetsAt: Date?
 }
 
-struct QuotaHistoryPayload: Sendable, Equatable, Codable {
-    static let currentVersion = 1
+/// v2: keyed by `AccountID.raw`, no per-source account kinds.
+nonisolated struct QuotaHistoryPayload: Sendable, Equatable, Codable {
+    static let currentVersion = 2
 
     var version: Int = Self.currentVersion
     var dayStart: Date = QuotaHistoryStore.todayStart()
     var lastSamples: [String: QuotaHistorySample] = [:]
     var events: [QuotaChangeEvent] = []
-}
-
-enum QuotaHistoryAccountKey {
-    nonisolated static func codexPrimary(accountId: String?) -> String {
-        if let id = nonEmpty(accountId) {
-            return "codex:primary:\(id)"
-        }
-        return "codex:primary"
-    }
-
-    nonisolated static func codexImported(id: String) -> String {
-        "codex:imported:\(id)"
-    }
-
-    nonisolated static func codexCCPMProfile(id: String) -> String {
-        "codex:ccpm:\(id)"
-    }
-
-    nonisolated static func claudePrimary() -> String {
-        "claude:primary"
-    }
-
-    nonisolated static func claudeCCPMProfile(id: String) -> String {
-        "claude:ccpm:\(id)"
-    }
-
-    nonisolated private static func nonEmpty(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
-            return nil
-        }
-        return value
-    }
 }
 
 enum QuotaHistoryStore {
@@ -96,29 +55,29 @@ enum QuotaHistoryStore {
         try data.write(to: url, options: [.atomic])
     }
 
+    /// Records the tracked window (five-hour lane, else primary) and appends a
+    /// change event only when the rounded remaining percent moved.
     nonisolated static func record(
         payload: QuotaHistoryPayload,
         accountKey: String,
-        app: QuotaApp,
-        kind: QuotaHistoryAccountKind,
+        provider: Provider,
         snapshot: QuotaSnapshot,
         sampledAt: Date
     ) -> QuotaHistoryPayload {
-        guard let fiveHour = snapshot.fiveHour else {
+        guard let window = snapshot.timelineWindow else {
             return prune(payload, now: sampledAt)
         }
 
         var next = prune(payload, now: sampledAt)
-        let remaining = roundedPercent(fiveHour.remainingPercent)
+        let remaining = roundedPercent(window.remainingPercent)
         let previous = next.lastSamples[accountKey]
 
         next.lastSamples[accountKey] = QuotaHistorySample(
             accountKey: accountKey,
-            app: app,
-            kind: kind,
+            provider: provider,
             sampledAt: sampledAt,
             remainingPercent: remaining,
-            resetsAt: fiveHour.resetsAt
+            resetsAt: window.resetsAt
         )
 
         guard let previous, previous.remainingPercent != remaining else {
@@ -127,15 +86,14 @@ enum QuotaHistoryStore {
 
         let delta = remaining - previous.remainingPercent
         next.events.append(QuotaChangeEvent(
-            id: eventId(accountKey: accountKey, sampledAt: sampledAt, before: previous.remainingPercent, after: remaining),
+            id: "\(accountKey)|\(Int(sampledAt.timeIntervalSince1970))|\(previous.remainingPercent)|\(remaining)",
             accountKey: accountKey,
-            app: app,
-            kind: kind,
+            provider: provider,
             sampledAt: sampledAt,
             beforeRemainingPercent: previous.remainingPercent,
             afterRemainingPercent: remaining,
             deltaPercent: delta,
-            resetsAt: fiveHour.resetsAt
+            resetsAt: window.resetsAt
         ))
         return next
     }
@@ -168,14 +126,5 @@ enum QuotaHistoryStore {
 
     nonisolated private static func roundedPercent(_ value: Double) -> Int {
         max(0, min(100, Int(value.rounded())))
-    }
-
-    nonisolated private static func eventId(
-        accountKey: String,
-        sampledAt: Date,
-        before: Int,
-        after: Int
-    ) -> String {
-        "\(accountKey)|\(Int(sampledAt.timeIntervalSince1970))|\(before)|\(after)"
     }
 }
