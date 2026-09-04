@@ -182,7 +182,7 @@ struct PopoverRootView: View {
             fallback = "Anthropic"
         case .antigravity:
             email = appState.antigravityAccount?.email
-            plan = appState.quotaSnapshot(for: .antigravity)?.planType?.capitalized ?? appState.antigravityAccount?.planType?.capitalized
+            plan = appState.quotaSnapshot(for: .antigravity)?.planType ?? appState.antigravityAccount?.planType
             fallback = "Google"
         case .cursor:
             email = appState.cursorAccount?.email

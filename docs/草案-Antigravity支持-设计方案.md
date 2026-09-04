@@ -53,11 +53,11 @@
 ### 2. 额度客户端与数据模型 (Quota)
 
 #### [NEW] [`Core/Quota/AntigravityQuotaClient.swift`](file:///Users/nanvon/Code/cc-bar/Core/Quota/AntigravityQuotaClient.swift)
-- 直连 Google Cloud Code 配额接口（按信息完整度依次四段富化，任一失败保留已有数据）：
-  - 端点 1：`https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` —— 返回账号 tier / plan 与基础信息（`currentTier` 为真实层级，`paidTier` 仅是升级目标，不做 plan 展示）；
-  - 端点 2：`https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` —— **权威分组源（免费版实测即有）**：返回 `groups[]`（Gemini Models / Claude and GPT models），每组含 5h + weekly 两个 bucket（`gemini-5h`/`gemini-weekly`、`3p-5h`/`3p-weekly`），与官方 UI 的 5 小时 / 周数据一致；
-  - 端点 3：`https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels` —— Gemini 轮换窗口（仅 summary 缺失时的补充）；
-  - 端点 4：`https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` —— 按模型分桶的剩余额度（仅 5h 语义，无周/分组；summary 不可用时兜底）；
+- 直连 Google Cloud Code 配额接口（优先使用官方 Antigravity 2.12.0 实际调用的 `daily-cloudcode-pa.googleapis.com`，主域 `cloudcode-pa.googleapis.com` 仅在请求失败时回退；按信息完整度依次四段富化，任一失败保留已有数据）：
+  - 端点 1：`v1internal:loadCodeAssist` —— 返回账号 tier / plan 与基础信息；Google AI Pro 账号会同时返回基础 `currentTier=free-tier` 与付费 `paidTier=Google AI Pro`，会员身份以 `paidTier` 为准；
+  - 端点 2：`v1internal:retrieveUserQuotaSummary` —— **权威分组源**：返回 `groups[]`（Gemini Models / Claude and GPT models），每组含 5h + weekly 两个 bucket（`gemini-5h`/`gemini-weekly`、`3p-5h`/`3p-weekly`），与官方 UI 的 5 小时 / 周数据一致；
+  - 端点 3：`v1internal:fetchAvailableModels` —— Gemini 轮换窗口（仅 summary 缺失时的补充）；
+  - 端点 4：`v1internal:retrieveUserQuota` —— 按模型分桶的剩余额度（仅 5h 语义，无周/分组；summary 不可用时兜底）；
   - 均携带 Header：`Authorization: Bearer <access_token>`（后三个端点不接受 `cloudaicompanionProject`，空 body）
 - 解析配额模型（桶语义 → 数据模型映射）：
   - `groups[].buckets[]` 按 `bucketId` 前缀（`gemini-*` / `3p-*`）与 `window`（weekly / 5h）归类，组 displayName 仅兼容兜底。展示以 Gemini 为关注点（与官方分组同名）：
@@ -65,8 +65,8 @@
     - `gemini-weekly` → 副条 `secondaryLimit`（displayName "Gemini WK"）；
     - `3p-5h` / `3p-weekly` → `auxiliaryLimits` 两行（displayName "Claude 5H" / "Claude WK"）；
   - 无分组源（仅 buckets/models 兜底）时退化为旧行为：5h 主条 + weekly 副条，Gemini 窗口保留 `geminiWindow` / `geminiWeekly` 供细行展示；
-  - `retrieveUserQuota`（端点 4）按模型分桶解析时：`remaining=1` 且无 `reset` 的未消费占位桶直接忽略，不合成重置时间（仅该端点模型桶；`reset` 已过期但额度未消耗时仍按窗口标准时长预估未来重置时间）；
-  - 提取账户订阅层级（Tier / Plan）——取 `currentTier.id`（真实生效层级，如 `free-tier`），`paidTier.id` 仅当无 currentTier 时兜底；
+  - 所有额度窗口只使用服务端返回的 `resetTime`，不按窗口标准时长推算未来重置时间；`retrieveUserQuota` 的 `remaining=1` 且无 `reset` 未消费占位桶直接忽略；
+  - 提取账户订阅层级（Tier / Plan）——优先取 `paidTier.name` / `paidTier.id`，没有付费层级时回退 `currentTier.id`；
 
 #### [MODIFY] [`Core/Quota/QuotaModels.swift`](file:///Users/nanvon/Code/cc-bar/Core/Quota/QuotaModels.swift)
 - 在 `QuotaApp` 枚举中恢复 `.antigravity`：

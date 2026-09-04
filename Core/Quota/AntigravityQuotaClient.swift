@@ -24,8 +24,9 @@ nonisolated enum AntigravityQuotaClient {
         let token = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { return .failure(.missingToken) }
 
-        // 优先主域，失败回退 daily 域
-        let endpoints = [endpoint, dailyEndpoint]
+        // 官方 Antigravity 2.12.0 使用 daily 域；主域可能返回另一套基础额度池，
+        // 即使请求成功也会造成套餐、用量与重置时间错配，因此仅作为回退。
+        let endpoints = [dailyEndpoint, endpoint]
         var lastError: QuotaError?
         for url in endpoints {
             let result = await fetch(from: url, accessToken: token)
@@ -51,9 +52,8 @@ nonisolated enum AntigravityQuotaClient {
         req.setValue("antigravity/1.0 darwin/arm64 google-api-nodejs-client/10.3.0", forHTTPHeaderField: "User-Agent")
         req.setValue("gl-node/20.0.0", forHTTPHeaderField: "X-Goog-Api-Client")
         req.timeoutInterval = 30
-        // loadCodeAssist 需要 aicode-consumers project 才能返回 paidTier（Google AI Pro/Ultra）额度；
-        // 缺省只返回 free-tier（实测：带该字段 → g1-pro-tier；不带 → free-tier）。
-        let payload: [String: Any] = [
+        // daily 域保持与官方客户端一致的空 body；旧主域回退保留既有 project 上下文。
+        let payload: [String: Any] = url == dailyEndpoint ? [:] : [
             "cloudaicompanionProject": "aicode-consumers",
             "metadata": ["ideName": "antigravity"],
         ]
@@ -231,16 +231,16 @@ nonisolated enum AntigravityQuotaClient {
         var planType: String?
         var hasGroupedData = false   // 是否拿到 retrieveUserQuotaSummary 的分组数据
 
-        // paidTier / currentTier 的 id 即订阅层级，兼容 allowedTiers 标准响应
-        // currentTier 是真实生效层级（free-tier / standard-tier / g1-pro-tier…），
-        // paidTier 只是「可升级目标」（部分响应如 free-tier 账号的 loadCodeAssist
-        // 会带 paidTier=g1-pro-tier 引导升级），绝不能把可升级目标当当前 plan。
-        if let cur = root["currentTier"] as? [String: Any], let id = cur["id"] as? String {
+        // Google AI 订阅身份在 paidTier；Pro 账号仍可能同时返回 currentTier=free-tier，
+        // 后者是基础 Code Assist 层级，不能覆盖付费订阅。展示优先用官方套餐名。
+        if let paid = root["paidTier"] as? [String: Any],
+           let paidPlan = nonEmpty(paid["name"] as? String) ?? nonEmpty(paid["id"] as? String)
+        {
+            planType = paidPlan
+        } else if let cur = root["currentTier"] as? [String: Any], let id = cur["id"] as? String {
             planType = id
         } else if let cur = root["currentTier"] as? String {
             planType = cur
-        } else if let paid = root["paidTier"] as? [String: Any], let id = paid["id"] as? String {
-            planType = id
         } else if let allowed = root["allowedTiers"] as? [[String: Any]], let first = allowed.first, let id = first["id"] as? String {
             planType = id
         } else if let tier = root["tier"] as? [String: Any], let id = tier["id"] as? String {
@@ -407,7 +407,7 @@ nonisolated enum AntigravityQuotaClient {
                 let id = (bucket["bucketId"] as? String ?? "").lowercased()
                 let name = (bucket["displayName"] as? String ?? "").lowercased()
                 let windowTag = (bucket["window"] as? String ?? "").lowercased()
-                let reset = resetDate(value: bucket["resetTime"], description: bucket["description"] as? String, relativeTo: fetchedAt)
+                let reset = resetDate(value: bucket["resetTime"])
 
                 // 归属判定：显式 gemini-/3p- 前缀优先；其次组 displayName；
                 // 旧结构缺前缀时按默认第三方（Claude/GPT）处理，Gemini 由组名命中。
@@ -420,21 +420,16 @@ nonisolated enum AntigravityQuotaClient {
                     isGemini = groupName.contains("gemini")
                 }
                 let isWeekly = id.contains("week") || windowTag.contains("week") || name.contains("week")
-                let windowSecs: Int = isWeekly ? 7 * 24 * 3600 : 5 * 3600
-                var effectiveReset = reset
-                if remaining >= 1.0, effectiveReset == nil || (effectiveReset != nil && effectiveReset! <= fetchedAt) {
-                    effectiveReset = fetchedAt.addingTimeInterval(Double(windowSecs))
-                }
                 if isGemini {
                     if isWeekly {
-                        adoptMin(&result.geminiWeekly, remaining: remaining, reset: effectiveReset, windowSeconds: 7 * 24 * 3600)
+                        adoptMin(&result.geminiWeekly, remaining: remaining, reset: reset, windowSeconds: 7 * 24 * 3600)
                     } else {
-                        adoptMin(&result.geminiWindow, remaining: remaining, reset: effectiveReset, windowSeconds: 5 * 3600)
+                        adoptMin(&result.geminiWindow, remaining: remaining, reset: reset, windowSeconds: 5 * 3600)
                     }
                 } else if isWeekly {
-                    adoptMin(&result.weekly, remaining: remaining, reset: effectiveReset, windowSeconds: 7 * 24 * 3600)
+                    adoptMin(&result.weekly, remaining: remaining, reset: reset, windowSeconds: 7 * 24 * 3600)
                 } else {
-                    adoptMin(&result.fiveHour, remaining: remaining, reset: effectiveReset, windowSeconds: 5 * 3600)
+                    adoptMin(&result.fiveHour, remaining: remaining, reset: reset, windowSeconds: 5 * 3600)
                 }
             }
         }
@@ -468,17 +463,10 @@ nonisolated enum AntigravityQuotaClient {
             guard let remaining = remainingFraction(in: bucket) else { continue }
             let family = bucketFamily(bucket)
             guard family != .internalPlaceholder else { continue }
-            let reset = resetDate(value: bucket["resetTime"] ?? bucket["reset_time"], description: nil, relativeTo: fetchedAt)
+            let reset = resetDate(value: bucket["resetTime"] ?? bucket["reset_time"])
             // remaining=1 且无 reset 的未消耗桶（如新账号从未用过的模型）不是真实额度窗口，
             // 不能合成未来重置时间后当成 0% 窗口展示，直接跳过。
             if remaining >= 1.0, reset == nil { continue }
-            var reset = reset
-            let isWeekly = family == .weekly || family == .geminiWeekly
-            let windowSecs: Int = isWeekly ? 7 * 24 * 3600 : 5 * 3600
-            // 重置时间已过但额度仍未消耗（滑动周期尚未启动）时，按窗口标准时长预估未来重置时间。
-            if remaining >= 1.0, reset != nil && reset! <= fetchedAt {
-                reset = fetchedAt.addingTimeInterval(Double(windowSecs))
-            }
             // 语义：第三方模型一律视为 5h 轮换（实测），Gemini 轮换同理；
             // 周额度（bucketId=weekly）无标准时长信息，windowSeconds 显式给 7 天，
             // 使 kind(for:fallback:) 能正确判定 .weekly。
@@ -516,12 +504,9 @@ nonisolated enum AntigravityQuotaClient {
         for m in models {
             guard let remaining = m["remainingFraction"] as? Double ?? (m["remaining_fraction"] as? Double) else { continue }
             let modelId = (m["modelId"] as? String ?? m["name"] as? String ?? "").lowercased()
-            var reset = resetDate(value: m["resetTime"] ?? m["reset_time"], description: nil, relativeTo: fetchedAt)
+            let reset = resetDate(value: m["resetTime"] ?? m["reset_time"])
             let isWeekly = modelId.contains("week")
             let windowSecs: Int = isWeekly ? 7 * 24 * 3600 : 5 * 3600
-            if remaining >= 1.0, reset == nil || (reset != nil && reset! <= fetchedAt) {
-                reset = fetchedAt.addingTimeInterval(Double(windowSecs))
-            }
             let window = QuotaWindow(usedPercent: max(0, min(100, 100 - remaining * 100)), resetsAt: reset, windowSeconds: windowSecs)
             if modelId.contains("gemini") {
                 // 启发式：第一个 gemini 当作 5h，第二个当 weekly
@@ -548,7 +533,7 @@ nonisolated enum AntigravityQuotaClient {
             let info = entry["quotaInfo"] as? [String: Any] ?? entry
             guard let remaining = remainingFraction(in: info) else { continue }
             let modelId = key.lowercased()
-            let reset = resetDate(value: info["resetTime"] ?? info["reset_time"], description: nil, relativeTo: fetchedAt)
+            let reset = resetDate(value: info["resetTime"] ?? info["reset_time"])
             let usedPercent = max(0, min(100, 100 - remaining * 100))
             let window = QuotaWindow(usedPercent: usedPercent, resetsAt: reset, windowSeconds: nil)
             let isGemini = modelId.contains("gemini") || modelId.contains("tab_") || modelId.contains("chat_")
@@ -577,12 +562,9 @@ nonisolated enum AntigravityQuotaClient {
         for (k, v) in dict {
             guard let bucket = v as? [String: Any], let remaining = remainingFraction(in: bucket) else { continue }
             let key = k.lowercased()
-            var reset = resetDate(value: bucket["resetTime"] ?? bucket["reset_time"], description: nil, relativeTo: fetchedAt)
+            let reset = resetDate(value: bucket["resetTime"] ?? bucket["reset_time"])
             let isWeekly = key.contains("week")
             let windowSecs: Int = isWeekly ? 7 * 24 * 3600 : 5 * 3600
-            if remaining >= 1.0, reset == nil || (reset != nil && reset! <= fetchedAt) {
-                reset = fetchedAt.addingTimeInterval(Double(windowSecs))
-            }
             let window = QuotaWindow(usedPercent: max(0, min(100, 100 - remaining * 100)), resetsAt: reset, windowSeconds: windowSecs)
             if key.contains("gemini") {
                 if key.contains("week") { result.geminiWeekly = window } else { result.geminiWindow = window }
@@ -607,7 +589,7 @@ nonisolated enum AntigravityQuotaClient {
         return nil
     }
 
-    private static func resetDate(value: Any?, description: String?, relativeTo: Date) -> Date? {
+    private static func resetDate(value: Any?) -> Date? {
         if let s = value as? String {
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -632,18 +614,6 @@ nonisolated enum AntigravityQuotaClient {
         if let n = value as? Int {
             guard n > 0 else { return nil }
             return Date(timeIntervalSince1970: Double(n) > 1e12 ? Double(n) / 1000 : Double(n))
-        }
-        if let desc = description {
-            // "Resets in 3h 12m" 类描述解析
-            let lower = desc.lowercased()
-            if lower.contains("reset") {
-                // 尝试提取小时
-                if let regex = try? NSRegularExpression(pattern: #"(\d+)\s*h"#),
-                   let m = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
-                   let r = Range(m.range(at: 1), in: lower), let h = Double(lower[r]), h > 0 {
-                    return Date(timeIntervalSinceNow: h * 3600)
-                }
-            }
         }
         return nil
     }

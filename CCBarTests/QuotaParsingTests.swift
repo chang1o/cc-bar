@@ -155,14 +155,38 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(snap.auxiliaryLimits[1].window.usedPercent ?? 0, 30, accuracy: 0.01)
     }
 
-    /// loadCodeAssist：currentTier 才是真实层级，paidTier 只是可升级目标。
-    func testAntigravityLoadCodeAssistPrefersCurrentTierOverPaidTier() {
+    /// Pro 账号会同时返回基础 currentTier=free-tier；会员身份应取 paidTier。
+    func testAntigravityLoadCodeAssistPrefersPaidTierOverCurrentTier() {
         let root: [String: Any] = [
             "currentTier": ["id": "free-tier", "name": "Antigravity"],
             "paidTier": ["id": "g1-pro-tier", "name": "Google AI Pro"],
         ]
         let fetched = AntigravityQuotaClient.parse(root: root, fetchedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        XCTAssertEqual(fetched.snapshot.planType, "Google AI Pro")
+    }
+
+    /// 没有付费订阅时仍保留 currentTier 作为套餐兜底。
+    func testAntigravityLoadCodeAssistFallsBackToCurrentTier() {
+        let root: [String: Any] = [
+            "currentTier": ["id": "free-tier", "name": "Antigravity"],
+        ]
+        let fetched = AntigravityQuotaClient.parse(root: root, fetchedAt: Date(timeIntervalSince1970: 1_750_000_000))
         XCTAssertEqual(fetched.snapshot.planType, "free-tier")
+    }
+
+    /// 服务端未给 resetTime 时只展示额度，不按窗口长度虚构重置时间。
+    func testAntigravitySummaryDoesNotSynthesizeMissingResetTime() {
+        let groups: [[String: Any]] = [[
+            "displayName": "Gemini Models",
+            "buckets": [[
+                "bucketId": "gemini-5h",
+                "window": "5h",
+                "remainingFraction": 1.0,
+            ]],
+        ]]
+        let fetched = AntigravityQuotaClient.parse(root: ["groups": groups], fetchedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        XCTAssertEqual(fetched.snapshot.primaryWindow?.usedPercent, 0)
+        XCTAssertNil(fetched.snapshot.primaryWindow?.resetsAt)
     }
 
     /// Free 账号真实响应：第三方（Claude/GPT）模型与 Gemini 模型各有 5h 轮换 reset，
