@@ -439,9 +439,11 @@ struct ProviderAccountsHeader: View {
 
 // MARK: - ServiceBlockView
 //
-// One account card: header (tile, name, identity, refresh line, plan chip, status dot),
-// one lane per limit (title, detail, bar, remaining, reset, pace), local usage block,
-// action row (Dashboard / Status / Terminal / Set default), error line.
+// One account card, kept to one text line per element so a popover with several
+// accounts stays short: header (tile, name, identity, state note, plan chip, status
+// dot), one lane per limit (title, detail, pace tag, remaining, reset + bar), a
+// one-line cost summary, action row (Dashboard / Status / Terminal / Set default),
+// error line.
 
 struct ServiceBlockView: View {
     struct Usage {
@@ -477,7 +479,7 @@ struct ServiceBlockView: View {
     private var snapshot: QuotaSnapshot? { state.snapshot }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 7) {
             headerRow
 
             if let unavailableReason {
@@ -517,7 +519,7 @@ struct ServiceBlockView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(unavailableReason == nil ? 1 : 0.75)
     }
@@ -525,31 +527,32 @@ struct ServiceBlockView: View {
     // MARK: Header
 
     private var headerRow: some View {
-        HStack(alignment: .top, spacing: 9) {
+        HStack(alignment: .center, spacing: 9) {
             ServiceTile(logoName: logoName, fallback: fallback, tint: tint)
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .kerning(-0.1)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary.opacity(0.75))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(refreshLine(now: context.date))
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .kerning(-0.1)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary.opacity(0.75))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 6)
+
+            // The popover header already shows the global refresh age; a card only
+            // calls out its own state when it differs from "fresh API data".
+            if let note = headerNote {
+                Text(note)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
 
             if let planBadge {
                 Text(planBadge)
@@ -564,30 +567,19 @@ struct ServiceBlockView: View {
                 Circle()
                     .fill(status.indicator.dotColor)
                     .frame(width: 6, height: 6)
-                    .padding(.top, 5)
                     .help(serviceStatusTooltip(status))
             }
         }
     }
 
-    private func refreshLine(now: Date) -> String {
-        var parts: [String] = []
-        if state.refresh.inFlight {
-            parts.append(tr("Refreshing…", "刷新中…"))
-        } else if let last = state.refresh.lastSuccessAt {
-            let age = PopoverRootView.relativeAge(from: last, now: now)
-            parts.append(tr("Updated \(age) ago", "\(age) 前更新"))
-        } else if unavailableReason != nil {
-            parts.append(tr("Not monitored", "未监控"))
-        } else if error != nil || state.error != nil {
-            parts.append(tr("Refresh failed", "刷新失败"))
-        } else {
-            parts.append(tr("Waiting for first refresh", "等待首次刷新"))
+    private var headerNote: String? {
+        if state.refresh.inFlight { return tr("Refreshing…", "刷新中…") }
+        if unavailableReason != nil { return tr("Not monitored", "未监控") }
+        if snapshot == nil, error != nil || state.error != nil {
+            return tr("Refresh failed", "刷新失败")
         }
-        if let source = state.source, source != .api {
-            parts.append(source.displayName)
-        }
-        return parts.joined(separator: " · ")
+        if let source = state.source, source != .api { return source.displayName }
+        return nil
     }
 
     private func serviceStatusTooltip(_ status: ServiceStatus) -> String {
@@ -625,41 +617,42 @@ struct ServiceBlockView: View {
         let window = lane.limit?.window
         let color = laneColor(window)
         let pace = lane.limit.flatMap { QuotaPace.compute(limit: $0) }
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(lane.limit.map(laneTitle) ?? tr("Quota", "额度"))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .lineLimit(1)
-                Spacer(minLength: 8)
+                    .layoutPriority(1)
                 if let detail = window?.detail, !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: 10.5))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-            }
-
-            ProgressBar(value: (window?.remainingPercent ?? 0) / 100, tint: color, height: 6)
-
-            HStack(alignment: .firstTextBaseline) {
+                Spacer(minLength: 6)
+                if let pace {
+                    Text(paceTag(pace))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(pace.isAhead ? quotaPaceAheadColor : .secondary)
+                        .help(paceText(pace))
+                        .layoutPriority(1)
+                }
                 Text(remainingText(window))
                     .font(.system(size: 11.5, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(color)
-                Spacer(minLength: 8)
+                    .layoutPriority(2)
                 laneResetStatus(lane.limit)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .layoutPriority(2)
             }
 
-            if let pace {
-                Text(paceText(pace))
-                    .font(.system(size: 10.5))
-                    .monospacedDigit()
-                    .foregroundStyle(pace.isAhead ? quotaPaceAheadColor : .secondary)
-                    .lineLimit(1)
-            }
+            ProgressBar(value: (window?.remainingPercent ?? 0) / 100, tint: color, height: 5)
         }
     }
 
@@ -716,6 +709,14 @@ struct ServiceBlockView: View {
         return tr("\(left)% left", "剩余 \(left)%")
     }
 
+    /// "▲ +6%" / "▼ -20%" / "● on track"; the full sentence lives in the tooltip.
+    private func paceTag(_ pace: QuotaPace) -> String {
+        let delta = Int(pace.deltaPercent.rounded())
+        if delta > 0 { return "▲ +\(delta)%" }
+        if delta < 0 { return "▼ \(delta)%" }
+        return tr("● on track", "● 正常")
+    }
+
     private func paceText(_ pace: QuotaPace) -> String {
         let delta = Int(pace.deltaPercent.rounded())
         let head: String
@@ -745,32 +746,44 @@ struct ServiceBlockView: View {
     // MARK: Local usage
 
     private func usageSection(_ usage: Usage) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(tr("Cost", "花费"))
-                .font(.system(size: 12, weight: .semibold))
-            usageLine(tr("Today", "今日"), usage.today, showsTokens: usage.showsTokens)
-            usageLine(tr("This week", "本周"), usage.week, showsTokens: usage.showsTokens)
-            usageLine(tr("Last 30 days", "最近 30 天"), usage.month, showsTokens: usage.showsTokens)
-        }
-    }
-
-    private func usageLine(_ label: String, _ totals: UsageTotals?, showsTokens: Bool) -> some View {
         HStack(spacing: 0) {
-            Text("\(label): ")
-                .foregroundStyle(.secondary)
-            Text(usageValue(totals, showsTokens: showsTokens))
-                .foregroundStyle(.primary)
-                .monospacedDigit()
+            usagePart(tr("Today", "今日"), usage.today)
+            usageSeparator
+            usagePart(tr("Week", "本周"), usage.week)
+            usageSeparator
+            usagePart(tr("30d", "30 天"), usage.month)
+            Spacer(minLength: 0)
         }
         .font(.system(size: 11))
         .lineLimit(1)
+        .help(usage.showsTokens ? tokensTooltip(usage) : "")
     }
 
-    private func usageValue(_ totals: UsageTotals?, showsTokens: Bool) -> String {
-        guard let totals else { return "—" }
-        let cost = StatsFormatter.cost(totals.costUSD)
-        guard showsTokens else { return cost }
-        return "\(cost) · \(StatsFormatter.compactToken(totals.totalTokens)) tokens"
+    private var usageSeparator: some View {
+        Text(" · ")
+            .foregroundStyle(.quaternary)
+    }
+
+    private func usagePart(_ label: String, _ totals: UsageTotals?) -> some View {
+        HStack(spacing: 0) {
+            Text("\(label) ")
+                .foregroundStyle(.secondary)
+            Text(totals.map { StatsFormatter.cost($0.costUSD) } ?? "—")
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+        }
+    }
+
+    private func tokensTooltip(_ usage: Usage) -> String {
+        func line(_ label: String, _ totals: UsageTotals?) -> String {
+            guard let totals else { return "\(label): —" }
+            return "\(label): \(StatsFormatter.compactToken(totals.totalTokens)) tokens"
+        }
+        return [
+            line(tr("Today", "今日"), usage.today),
+            line(tr("This week", "本周"), usage.week),
+            line(tr("Last 30 days", "最近 30 天"), usage.month),
+        ].joined(separator: "\n")
     }
 
     // MARK: Actions

@@ -272,7 +272,7 @@
 
 <section id="popover">
   <h2>② Popover</h2>
-  <p class="lead">宽 340pt。Header 保留原有一排按钮。每个 provider 一个分区，多账号时有分区标题；每个账号一张完整卡片（不折叠）。卡片结构对齐 codexbar：头部（tile、名称、身份、更新时间、计划），每个窗口一段，Pace 一行，最后 Cost / Tokens 段。</p>
+  <p class="lead">宽 340pt。Header 保留原有一排按钮。每个 provider 一个分区，多账号时有分区标题；每个账号一张完整卡片（不折叠）。卡片结构对齐 codexbar 但每个元素只占一行：头部一行（tile、名称、身份、计划；只有刷新中 / 失败 / 非 API 来源时才在右侧标注状态），每个窗口两行（名称、detail、节奏短标签、剩余、重置 + 进度条，节奏全文悬停可见），费用一行（Today / Week / 30d，tokens 悬停可见），操作一行。</p>
   <div class="grid two">
     <div>
       <div class="popover" id="popover-main"></div>
@@ -502,21 +502,19 @@ menuBar(document.getElementById('mb-meter'), 'meter');
 // ---------- popover ----------
 function lane(l) {
   const c = cls(l.left);
+  const tag = l.pace ? `<span class="pace ${l.pace.d > 0 ? 'ahead' : ''}" title="${paceText(l.pace)}">${l.pace.d > 0 ? '▲ +' + l.pace.d + '%' : l.pace.d < 0 ? '▼ ' + l.pace.d + '%' : '● on track'}</span>` : '';
   return `<div class="lane">
-    <div class="row"><span class="ttl">${KIND[l.k].title}</span>${l.detail ? `<span class="det">${l.detail}</span>` : ''}</div>
+    <div class="row" style="gap:6px;align-items:baseline"><span class="ttl">${KIND[l.k].title}</span>${l.detail ? `<span class="det" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.detail}</span>` : '<span style="flex:1"></span>'}${tag}<span class="pct t-${c}">${pct(l.left)} left</span><span class="rst">${l.reset}</span></div>
     <div class="bar"><i class="c-${c}" style="width:${l.left}%"></i></div>
-    <div class="row"><span class="pct t-${c}">${pct(l.left)} left</span><span class="rst">${l.reset}</span></div>
-    ${l.pace ? `<div class="pace ${l.pace.d > 0 ? 'ahead' : ''}">${paceText(l.pace)}</div>` : ''}
   </div>`;
 }
 function card(a, opts = {}) {
   const P = PROVIDERS[a.p];
   return `<div class="card">
-    <div class="hd">${tile(a.p)}<div><span class="nm">${P.name}</span><span class="sub">${a.sub}</span><div class="upd">Updated ${a.updated}${a.source ? ' · ' + a.source : ''}</div></div>
+    <div class="hd">${tile(a.p)}<div><span class="nm">${P.name}</span><span class="sub">${a.sub}</span></div>${a.source ? `<span class="upd">${a.source}</span>` : ''}
       ${a.plan ? `<span class="chip plan">${a.plan}</span>` : ''}${a.status ? `<span class="dot" style="background:#30D158"></span>` : ''}</div>
     ${a.lanes.map(lane).join('')}
-    ${a.usage ? `<div class="usage"><div class="ttl">${P.cost ? 'Cost' : 'Tokens'}</div>
-      <div class="ln"><span>Today: </span>${a.usage.today}</div><div class="ln"><span>This week: </span>${a.usage.week}</div><div class="ln"><span>Last 30 days: </span>${a.usage.month}</div></div>` : ''}
+    ${a.usage ? `<div class="usage"><div class="ln" title="tokens on hover"><span>Today </span>${a.usage.today.split(' · ')[0]}<span> · Week </span>${a.usage.week.split(' · ')[0]}<span> · 30d </span>${a.usage.month.split(' · ')[0]}</div></div>` : ''}
     ${a.error ? `<div class="err">${a.error}</div>` : ''}
     <div class="acts-row">${['<span>Dashboard</span>', P.name === 'Codex' || P.name === 'Claude Code' ? '<span>Status</span>' : null, a.id.includes(':ccpm:') && a.p !== 'codex' ? '<span>Terminal</span>' : null, a.id.includes(':ccpm:') && a.p !== 'codex' && !a.sub.includes('Default') ? '<span>Set default</span>' : null].filter(Boolean).join(' · ')}</div>
   </div>`;
